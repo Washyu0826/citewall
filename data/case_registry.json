@@ -1,0 +1,11 @@
+{
+  "_comment": "Q22 case registry: security_level per case_id. Unregistered cases are CONFIDENTIAL (fail-closed; routed to the local LLM, upload blocked). A case_id ending in -CONF is always confidential. Levels: public | confidential | top_secret. Edited file is picked up without restart (mtime).",
+  "cases": {
+    "CASE-2025-001": "public",
+    "CASE-2025-002": "public",
+    "CASE-2025-003": "public"
+  },
+  "patterns": {
+    "CASE-DEMO-*": "public"
+  }
+}

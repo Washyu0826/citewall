@@ -1,0 +1,15 @@
+# gitleaks config — extends the default ruleset with a narrow allowlist for
+# intentionally-public, non-secret values. Never add real credentials here.
+title = "patentmind-platform gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Non-secret fixtures: prompt-injection canary marker and labelled local-dev placeholders"
+regexes = [
+  # Q11 canary planted in system prompts to detect prompt leakage; public by design.
+  '''PMAI-CANARY-7B3F9C2E''',
+  # Local-only Keycloak dev realm client secret (bound to 127.0.0.1, must be rotated for any real deployment).
+  '''patentmind-gateway-dev-secret-change-me''',
+]

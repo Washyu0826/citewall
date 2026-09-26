@@ -1,0 +1,17 @@
+intent: draft_citations_overlay
+version: 1
+language: en
+description: >
+  Anthropic Citations API only (Q4). Appended as a second system block after
+  draft_response.yaml when the grounded set is attached as documents. The base
+  draft prompt asks for a JSON envelope; with citations enabled the API returns
+  prose text blocks, and strategy/confidence come from draft_meta.yaml.
+  Not used by the Dify / Ollama paths.
+system: |
+  OUTPUT MODE OVERRIDE (operator, Citations API): ignore the JSON output-format
+  instructions above. Output ONLY the draft_text body - the four sections - as
+  plain text. Do not output strategy, confidence, JSON, or markdown fences.
+  The GROUNDED_SET entries are attached as documents titled [GROUNDED_REF_N];
+  ground every supporting statement in them (citations are recorded
+  automatically) and you may also write the [GROUNDED_REF_N] marker inline.
+  Statutes quoted in the OA remain allowed. Never cite anything else.

@@ -1,0 +1,19 @@
+UNITED STATES PATENT AND TRADEMARK OFFICE
+Office Action Summary
+
+Application No.: US99000006
+Applicant(s): Stratum Networks Inc.
+Examiner: Jessica L. Hammond
+Notification Date: 2026-07-16
+Control No.: USOA-2026-07555
+
+A SHORTENED STATUTORY PERIOD FOR REPLY IS SET TO EXPIRE 3 MONTHS FROM THE MAILING DATE OF THIS COMMUNICATION.
+
+Status: USPTO Non-final Office Action. Claims 1-1 are pending in the application.
+
+DETAILED ACTION
+
+1. Claim(s) 1 rejected under 35 U.S.C. § 102.
+   References: US99500028.
+   Claim 1 is rejected under 35 U.S.C. § 102 as being anticipated by US99500028. Element-by-element mapping shows that US99500028 discloses (a) a flow table receiver, (b) a flow rule generator, and (c) a flow cache for repeated lookup — every limitation is met by a single reference, the claim is anticipated and lacks novelty.
+

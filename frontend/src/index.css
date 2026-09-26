@@ -1,0 +1,237 @@
+@import 'tailwindcss';
+
+@import 'tw-animate-css'; /* v4 successor of tailwindcss-animate (shadcn) */
+
+@custom-variant dark (&:is(.dark *));
+
+@utility container {
+  margin-inline: auto;
+  padding-inline: 2rem;
+  @media (width >= --theme(--breakpoint-sm)) {
+    max-width: none;
+  }
+  @media (width >= 1400px) {
+    max-width: 1400px;
+  }
+}
+
+@theme {
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-3xs: 0.625rem;
+  --text-3xs--line-height: 0.875rem;
+
+  --font-sans:
+    Inter, Noto Sans TC, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto,
+    sans-serif;
+  --font-mono:
+    JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-navy-50: #eff6ff;
+  --color-navy-100: #dbeafe;
+  --color-navy-200: #bfdbfe;
+  --color-navy-300: #93c5fd;
+  --color-navy-400: #60a5fa;
+  --color-navy-500: #3b82f6;
+  --color-navy-600: #2563eb;
+  --color-navy-700: #1d4ed8;
+  --color-navy-800: #1e40af;
+  --color-navy-900: #1e3a8a;
+
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--radix-accordion-content-height);
+    }
+  }
+  @keyframes accordion-up {
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+    to {
+      height: 0;
+    }
+  }
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+  }
+}
+
+@layer base {
+  body {
+    /*
+     * Day 9C — CHUNK-1 typography stack. Inter ships Latin glyphs only and
+     * delegates CJK to Noto Sans TC; the system-font tail is the fallback
+     * for slow networks before Google Fonts arrives (display=swap in
+     * index.html prevents invisible-text-flash).
+     */
+    /* X1: system stack only — no web-font download (on-prem promise).
+       Latin: SF Pro / Segoe UI / Roboto. zh-TW: PingFang TC (macOS),
+       Microsoft JhengHei (Windows), Noto Sans TC/CJK (Linux, if installed). */
+    font-family:
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      Roboto,
+      'PingFang TC',
+      'Microsoft JhengHei',
+      'Noto Sans TC',
+      'Noto Sans CJK TC',
+      sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    /* Slightly denser line-height than browser default — patent firms read
+       tables and case IDs more than prose. */
+    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+  }
+}
+
+@layer utilities {
+  /* Q16 provenance highlights — preserved from the POC index.html inline styles
+   so DraftEditor.jsx continues to render line provenance correctly.
+   AI line uses navy-500 (rgb 59 130 246) per the ★10 indigo→navy convergence. */
+  .ai-line {
+    background: linear-gradient(
+      180deg,
+      transparent 60%,
+      rgba(59, 130, 246, 0.18) 60%
+    );
+  }
+  .attorney-line {
+    background: linear-gradient(
+      180deg,
+      transparent 60%,
+      rgba(34, 197, 94, 0.22) 60%
+    );
+  }
+
+  /*
+ * Global keyboard focus ring (a11y). Mouse clicks don't trigger
+ * :focus-visible, so this only shows for keyboard / programmatic focus —
+ * inputs, textareas, buttons, links, and any tabbable element. navy 2px ring
+ * + 2px offset matches the Button component's focus state for consistency.
+ * Components that set their own focus-visible ring (e.g. inset rings) still
+ * win via specificity / Tailwind ordering.
+ */
+}
+@layer base {
+  :focus-visible {
+    outline: 2px solid hsl(217 91% 60%); /* navy-500 */
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+}

@@ -1,0 +1,308 @@
+# Compose v2 — no `version:` key. Networks named so future services
+# (Keycloak, OTel collector, Grafana, …) can join `patentmind-net`.
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.1
+    container_name: patentmind-qdrant
+    ports:
+      # Bind to loopback only — POC has no auth on Qdrant; LAN exposure unsafe.
+      - "127.0.0.1:6333:6333"   # REST
+      - "127.0.0.1:6334:6334"   # gRPC
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - patentmind-net
+    # No container healthcheck: the official qdrant/qdrant image is distroless
+    # (no bash, no curl, no wget, no /dev/tcp). Any in-container probe would
+    # report `unhealthy` forever. scripts/check_docker.sh probes /healthz from
+    # the host instead, which is the canonical readiness signal.
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: patentmind-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-patentmind}
+      POSTGRES_USER: ${POSTGRES_USER:-patentmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-patentmind}
+    ports:
+      # Loopback only — credentials are dev defaults; not safe on LAN.
+      # Host port defaults to 15432 (NOT 5432): on the delivery box host
+      # port 5432 is already taken by a foreign Postgres. Override with
+      # POSTGRES_HOST_PORT; keep POSTGRES_URL in .env in sync when
+      # AUDIT_BACKEND=postgres.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-15432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - patentmind-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-patentmind} -d ${POSTGRES_DB:-patentmind}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: patentmind-redis
+    # No auth — dev only. In prod, set --requirepass and pass REDIS_URL with password.
+    # maxmemory 256mb + LRU eviction prevents a runaway test eating host RAM.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      # Loopback only — Redis is unauthenticated; LAN exposure is RCE-grade bad.
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - patentmind-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  keycloak:
+    # Q12 P0 — real IdP for OIDC_MODE=keycloak. Dev mode (start-dev) is fine
+    # for the POC: http, embedded H2 storage. Realm `patentmind` (client
+    # `patentmind-gateway` + the four demo users alice/bob/carol/audit_dave,
+    # passwords demo-<user>) auto-imports from keycloak/realm-patentmind.json.
+    # Host port 8081: 5432/8010/8011/8088/18080/6333/6379/15432 are taken on
+    # the delivery box. Smoke: bash scripts/smoke_keycloak.sh
+    image: quay.io/keycloak/keycloak:26.2
+    container_name: patentmind-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASS:-admin}
+      # Issuer URLs must look like the host-side URL the gateway verifies
+      # (http://localhost:8081/realms/patentmind), so pin hostname to the
+      # host-mapped port rather than the in-container 8080.
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_HOST_PORT:-8081}
+      KC_HTTP_ENABLED: "true"
+    ports:
+      # Loopback only — dev-mode Keycloak with default admin creds is not
+      # safe on a LAN.
+      - "127.0.0.1:${KEYCLOAK_HOST_PORT:-8081}:8080"
+    volumes:
+      # No data volume on purpose: a named volume at /opt/keycloak/data/h2 is
+      # created root-owned while the keycloak image runs as uid 1000 → H2
+      # AccessDenied at boot. Dev-mode state is throwaway; the realm (clients,
+      # users, roles) re-imports from this JSON on every container start.
+      - ./keycloak/realm-patentmind.json:/opt/keycloak/data/import/realm-patentmind.json:ro
+    networks:
+      - patentmind-net
+    # No container healthcheck: the keycloak image has no curl/wget and the
+    # health endpoints live on the management port (9000) only when enabled.
+    # scripts/smoke_keycloak.sh probes the discovery document from the host.
+    restart: unless-stopped
+
+  minio:
+    # Q13 WORM archive target (ARCHIVE_BACKEND=s3): S3-compatible Object Lock.
+    # Pinned release (same tag as CI) — a re-pull must not change the Object
+    # Lock / retention semantics the WORM archive relies on.
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: patentmind-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-patentmind}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-patentmind-minio}
+    ports:
+      # Loopback only — dev credentials. Host ports 19000/19001 chosen to
+      # dodge everything already taken on the delivery box (5432/8010/8011/
+      # 8088/18080/6333/6379/15432) and MinIO's own common 9000/9001.
+      - "127.0.0.1:19000:9000"   # S3 API  (ARCHIVE_S3_ENDPOINT)
+      - "127.0.0.1:19001:9001"   # web console
+    volumes:
+      - minio_data:/data
+    networks:
+      - patentmind-net
+    healthcheck:
+      # `mc` ships inside the minio/minio image; `mc ready local` is the
+      # upstream-documented container healthcheck.
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # App profile (Q22/Q23) — the whole product on one on-prem box:
+  #   docker compose --profile app up -d --build
+  # Infra above stays profile-less, so plain `docker compose up -d` is unchanged.
+  # Secrets come from .env (JWT_SECRET, INTERNAL_TOKEN, AUDIT_HMAC_KEY(S),
+  # MAPPING_ENCRYPTION_KEY, METRICS_TOKEN, ...); `environment:` below only
+  # rewires service URLs for the compose network. See ops/README.md.
+  # ---------------------------------------------------------------------------
+  ai_engine:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: docker/ai_engine.Dockerfile
+      args:
+        INSTALL_ML: ${AI_ENGINE_INSTALL_ML:-true}
+    image: patentmind/ai_engine:local
+    container_name: patentmind-ai-engine
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Local-only by default (no cloud key): Ollama on the HOST (GPU),
+      # reached through host.docker.internal.
+      LLM_MODE: ${LLM_MODE:-local}
+      LLM_MODEL_LOCAL: ${LLM_MODEL_LOCAL:-qwen2.5:7b}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379/0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux; Docker Desktop has it built in
+    ports:
+      - "127.0.0.1:8011:8011"
+    volumes:
+      - ai_engine_data:/app/data
+    depends_on:
+      - qdrant
+      - redis
+    networks:
+      - patentmind-net
+    restart: unless-stopped
+
+  gateway:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: docker/gateway.Dockerfile
+    image: patentmind/gateway:local
+    container_name: patentmind-gateway
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LLM_MODE: ${LLM_MODE:-local}
+      AI_ENGINE_URL: http://ai_engine:8011
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-patentmind}:${POSTGRES_PASSWORD:-patentmind}@postgres:5432/${POSTGRES_DB:-patentmind}
+      ARCHIVE_S3_ENDPOINT: http://minio:9000
+    ports:
+      - "127.0.0.1:8010:8010"
+    volumes:
+      - gateway_data:/app/data
+    depends_on:
+      ai_engine:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - patentmind-net
+    restart: unless-stopped
+
+  frontend:
+    profiles: ["app"]
+    build:
+      context: ./frontend
+    image: patentmind/frontend:local
+    container_name: patentmind-frontend
+    environment:
+      GATEWAY_UPSTREAM: http://gateway:8010
+    ports:
+      # The ONE port meant for the office LAN (attorneys' browsers). Every
+      # other service stays on loopback / the compose network.
+      - "${FRONTEND_PORT:-8080}:8080"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - patentmind-net
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Monitoring profile (Q26):  docker compose --profile app --profile monitoring up -d
+  # Needs METRICS_TOKEN and GRAFANA_ADMIN_PASSWORD in .env.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v3.6.0
+    container_name: patentmind-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    secrets:
+      - metrics_token
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./ops/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - patentmind-net
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:12.2.1
+    container_name: patentmind-grafana
+    # The dashboard JSONs are "import" exports that reference ${DS_PROMETHEUS};
+    # file provisioning does not resolve import inputs, so pin them to the
+    # provisioned datasource uid before Grafana starts.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -z "$${GF_SECURITY_ADMIN_PASSWORD}" ]; then
+          echo 'GRAFANA_ADMIN_PASSWORD is not set in .env - refusing to start with admin/admin' >&2
+          exit 1
+        fi
+        mkdir -p /var/lib/grafana/dashboards
+        for f in /dashboards-src/*.json; do
+          sed 's/\$${DS_PROMETHEUS}/patentmind-prom/g' "$$f" > "/var/lib/grafana/dashboards/$$(basename "$$f")"
+        done
+        exec /run.sh
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      # Required — the start script refuses to boot with it empty (Grafana would
+      # otherwise fall back to admin/admin). Not `:?` here: that would break
+      # interpolation for every other profile too.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./ops/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/observability/grafana/patentmind_system_overview.json:/dashboards-src/patentmind_system_overview.json:ro
+      - ./docs/observability/grafana/patentmind_ai_quality_cost.json:/dashboards-src/patentmind_ai_quality_cost.json:ro
+      - ./ops/grafana/patentmind_q19_dashboard.json:/dashboards-src/patentmind_q19_dashboard.json:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - patentmind-net
+    restart: unless-stopped
+
+secrets:
+  metrics_token:
+    # Read from METRICS_TOKEN (shell or .env); mounted at /run/secrets/metrics_token.
+    environment: METRICS_TOKEN
+
+volumes:
+  qdrant_storage:
+  postgres_data:
+  redis_data:
+  minio_data:
+  gateway_data:
+  ai_engine_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  patentmind-net:
+    driver: bridge

@@ -1,0 +1,42 @@
+(19) European Patent Office
+(11) EP9900008 A1
+(12) EUROPEAN PATENT APPLICATION
+(43) Date of publication: 2024-09-11
+(22) Date of filing: 2023-10-17
+(51) Int Cl.: B65D 65/46
+(71) Applicant: Ostrava Pack s.r.o.
+(72) Inventors: Petra Novak; Jan Dvořák
+(54) Food packaging tray with compostable barrier layer
+
+(57) Abstract
+A packaging tray comprising a moulded fibre body (152); a barrier layer (154) of polybutylene succinate laminated to an inner surface of the body; the invention provides a shelf life for sliced meat of 10 days while remaining compostable.
+
+Description
+Technical field
+The present invention relates to packaging trays for chilled fresh food, and in particular to a packaging tray and a corresponding method.
+
+Background art
+A first known approach uses fibre trays with polyethylene liners; however, it are not compostable and hard to recycle. A second known approach relies on uncoated fibre trays, which absorb moisture and lose stiffness within hours. Neither approach provides reliable operation over the full range of operating conditions at acceptable cost.
+
+Summary of the invention
+It is an object of the invention to provide a packaging tray overcoming these drawbacks. The object is achieved by a packaging tray comprising a moulded fibre body (152); a barrier layer (154) of polybutylene succinate laminated to an inner surface of the body; a sealing flange (156) extending around an opening of the body; wherein the barrier layer has a thickness of 15 µm to 40 µm and an oxygen transmission rate below 50 cm³/(m²·day·bar). Compared with the prior art, the invention provides a shelf life for sliced meat of 10 days while remaining compostable.
+
+Brief description of the drawings
+Fig. 1 shows a schematic view of a packaging tray according to a first embodiment. Fig. 2 shows a flow chart of the method. Fig. 3 shows measurement results comparing the embodiment with the prior art.
+
+Detailed description of embodiments
+A 25 µm three-layer PBS/PVOH/PBS film is laminated at 140 °C; the resulting tray withstands 1 kg top load after 7 days at 4 °C. In a variant, the barrier layer further comprises a polyvinyl alcohol core; in a further variant, the moulded fibre body comprises bagasse fibres; in a further variant, the sealing flange has a width of 4 mm to 8 mm. The features of the embodiments may be combined unless they are technically incompatible.
+
+Reference signs
+150: tray; 152: body; 154: barrier layer; 156: sealing flange
+
+
+Claims
+1. A packaging tray comprising: a moulded fibre body (152); a barrier layer (154) of polybutylene succinate laminated to an inner surface of the body; a sealing flange (156) extending around an opening of the body; wherein the barrier layer has a thickness of 15 µm to 40 µm and an oxygen transmission rate below 50 cm³/(m²·day·bar).
+2. The packaging tray according to claim 1, wherein the barrier layer further comprises a polyvinyl alcohol core.
+3. The packaging tray according to claim 1, wherein the moulded fibre body comprises bagasse fibres.
+4. The packaging tray according to claim 1, wherein the sealing flange has a width of 4 mm to 8 mm.
+5. The packaging tray according to claim 1, wherein the tray is certified industrially compostable according to EN 13432.
+6. The packaging tray according to claim 2 or 3, wherein the body has a basis weight of 400 g/m² to 700 g/m².
+7. A method of manufacturing a packaging tray, comprising: thermoforming a moulded fibre body; laminating a polybutylene succinate barrier film to the inner surface under heat and vacuum; trimming a sealing flange around the opening.
+8. The method according to claim 7, wherein the barrier layer further comprises a polyvinyl alcohol core.

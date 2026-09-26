@@ -1,0 +1,2108 @@
+"""Gateway main entrypoint (digiRunner mock).
+
+Boots a FastAPI service on :8000. Layers, in request order:
+    1. CORS for the SPA
+    2. Auth (JWT + case access)             — Q12
+    3. Rate limit / quota / circuit breaker — Q18
+    4. Body redaction                        — Q10 (handled inside orchestrator)
+    5. Orchestration                         — Q1 / Follow-up
+    6. Audit log                             — Q13
+"""
+
+from __future__ import annotations
+
+import base64
+import hmac
+import logging
+import time
+from typing import Any
+
+import httpx
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from backend.gateway import audit, audit_outbox, cache, mailer, masking, rate_limit, signoff
+from backend.gateway.auth import (
+    _DUMMY_HASH_FOR_TIMING,
+    IdpError,
+    _get_password_hash,
+    _get_user,
+    _internal_headers,
+    _maybe_upgrade_hash,
+    _verify_password,
+    auth_dependency,
+    authenticate_oidc_callback,
+    authenticate_saml_acs,
+    authorize_case_access,
+    begin_oidc_login,
+    consume_magic_token,
+    demo_passwords_enabled,
+    get_user_email,
+    issue_magic_token,
+    issue_token,
+    magic_token_jti,
+    require_roles,
+    revoke_token,
+)
+from backend.gateway.orchestrator import orchestrate_analysis
+from backend.shared import metrics
+from backend.shared.case_registry import is_confidential, security_level_for_case
+from backend.shared.config import settings
+from backend.shared.models import (
+    AnalysisRequest,
+    AnalysisResponse,
+    ExportRequest,
+    ExportResponse,
+    User,
+    UserRole,
+)
+from backend.shared.observability import (
+    REQUEST_ID_HEADER,
+    bind_request_id,
+    configure_logging,
+    init_sentry,
+    request_id_headers,
+)
+
+# Q19: structured JSON logs + request-id binding, configured before FastAPI().
+configure_logging("gateway")
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_audit_write(**kwargs: Any) -> None:
+    """Write one audit row, swallowing any exception from the audit writer.
+
+    Invariant #4 (CLAUDE.md §4) says every gateway request writes exactly one
+    audit row — even errors. We enforce that with a ``try/finally`` in each
+    handler; this wrapper is the second half of the guarantee: if the audit
+    DB itself is broken (disk full / file locked / SQLite trigger refusal),
+    we must NOT let that failure mask the real response or original
+    exception the user is about to see.
+
+    The failure is logged at error level (Sentry / log scraper will surface
+    it) but never re-raised.
+
+    Durability backstop (invariant #4): swallowing the failure outright would
+    lose the audit row forever, which silently breaks the "exactly one row
+    even on errors" contract. So on failure we ALSO hand the full payload to
+    the durable outbox (``audit_outbox.enqueue``) — a fsync'd append-only
+    JSONL file that survives the SQLite outage. ``replay_outbox()`` drains it
+    back into the audit DB once the primary store recovers. The enqueue itself
+    never re-raises, so the caller's response/error is still never masked.
+    """
+    # Q19 系統 metric: audit-write latency. The decision flags this as an SLO
+    # (must stay <100ms or the frontend stalls). Timed around the primary
+    # write; the durable-outbox fallback below is intentionally NOT counted
+    # toward the SLO histogram (it's the degraded path, separately alarmed via
+    # audit_outbox_depth in /v1/health).
+    _audit_started = time.monotonic()
+    try:
+        audit.writer.write(**kwargs)
+    except Exception:  # noqa: BLE001 — deliberately broad: see docstring
+        logger.exception(
+            "audit write failed for endpoint=%s user=%s case=%s — "
+            "row queued to durable outbox; response/error returned to caller anyway",
+            kwargs.get("endpoint"),
+            getattr(kwargs.get("user"), "user_id", None),
+            kwargs.get("case_id"),
+        )
+        # Write-ahead the row to the durable outbox so it is never lost.
+        # enqueue() never re-raises, preserving the no-masking guarantee.
+        audit_outbox.enqueue(**kwargs)
+    finally:
+        metrics.AUDIT_WRITE_DURATION.observe(time.monotonic() - _audit_started)
+
+
+def _error_response_payload(error: BaseException) -> dict:
+    """Render an exception into the audit-row response_payload shape.
+
+    Keeps `str(error)` capped at 512 chars so a verbose exception (Pydantic
+    validation errors can run thousands of characters) cannot bloat the
+    hash-chained log.
+    """
+    return {
+        "error": str(error)[:512],
+        "exc_type": type(error).__name__,
+        "status_code": getattr(error, "status_code", 500),
+    }
+
+
+# Day 5: init Sentry before FastAPI() so import-time exceptions are caught.
+_SENTRY_ACTIVE = init_sentry("gateway")
+
+
+# Day 2 upload: allowed content types. Anything else → 415.
+_UPLOAD_PDF_MIME = "application/pdf"
+_UPLOAD_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_ALLOWED_UPLOAD_MIMES = {_UPLOAD_PDF_MIME, _UPLOAD_DOCX_MIME}
+
+# Page-break separator used to join multi-page extracted text. Picked so it
+# survives copy-paste into the existing /v1/oa/analyze flow and is unlikely to
+# collide with any real OA content.
+_PAGE_SEPARATOR = "\n\n--- page break ---\n\n"
+
+app = FastAPI(
+    title="PatentMind digiRunner Gateway (mock)",
+    version="0.1.0",
+    description="厚 Gateway: auth + quota + redaction + audit + orchestration.",
+)
+
+
+# ---------------------------------------------------------------------------
+# Security Chunk C — H-2. Max-body-size middleware.
+#
+# FastAPI / starlette accept request bodies as large as the ASGI server
+# allows — uvicorn has no built-in limit. A 1GB JSON POST is buffered into
+# memory and only rejected later when Pydantic walks the parsed dict and
+# trips a `max_length` constraint. By then we've already paid the memory +
+# CPU + latency cost.
+#
+# This middleware rejects on Content-Length BEFORE any body bytes are read.
+# Multipart uploads (Content-Length typically present and accurate) and
+# chunked bodies (Content-Length absent → fall through to per-handler
+# limits like /v1/oa/upload's MAX_UPLOAD_MB) are both handled correctly.
+# The default cap is 100MB which is generous enough for 30MB PDF uploads
+# (cap = MAX_UPLOAD_MB) while bounding worst-case memory at one big request.
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def max_body_size_middleware(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            length = int(content_length)
+        except ValueError:
+            # Malformed Content-Length — let the inner stack handle it (it'll
+            # likely 400). We don't want this middleware to be the source of
+            # weird 413s on legitimate-but-corrupt headers.
+            return await call_next(request)
+        if length > settings.MAX_BODY_BYTES:
+            # Identical 413 shape whether triggered here or by the upload
+            # endpoint's per-file MAX_UPLOAD_MB cap, so the frontend's
+            # generic "too large" handling fires.
+            return JSONResponse(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                content={
+                    "detail": (
+                        f"request body exceeds limit: {length} bytes > "
+                        f"{settings.MAX_BODY_BYTES} bytes."
+                    )
+                },
+            )
+    return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# Security Chunk C — M-1. Security headers middleware.
+#
+# Adds the six baseline response headers every browser-facing service should
+# ship with. Applied via `@app.middleware("http")` so they fire on EVERY
+# response — including 4xx error responses (clickjacking via a 404 page is
+# still clickjacking) and CORS preflight OPTIONS responses.
+#
+# CSP rationale:
+#   * `default-src 'self'`   — refuses arbitrary third-party loads.
+#   * `script-src 'self' 'unsafe-inline'` — vite injects inline scripts in
+#     dev for HMR + chunk preloads. Production builds extract everything to
+#     hashed files, at which point the operator can tighten this to remove
+#     'unsafe-inline'. Tracked in CLAUDE.md §P2 polish.
+#   * `style-src 'self' 'unsafe-inline'` — same reasoning; Tailwind via CDN
+#     ships inline `<style>`. Production PostCSS extraction lets this tighten.
+#   * `img-src 'self' data:` — admits inline data: URIs (favicon, file
+#     previews).
+#   * `connect-src 'self'`   — the SPA talks to the same origin. If a
+#     deployment fronts the API on a different host, this list must
+#     widen — but for the demo single-origin (vite proxy → backend)
+#     'self' is sufficient.
+#   * `font-src 'self' data:` — Tailwind / Inter fonts via data:.
+#   * `object-src 'none'`    — refuses Flash / Java embeds (legacy attack
+#     surface; we have no use case).
+#   * `frame-ancestors 'none'` — clickjacking-proof, paired with the
+#     X-Frame-Options: DENY header for older browsers.
+#   * `base-uri 'self'`      — refuses an injected `<base>` tag from
+#     redirecting relative URLs to a hostile origin.
+#   * `form-action 'self'`   — refuses an injected `<form action="...">`
+#     posting to a hostile origin (we have no cross-origin forms).
+#
+# Permissions-Policy zeroes out geolocation / camera / mic / payment — none
+# of which the patent-prosecution UX needs. If a future feature legitimately
+# wants one of these, narrow the deny list (and document why).
+#
+# HSTS: 1-year max-age + includeSubDomains. We omit `preload` because that
+# is an irrevocable browser-list commitment; opt in only when the
+# deployment is unquestionably stable on https.
+# ---------------------------------------------------------------------------
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "font-src 'self' data:; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+_SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "Content-Security-Policy": _CSP_POLICY,
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": ("geolocation=(), camera=(), microphone=(), payment=()"),
+}
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    for header, value in _SECURITY_HEADERS.items():
+        # Only set if not already present — lets a handler override a
+        # specific header for a one-off (e.g. an iframe-friendly preview
+        # page in the future). Today no handler overrides any of these.
+        response.headers.setdefault(header, value)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Q19 — correlation / request-id middleware (the END-TO-END trace anchor).
+#
+# Registered LAST among the @app.middleware decorators, so in Starlette's
+# reverse execution order it is the OUTERMOST layer: the request id is bound
+# before any other middleware or handler runs (so even a 413 from the
+# max-body-size middleware is logged WITH the id) and echoed on every response
+# (including 4xx/5xx error responses).
+#
+# Inbound: accept an upstream-supplied X-Request-ID (digiRunner / reverse proxy
+# can set it) or mint a fresh one. The bound id is read by the JSON log filter
+# (observability.RequestIdLogFilter) so every gateway log line carries it, and
+# propagated onto the gateway→ai_engine call via request_id_headers (see the
+# upload endpoint; the orchestrator needs the same one-liner — tracked as a
+# cross-file follow-up). The ai_engine binds the SAME id, so one request is
+# traceable across both services' logs.
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    rid = bind_request_id(request.headers.get(REQUEST_ID_HEADER))
+    response = await call_next(request)
+    response.headers[REQUEST_ID_HEADER] = rid
+    return response
+
+
+# H-1: env-driven CORS with specific methods + headers (was `*` wildcards).
+# `allow_credentials=True` matches the frontend's bearer-token + same-origin
+# fetch pattern. Methods + headers explicitly whitelisted — no future request
+# of an unexpected method (e.g. PATCH) sneaks through without a code change.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(settings.CORS_ALLOWED_ORIGINS),
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Case-Id",
+        "X-Demo-Secret",
+    ],
+    allow_credentials=True,
+    max_age=600,
+)
+
+
+# ---------- Login (POC simplified) ----------
+
+
+class LoginRequest(BaseModel):
+    # H-2: forbid unknown fields and cap each string at a sensible upper
+    # bound. user_id is in _USERS (max ~10 chars in the demo set); password
+    # is bounded to 256 chars which covers any IdP-issued token-style
+    # credential without admitting a multi-MB body.
+    model_config = {"extra": "forbid"}
+
+    user_id: str = Field(
+        ..., max_length=64
+    )  # POC: pass user_id directly. Production: IdP redirect.
+    # Required unless an X-Demo-Secret header is supplied AND matches
+    # settings.DEMO_LOGIN_SECRET. Default demo password is `demo-{user_id}`
+    # (documented in .env.example).
+    password: str | None = Field(default=None, max_length=256)
+
+
+class LoginResponse(BaseModel):
+    token: str
+    user_id: str
+    tenant_id: str
+    role: str
+    display_name: str
+
+
+def _client_ip(request: Request) -> str:
+    """Client address for the pre-auth login buckets.
+
+    Deliberately the direct peer (`request.client.host`), NOT X-Forwarded-For:
+    behind digiRunner the gateway sees the proxy's address, but trusting XFF
+    without a trusted-proxy allowlist would let any direct caller mint fresh
+    buckets per spoofed header value — a worse failure mode than shared
+    buckets. Revisit alongside a trusted-proxy config if the LOGIN_RPM bucket
+    granularity ever matters behind the proxy.
+    """
+    return request.client.host if request.client else ""
+
+
+def _login_rpm_gate(request: Request) -> None:
+    """Shared brute-force gate for every pre-auth login-family door.
+
+    All six doors (login, magic request/consume, oidc begin/callback,
+    saml acs) draw from the SAME per-IP bucket so an attacker can't split
+    their budget across doors. Must be called INSIDE each handler's
+    try/finally audit bracket — not a FastAPI dependency — so a 429 still
+    produces the endpoint's one audit row (invariant #4).
+    """
+    rate_limit.check_login_rpm(_client_ip(request))
+
+
+@app.post("/v1/auth/login", response_model=LoginResponse)
+def login(
+    req: LoginRequest,
+    request: Request,
+    x_demo_secret: str | None = Header(default=None, alias="X-Demo-Secret"),
+):
+    """Issue a JWT after validating credentials (Security Chunk A — C-1, H-8).
+
+    Two accepted paths (POC):
+
+    1. **Username + password.** Default demo passwords are ``demo-{user_id}``
+       (see ``.env.example``). Compared in constant time via
+       ``hmac.compare_digest`` so byte-level timing cannot oracle which
+       prefix matched.
+
+    2. **X-Demo-Secret header.** Used by the SPA's "click Alice" landing
+       page so stakeholder demos don't require typing. Only honoured when
+       the ``DEMO_LOGIN_SECRET`` env var is set on the backend (otherwise
+       any value the attacker supplies is useless). When set, a matching
+       header authenticates the named user without a password — equivalent
+       to a global service-side bypass that the operator opts into per
+       deployment.
+
+    Both unknown user and wrong password collapse to the **same** 401
+    response (no body shape difference, no status difference) — closes
+    H-8 user enumeration. Per-IP rate limit (LOGIN_RPM, default 10/min)
+    closes the brute-force window — Day 8 post-review fix for the
+    sole pre-auth endpoint.
+
+    POC IdP modes (Q12) all converge here:
+      - built-in:    POST /v1/auth/login (this endpoint)
+      - OIDC:        /v1/auth/oidc/callback (TODO with Claude Code)
+      - SAML:        /v1/auth/saml/acs (TODO)
+      - magic link:  POST /v1/auth/magic/request + /v1/auth/magic/consume
+    """
+    # Pre-auth brute-force defence (Day 8 post-review Important #1):
+    # runs BEFORE the dummy hash + argon2 round so a flood doesn't burn CPU
+    # on hash computation.
+    _login_rpm_gate(request)
+
+    user = _get_user(req.user_id)
+    stored_hash = _get_password_hash(req.user_id)
+
+    # Path 1: demo-secret header. Only relevant when an operator has set
+    # DEMO_LOGIN_SECRET on the backend — otherwise the comparison is
+    # short-circuited so an attacker supplying any header value learns
+    # nothing about whether the feature exists.
+    demo_secret_ok = bool(
+        settings.DEMO_LOGIN_SECRET
+        and x_demo_secret
+        and hmac.compare_digest(x_demo_secret, settings.DEMO_LOGIN_SECRET)
+    )
+
+    # Path 2: username + password. We always run _verify_password regardless
+    # of whether `user` is None, so the work-factor is identical for the
+    # known-user-wrong-password and unknown-user paths (closes H-8 timing
+    # oracle). We pass a dummy hash for the unknown-user case so the sha256
+    # round still happens.
+    candidate_hash = stored_hash or _DUMMY_HASH_FOR_TIMING
+    password_ok = bool(req.password and _verify_password(req.password, candidate_hash))
+    # Q24: the built-in `demo-{user_id}` passwords are public (documented in
+    # .env.example). Honour them only in mock mode unless an operator opts in
+    # explicitly — the hash round above still runs, so timing is unchanged.
+    if not demo_passwords_enabled():
+        password_ok = False
+
+    # `user is not None` is required for BOTH paths: the demo-secret header
+    # is a credential, not an identity selector, so it cannot conjure a
+    # `user_id` that isn't in the table.
+    authenticated = bool(user) and (demo_secret_ok or password_ok)
+    if not authenticated:
+        # Same status + message for unknown user AND bad password (H-8).
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+
+    # Opportunistic KDF upgrade: a credential that just verified against a
+    # legacy (sha256+salt) or below-policy argon2 hash is re-hashed to current
+    # argon2id parameters. Runs only on the password path (the demo-secret
+    # header proves nothing about the password) and only AFTER success.
+    if password_ok:
+        _maybe_upgrade_hash(req.user_id, req.password)
+
+    return LoginResponse(
+        token=issue_token(req.user_id),
+        user_id=user.user_id,
+        tenant_id=user.tenant_id,
+        role=user.role.value,
+        display_name=user.display_name,
+    )
+
+
+# The fixed dummy hash used when the requested user_id is unknown now lives in
+# auth.py (`_DUMMY_HASH_FOR_TIMING`, imported above) so its FORMAT always
+# matches the active hashing scheme — argon2id when argon2-cffi is installed,
+# legacy sha256+salt otherwise. A hard-coded legacy-format constant here would
+# reopen the H-8 timing oracle the moment real users moved to argon2 (the two
+# verification paths differ by ~10⁵× in work).
+
+
+# ---------- Magic-link login (Q12) ----------
+#
+# Small-firm path: no IdP, no password typing. The user requests a link, the
+# link is emailed (PROD) / returned in the response (DEMO-ONLY), and clicking
+# it (a POST to /consume) exchanges the single-use magic token for a real
+# session JWT — the SAME LoginResponse shape as /v1/auth/login.
+#
+# Security parity with /v1/auth/login: pydantic `extra="forbid"` + field caps,
+# per-IP rate limit via rate_limit.check_login_rpm (shares the login bucket so
+# the magic path can't be used to sidestep the brute-force cap), exactly one
+# audit row per call via _safe_audit_write in a try/finally, and the raw token
+# is NEVER written to the audit log — only its jti + outcome.
+
+
+class MagicRequestBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # user_id cap matches LoginRequest / User.user_id (max 64).
+    user_id: str = Field(..., max_length=64)
+
+
+class MagicRequestResponse(BaseModel):
+    # Generic, user-enumeration-safe shape. `message` is identical for known
+    # and unknown users. `magic_token` is populated ONLY for known users and
+    # ONLY because this is a POC — production emails a link and returns no
+    # token at all (see the DEMO-ONLY warning on the endpoint).
+    message: str
+    magic_token: str | None = None
+
+
+class MagicConsumeBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # A magic token is a signed JWT — same byte-length ballpark as a session
+    # token. 4096 is generous headroom while still bounding the body.
+    token: str = Field(..., max_length=4096)
+
+
+# Generic message returned by /v1/auth/magic/request for BOTH known and
+# unknown users — the heart of the user-enumeration defence. Same string,
+# same status, same response model for every input.
+_MAGIC_REQUEST_GENERIC_MESSAGE = "If that account exists, a magic sign-in link has been sent."
+
+
+def _audit_placeholder_user(user_id: str) -> User:
+    """Build a synthetic, least-privilege User for the audit row on the
+    pre-auth magic endpoints.
+
+    The audit writer is typed against ``User``, but at /request time we must
+    NOT reveal whether ``user_id`` is real, and at /consume time the token may
+    be forged. So we synthesize a PARALEGAL (least-privilege) placeholder in a
+    sentinel tenant. This never grants any access — it only labels the audit
+    row. ``user_id`` is capped by the pydantic body model before reaching here.
+    """
+    return User(
+        user_id=user_id or "_anonymous_",
+        tenant_id="_preauth_",
+        role=UserRole.PARALEGAL,
+        display_name="(pre-auth magic-link request)",
+        daily_token_quota=0,
+    )
+
+
+@app.post("/v1/auth/magic/request", response_model=MagicRequestResponse)
+def magic_request(req: MagicRequestBody, request: Request):
+    """Issue a single-use magic-link token for ``user_id`` (Q12).
+
+    ⚠ DEMO-ONLY token delivery ⚠ — exactly like the ``DEMO_LOGIN_SECRET``
+    bypass on ``/v1/auth/login``, this POC returns the magic token directly in
+    the response body so the demo SPA can complete the flow without a mail
+    server. PRODUCTION MUST email a link (``https://app/...#token=...``) and
+    return NO token in the HTTP response — otherwise anyone who can call this
+    endpoint logs in as the target user. The generic ``message`` field is the
+    production-shaped response; ``magic_token`` is the demo escape hatch.
+
+    User-enumeration defence (mirrors login H-8): the response is byte-shaped
+    identically for known and unknown users — same 200 status, same
+    ``message``. The only difference is that ``magic_token`` is populated for a
+    known user and ``null`` for an unknown one. In production (no token in the
+    body) there is ZERO observable difference. Status and the human-readable
+    message never differ, so a probe learns nothing.
+
+    Per-IP rate limit (shared login bucket) runs first so this endpoint can't
+    be used to brute-force the user roster or to flood token issuance.
+    """
+    error: BaseException | None = None
+    issued_jti: str | None = None
+    user_known = False
+    email_queued = False
+    try:
+        _login_rpm_gate(request)
+
+        token: str | None = None
+        try:
+            token = issue_magic_token(req.user_id)
+            user_known = True
+            issued_jti = magic_token_jti(token)
+        except HTTPException as exc:
+            # Unknown user (404 from issue_magic_token). Swallow it and fall
+            # through to the SAME generic 200 response — never leak existence.
+            if exc.status_code != status.HTTP_404_NOT_FOUND:
+                raise
+            token = None
+
+        # Q23: production delivery — email the link to the address on file.
+        # Queued on a background pool so response timing never reveals whether
+        # the account exists; unknown user / no address / SMTP unconfigured all
+        # fall through to the same generic response.
+        if token is not None:
+            email_queued = (
+                mailer.dispatch_magic_link(get_user_email(req.user_id), token) is not None
+            )
+
+        return MagicRequestResponse(
+            message=_MAGIC_REQUEST_GENERIC_MESSAGE,
+            # DEMO-ONLY escape hatch, gated by MAGIC_LINK_RETURN_TOKEN (off
+            # outside mock mode) — otherwise the body is identical for known
+            # and unknown users (no token, no enumeration signal).
+            magic_token=token if settings.MAGIC_LINK_RETURN_TOKEN else None,
+        )
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        raise
+    finally:
+        # Exactly one audit row. NEVER the raw token — only its jti + outcome.
+        if error is not None:
+            response_payload: dict = _error_response_payload(error)
+            outcome = "error"
+        else:
+            outcome = "issued" if user_known else "unknown_user_noop"
+            response_payload = {"outcome": outcome, "email_queued": email_queued}
+        _safe_audit_write(
+            user=_audit_placeholder_user(req.user_id),
+            case_id=None,
+            endpoint="/v1/auth/magic/request",
+            request_payload={"user_id": req.user_id},
+            response_payload=response_payload,
+            masked_rules=[],
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=0,
+            policy_decisions={
+                "outcome": outcome,
+                "magic_jti": issued_jti,  # safe correlation handle, not the token
+            },
+        )
+
+
+@app.post("/v1/auth/magic/consume", response_model=LoginResponse)
+def magic_consume(req: MagicConsumeBody, request: Request):
+    """Exchange a single-use magic token for a real session JWT (Q12).
+
+    On success returns the SAME ``LoginResponse`` shape as ``/v1/auth/login``
+    (a session JWT minted via ``issue_token``). On ANY failure — bad
+    signature, expired, wrong ``typ``, unknown user, missing jti, or replay —
+    returns a uniform 401 (``consume_magic_token`` raises it).
+
+    The token's ``jti`` is recorded as consumed on first success, so a second
+    POST with the same token 401s (replay defence). Per-IP rate limit (shared
+    login bucket) bounds token-guessing. Exactly one audit row; the raw token
+    is never stored — only its jti + outcome.
+    """
+    error: BaseException | None = None
+    consumed_user_id: str | None = None
+    # jti for the audit row — derived WITHOUT trusting signature/expiry, purely
+    # a correlation handle. Never the raw token.
+    jti = magic_token_jti(req.token)
+    try:
+        _login_rpm_gate(request)
+        consumed_user_id = consume_magic_token(req.token)
+        user = _get_user(consumed_user_id)
+        if user is None:
+            # consume_magic_token already guarantees a known user, but be
+            # defensive — collapse to the same 401 rather than 500.
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or expired magic link")
+        return LoginResponse(
+            token=issue_token(user.user_id),
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
+            role=user.role.value,
+            display_name=user.display_name,
+        )
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        raise
+    finally:
+        if error is not None:
+            response_payload: dict = _error_response_payload(error)
+            outcome = "rejected"
+        else:
+            response_payload = {"outcome": "consumed"}
+            outcome = "consumed"
+        _safe_audit_write(
+            user=_audit_placeholder_user(consumed_user_id or ""),
+            case_id=None,
+            endpoint="/v1/auth/magic/consume",
+            request_payload={"magic_jti": jti},  # NOT the raw token
+            response_payload=response_payload,
+            masked_rules=[],
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=0,
+            policy_decisions={"outcome": outcome, "magic_jti": jti},
+        )
+
+
+# ---------- Enterprise IdP: OIDC + SAML (Q12, Day 13F) ----------
+#
+# These flesh out the named `/v1/auth/oidc/callback` + `/v1/auth/saml/acs`
+# stubs. The identity provider is dependency-injected + MOCKABLE
+# (backend/gateway/auth.py), so the suite verifies a signed assertion offline —
+# no network to Keycloak/Okta/ADFS. Both converge on the SAME LoginResponse /
+# issue_token machinery as /v1/auth/login, so a federated user gets an ordinary
+# session JWT (revocable via /v1/auth/logout). Threat coverage:
+#   * OIDC: state (single-use CSRF token) + nonce (ID-token replay binding).
+#   * SAML: XML-DSig (stubbed as HMAC) + audience + time window + single-use
+#     replay guard on the assertion id.
+#   * Both: role/tenant resolved server-side — a federated user can NEVER
+#     self-assert AUDITOR / IT_ADMIN (same whitelist as the upstream-header path).
+# Each call writes exactly one audit row under the `_preauth_` sentinel tenant.
+
+
+class OIDCBeginResponse(BaseModel):
+    # The SPA redirects the browser to the IdP authorize endpoint carrying these.
+    state: str
+    nonce: str
+    authorize_url: str
+
+
+@app.get("/v1/auth/oidc/begin", response_model=OIDCBeginResponse)
+def oidc_begin(request: Request):
+    """Start an OIDC authorization-code flow: mint + return a (state, nonce).
+
+    The SPA sends the browser to the IdP authorize endpoint with ``state`` and
+    ``nonce``; both come back on /callback and are verified there. ``state`` is
+    a single-use CSRF token bound to ``nonce`` server-side, so a forged callback
+    (no matching state) is rejected. Per-IP rate-limited via the shared login
+    bucket so this can't be used to flood the state store.
+    """
+    if not settings.OIDC_ENABLED:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "OIDC is not enabled")
+    client_ip = _client_ip(request)  # reused in the audit payload below
+    error: BaseException | None = None
+    minted_state: str | None = None
+    try:
+        _login_rpm_gate(request)
+        state, nonce = begin_oidc_login()
+        minted_state = state
+        if settings.OIDC_MODE == "keycloak":
+            # Real IdP: the authorize endpoint comes from the realm's
+            # discovery document, never hand-assembled. Discovery being down
+            # is an IdP availability problem, not an auth failure → 503 (the
+            # uniform-401 rule is for credential-shaped failures only).
+            from backend.gateway.oidc_keycloak import get_keycloak_provider
+
+            try:
+                authorize_url = get_keycloak_provider().authorize_url(state=state, nonce=nonce)
+            except IdpError as exc:
+                logger.error("oidc/begin: keycloak discovery unavailable: %s", exc)
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE, "OIDC provider unavailable"
+                ) from exc
+        else:
+            authorize_url = (
+                f"{settings.OIDC_ISSUER}/authorize"
+                f"?response_type=code&client_id={settings.OIDC_CLIENT_ID}"
+                f"&state={state}&nonce={nonce}&scope=openid"
+            )
+        return OIDCBeginResponse(state=state, nonce=nonce, authorize_url=authorize_url)
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        raise
+    finally:
+        # Invariant #4 (review P2-4): this endpoint mutates server state (it
+        # mints + stores an OIDC `state`), so it writes an audit row like its
+        # sibling /callback — previously it was the one IdP endpoint without
+        # one. Never the state value pre-redemption shape concerns: state is
+        # single-use CSRF, logging it is a correlation handle like magic_jti.
+        if error is not None:
+            response_payload: dict = _error_response_payload(error)
+            outcome = "error"
+        else:
+            outcome = "state_minted"
+            response_payload = {"outcome": outcome}
+        _safe_audit_write(
+            user=_audit_placeholder_user("_oidc_begin_"),
+            case_id=None,
+            endpoint="/v1/auth/oidc/begin",
+            request_payload={"client_ip": client_ip},
+            response_payload=response_payload,
+            masked_rules=[],
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=0,
+            policy_decisions={"outcome": outcome, "oidc_state": minted_state},
+        )
+
+
+class OIDCCallbackBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    code: str = Field(..., max_length=4096)
+    state: str = Field(..., max_length=256)
+
+
+@app.post("/v1/auth/oidc/callback", response_model=LoginResponse)
+def oidc_callback(req: OIDCCallbackBody, request: Request):
+    """Complete an OIDC authorization-code callback -> session JWT (Q12).
+
+    Verifies (in order) the single-use ``state`` (CSRF), then the provider
+    validates the authorization code (signature / iss / aud / exp / nonce — real
+    crypto in production, HMAC in the offline stub). On success returns the SAME
+    ``LoginResponse`` shape as /v1/auth/login. On ANY failure returns a uniform
+    401 so the specific reason is never an oracle. Exactly one audit row; the
+    raw code is never stored.
+    """
+    error: BaseException | None = None
+    user: User | None = None
+    try:
+        _login_rpm_gate(request)
+        try:
+            user = authenticate_oidc_callback(req.code, req.state)
+        except IdpError as exc:
+            logger.warning("oidc/callback rejected: %s", exc)
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "OIDC authentication failed") from exc
+        # authenticate_oidc_callback already registered a federated user (if
+        # not in _USERS) so issue_token can resolve them.
+        return LoginResponse(
+            token=issue_token(user.user_id),
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
+            role=user.role.value,
+            display_name=user.display_name,
+        )
+    except BaseException as exc:  # noqa: BLE001 — must reach finally
+        error = exc
+        raise
+    finally:
+        outcome = "authenticated" if (error is None and user is not None) else "rejected"
+        _safe_audit_write(
+            user=_audit_placeholder_user(user.user_id if user else ""),
+            case_id=None,
+            endpoint="/v1/auth/oidc/callback",
+            request_payload={"state": req.state},  # NOT the raw code
+            response_payload={"outcome": outcome},
+            masked_rules=[],
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=0,
+            policy_decisions={"outcome": outcome, "idp": "oidc"},
+        )
+
+
+class SAMLACSBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # The base64 SAMLResponse a real IdP POSTs to the ACS endpoint. Stubbed as a
+    # signed assertion blob in the POC. 16KB cap bounds the body.
+    saml_response: str = Field(..., max_length=16384, alias="SAMLResponse")
+
+
+@app.post("/v1/auth/saml/acs", response_model=LoginResponse)
+def saml_acs(req: SAMLACSBody, request: Request):
+    """SAML Assertion Consumer Service -> session JWT (Q12).
+
+    The provider validates the assertion (signature / audience / time window —
+    XML-DSig in production, HMAC in the offline stub), then a single-use replay
+    guard on the assertion id refuses a captured-and-replayed assertion even
+    inside its validity window. On success returns the SAME ``LoginResponse``
+    shape as /v1/auth/login; on ANY failure a uniform 401. Exactly one audit row.
+    """
+    error: BaseException | None = None
+    user: User | None = None
+    try:
+        _login_rpm_gate(request)
+        try:
+            user = authenticate_saml_acs(req.saml_response)
+        except IdpError as exc:
+            logger.warning("saml/acs rejected: %s", exc)
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "SAML authentication failed") from exc
+        # authenticate_saml_acs already registered a federated user (if not in
+        # _USERS) so issue_token can resolve them.
+        return LoginResponse(
+            token=issue_token(user.user_id),
+            user_id=user.user_id,
+            tenant_id=user.tenant_id,
+            role=user.role.value,
+            display_name=user.display_name,
+        )
+    except BaseException as exc:  # noqa: BLE001 — must reach finally
+        error = exc
+        raise
+    finally:
+        outcome = "authenticated" if (error is None and user is not None) else "rejected"
+        _safe_audit_write(
+            user=_audit_placeholder_user(user.user_id if user else ""),
+            case_id=None,
+            endpoint="/v1/auth/saml/acs",
+            request_payload={},  # NOT the raw assertion
+            response_payload={"outcome": outcome},
+            masked_rules=[],
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=0,
+            policy_decisions={"outcome": outcome, "idp": "saml"},
+        )
+
+
+@app.post("/v1/auth/logout")
+async def logout(request: Request, user: User = Depends(auth_dependency)):
+    """Revoke the caller's session token (H-5 — JWT kill switch).
+
+    The token's ``jti`` is added to the revocation set so the token is refused
+    by ``verify_token`` for the remainder of its TTL — closing the window where
+    a leaked/clicked-logout token stays valid for up to ``JWT_EXPIRES_MIN``.
+    Idempotent: a second logout (or an upstream-trust caller with no Bearer
+    token) is a no-op that returns ``revoked=False``.
+
+    POC revocation store is in-memory (``auth._REVOKED_SESSION_JTIS``);
+    production MUST back it with Redis (TTL = remaining token lifetime) so the
+    kill switch survives restart and spans replicas.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    revoked = revoke_token(auth_header[7:]) if auth_header.startswith("Bearer ") else False
+    # Logout is an authenticated, state-changing security event — audit it, the
+    # same way /v1/auth/magic/consume is audited (login, being pre-auth, is not).
+    _safe_audit_write(
+        user=user,
+        case_id=None,
+        endpoint="/v1/auth/logout",
+        request_payload={},
+        response_payload={"revoked": revoked},
+        masked_rules=[],
+        model_used=None,
+        prompt_tokens=0,
+        completion_tokens=0,
+        latency_ms=0,
+        policy_decisions={"revoked": revoked},
+    )
+    return {"ok": True, "revoked": revoked}
+
+
+# ---------- Health / Quota dashboard (Q19) ----------
+
+
+@app.get("/v1/health")
+def health():
+    return {
+        "ok": True,
+        "service": "gateway",
+        "circuit_breaker": rate_limit.cost_circuit_state(),
+        "cache_stats": cache.stats(),
+        # Q13 durability backstop: number of audit rows whose primary write
+        # failed and are queued in the durable outbox awaiting replay. >0 is
+        # an ops signal that the audit DB is (or was) unhealthy.
+        "audit_outbox_depth": audit_outbox.outbox_depth(),
+    }
+
+
+@app.get("/metrics")
+def metrics_endpoint(request: Request):
+    """Prometheus scrape target (Q19 — four-layer dashboard).
+
+    Returns the in-process registry in Prometheus text exposition format
+    (v0.0.4). The cost gauge folds rate_limit's per-tenant/per-model
+    month-to-date spend in *read-only* at scrape time, so the 成本 layer stays
+    a single source of truth.
+
+    SECURITY (Q30): the layers carry tenant IDs and dollar figures, so the
+    scrape is gated — ``Authorization: Bearer $METRICS_TOKEN`` when
+    METRICS_TOKEN is set, otherwise loopback clients only. A stock Prometheus
+    job sends the token via ``authorization: {credentials: ...}`` (see
+    ops/grafana/prometheus_scrape.example.yml).
+    """
+    client_host = request.client.host if request.client else None
+    if not metrics.scrape_authorized(request.headers.get("authorization"), client_host):
+        return Response(status_code=status.HTTP_401_UNAUTHORIZED, content="Unauthorized")
+    return Response(
+        content=metrics.render_prometheus(),
+        media_type=metrics.content_type(),
+    )
+
+
+@app.get("/v1/quota")
+def quota(user: User = Depends(auth_dependency)):
+    return rate_limit.get_quota_snapshot(user)
+
+
+# ---------- Main analysis endpoint ----------
+
+
+@app.post("/v1/oa/analyze", response_model=AnalysisResponse)
+async def analyze_oa(
+    body: AnalysisRequest,
+    request: Request,
+    # H-6: role gate. ATTORNEY + PARALEGAL (paralegals assist attorneys —
+    # core POC demo workflow). IT_ADMIN + AUDITOR are NOT permitted; they
+    # have different concerns (connectors / dashboards / audit chain).
+    # `require_roles` wraps `auth_dependency` so authentication still
+    # happens first — no risk of unauth being accepted.
+    user: User = Depends(require_roles(UserRole.ATTORNEY, UserRole.PARALEGAL)),
+):
+    """Q1 厚 Gateway core endpoint.
+
+    Steps (with policy gates):
+      0. Explicit case-ACL re-check on body.case_id (C-3 fix — see auth.py
+         docstring; the dependency-level check only looks at headers).
+      1. RPM check
+      2. Request size hard cap
+      3. Estimate token need; quota check
+      4. Cache lookup (per Q9 namespacing)
+      5. Orchestrate via AI Engine
+      6. Record usage + circuit breaker check
+      7. Audit log
+
+    The whole flow runs inside a try/finally so an audit row is written even
+    when an exception fires partway through (H-7 fix — invariant #4 in
+    CLAUDE.md §4 requires "every gateway request writes exactly one audit
+    row. Even cache hits. Even errors").
+    """
+    started = time.monotonic()
+    policy_decisions: dict[str, bool] = {
+        "authn_passed": True,
+        # authz starts False — we have NOT yet validated the body.case_id
+        # against the user's ACL. The dependency only checked X-Case-Id /
+        # query param; a request that omits both lands here with the
+        # dependency thinking case_id was missing (and passing). The
+        # explicit re-check below is what actually closes the bypass.
+        "authz_passed": False,
+        "rate_limit_passed": False,
+        "quota_passed": False,
+        "circuit_open": False,
+    }
+    response: AnalysisResponse | None = None
+    cached_payload: dict | None = None
+    obs: dict = {}
+    error: BaseException | None = None
+    reserved_quota_tokens = 0
+    quota_reservation_settled = False
+    try:
+        # 0a. Confused-deputy guard: if BOTH the X-Case-Id header AND the
+        # body.case_id are present, they MUST agree. Otherwise an attacker
+        # could trick a header-based ACL into thinking the request is for
+        # case A while the actual orchestration runs against case B. We
+        # only check when both are present — handlers that previously sent
+        # only one or the other (the frontend always sends both with the
+        # same value; smoke tests sometimes send only body) keep working.
+        header_case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+        if header_case_id and header_case_id != body.case_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"case_id mismatch: header={header_case_id!r} body={body.case_id!r}. "
+                "X-Case-Id and body case_id must agree when both are supplied.",
+            )
+
+        # 0b. C-3: explicit ACL on the body-supplied case_id. Runs BEFORE any
+        # rate-limit / quota work so a 403 doesn't burn the user's RPM token
+        # for an attack we're already rejecting.
+        authorize_case_access(user, body.case_id)
+        policy_decisions["authz_passed"] = True
+
+        # 1–3. RPM → hard cap → ATOMIC quota reserve, in the invariant-#8
+        # order, via the single gate entry point. The reservation contract
+        # (13I) is unchanged: counters are already incremented by
+        # `estimated_tokens`, and every exit path below MUST settle exactly
+        # once:
+        #   - cache hit   -> release in full (no LLM work happened)
+        #   - success     -> record_usage(..., reserved_tokens=...) adjusts
+        #                    counters by (actual - reserved)
+        #   - error       -> release in full (except-block below)
+        estimated_tokens = max(1, len(body.oa_text) // 3)
+        reserved_quota_tokens = rate_limit.reserve_llm_budget(
+            user, estimated_tokens, policy_decisions
+        )
+        quota_reservation_settled = False
+
+        # 4. Cache (Q9) — M-7 fix: hash POST-redaction text, not raw input.
+        # Pre-fix the cache key used `body.oa_text` directly. That meant:
+        #   (a) Two attorneys typing the same OA shared a cache slot (the
+        #       surrounding tenant/user/case namespacing prevented response
+        #       leakage, but only because of that layer — the hash itself
+        #       had no privacy property);
+        #   (b) A typo (extra space, fullwidth digit, smart-quote) caused
+        #       a miss that should have been a hit (NFKC + dictionary
+        #       normalise away in the redaction step);
+        #   (c) Including a redaction-version tag means a future ruleset
+        #       bump (new PII rule, tenant dictionary refresh) automatically
+        #       invalidates pre-bump cached responses rather than serving
+        #       them under the new policy.
+        # `masking.redact` is idempotent on placeholders (a `[EMAIL_XXXX]`
+        # token doesn't match the email regex) so re-running it inside the
+        # orchestrator is safe and keeps the orchestrator's own redaction
+        # invariant (Q3 + Q10) intact.
+        redacted_for_cache, _ = masking.redact(body.oa_text, user.tenant_id)
+        # Every input that changes the draft must be in the key — otherwise an
+        # edited attorney hint / filing date is answered with the stale draft
+        # for the whole CACHE_TTL_RESPONSE_SEC window.
+        redacted_hint_for_cache = (
+            masking.redact(body.user_hint, user.tenant_id)[0] if body.user_hint else ""
+        )
+        prompt_hash = cache.hash_prompt(
+            "".join(
+                [
+                    redacted_for_cache,
+                    body.target_patent_no,
+                    redacted_hint_for_cache,
+                    str(body.filing_date or ""),
+                    # Deadline inputs (Q16/Q17/Q19) change the deadline block.
+                    str(body.applicant_domestic),
+                    str(body.oa_sequence or ""),
+                    str(body.service_date or ""),
+                ]
+            ),
+            "orchestrator-v1",
+            redaction_version=settings.REDACTION_VERSION,
+        )
+        cached = cache.get_response(user.tenant_id, user.user_id, body.case_id, prompt_hash)
+        # Q19 系統 metric: cache effectiveness (hit ratio panel in Grafana).
+        metrics.CACHE_REQUESTS.inc({"result": "hit" if cached else "miss"})
+        if cached:
+            cached_payload = cached
+            response = AnalysisResponse(**cached)
+            # Cache hit does no LLM work — release the quota reservation in
+            # full (delta = 0 - reserved), otherwise every hit silently burns
+            # the user's daily quota.
+            rate_limit.record_usage(user, 0, 0, 0.0, reserved_tokens=reserved_quota_tokens)
+            quota_reservation_settled = True
+            # T1: the cached copy carries the ORIGINAL run's gate outcomes —
+            # overwrite with THIS request's decisions (auth/rpm/quota all
+            # re-ran above; only the LLM work was skipped). Same for
+            # cost_meta.cache_hit: the stored copy froze the MISS's False,
+            # so the SPA's cache chip lied on every hit until this flip.
+            response.policy_decisions = dict(policy_decisions)
+            response.cost_meta.cache_hit = True
+            return response
+
+        # 5. Circuit breaker
+        if rate_limit.cost_circuit_state()["tripped"]:
+            policy_decisions["circuit_open"] = True
+            # POC behavior: still serve, but the LLM router will degrade to cheap model.
+            # In production: optionally 503 here for graceful shedding.
+
+        # 6. Orchestrate — forward the circuit-breaker state so the AI Engine
+        # degrades the draft model to the cheap tier when the cost breaker
+        # has tripped (Q18 / invariant #8).
+        response, obs = await orchestrate_analysis(
+            user, body, circuit_open=policy_decisions.get("circuit_open", False)
+        )
+        # T1: surface the REAL gate outcomes to the SPA (same dict the audit
+        # row records) — the trust chips must never be cosmetic constants.
+        response.policy_decisions = dict(policy_decisions)
+
+        # 7. Record usage — reconcile against the step-3 reservation so the
+        # counters reflect TRUE spend, not reservation + actual (P1-1).
+        rate_limit.record_usage(
+            user,
+            prompt_tokens=obs["prompt_tokens"],
+            completion_tokens=obs["completion_tokens"],
+            cost_usd=obs["estimated_cost_usd"],
+            reserved_tokens=reserved_quota_tokens,
+        )
+        quota_reservation_settled = True
+
+        # 8. Cache write
+        cache.set_response(
+            user.tenant_id,
+            user.user_id,
+            body.case_id,
+            prompt_hash,
+            response.model_dump(mode="json"),
+        )
+
+        return response
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        policy_decisions["error"] = True
+        # A failed request must not strand its quota reservation (P1-1):
+        # release in full so quota doesn't silently drain on errors. Wrapped
+        # defensively — releasing must never mask the original exception.
+        if reserved_quota_tokens and not quota_reservation_settled:
+            try:
+                rate_limit.record_usage(user, 0, 0, 0.0, reserved_tokens=reserved_quota_tokens)
+                quota_reservation_settled = True
+            except Exception:  # noqa: BLE001
+                logger.exception("quota reservation release failed")
+        raise
+    finally:
+        elapsed = time.monotonic() - started
+        latency_ms = int(elapsed * 1000)
+        # Q19 系統 metric: per-endpoint request duration (feeds p50/p95/p99).
+        # status derives from the error (HTTPException carries status_code;
+        # anything else is a 500); success/cache-hit are 200.
+        if error is not None:
+            status_code = getattr(error, "status_code", 500)
+        else:
+            status_code = 200
+        metrics.HTTP_REQUEST_DURATION.observe(
+            elapsed,
+            {"endpoint": "/v1/oa/analyze", "method": "POST", "status": str(status_code)},
+        )
+        # Q19 業務 metric: count a successfully-analyzed OA (not cache hits,
+        # not errors — cache hits already counted on their original analyze).
+        if error is None and cached_payload is None:
+            metrics.OA_ANALYZED.inc({"tenant": user.tenant_id})
+        # Pick the right audit shape based on which path the request took.
+        if error is not None:
+            response_payload = _error_response_payload(error)
+            model_used = None
+            prompt_tokens = 0
+            completion_tokens = 0
+            masked_rules: list[str] = []
+            pd = {**policy_decisions, "cache_hit": False}
+        elif cached_payload is not None:
+            response_payload = cached_payload
+            model_used = "cache"
+            prompt_tokens = 0
+            completion_tokens = 0
+            masked_rules = []
+            pd = {**policy_decisions, "cache_hit": True}
+        else:
+            # response is non-None on the success path because orchestrate ran.
+            assert response is not None, "internal: success path produced no response"
+            response_payload = response.model_dump(mode="json")
+            model_used = obs.get("model_used")
+            prompt_tokens = obs.get("prompt_tokens", 0)
+            completion_tokens = obs.get("completion_tokens", 0)
+            masked_rules = obs.get("mask_rules", [])
+            pd = {**policy_decisions, "cache_hit": False}
+        _safe_audit_write(
+            user=user,
+            case_id=body.case_id,
+            endpoint="/v1/oa/analyze",
+            request_payload=body.model_dump(),
+            response_payload=response_payload,
+            masked_rules=masked_rules,
+            model_used=model_used,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=latency_ms,
+            policy_decisions=pd,
+        )
+
+
+# ---------- Day 2 upload endpoint ----------
+
+
+@app.post("/v1/oa/upload")
+async def upload_oa(
+    request: Request,
+    file: UploadFile = File(...),
+    # H-6: same role gate as /v1/oa/analyze — paralegals assist attorneys
+    # by uploading OAs that the attorney then analyses. IT_ADMIN + AUDITOR
+    # are refused with 403 before any upload bytes are read.
+    user: User = Depends(require_roles(UserRole.ATTORNEY, UserRole.PARALEGAL)),
+):
+    """Day 2: accept a PDF/DOCX, return extracted text for use by /v1/oa/analyze.
+
+    Layering rules respected:
+      - Auth + case ACL: re-checked here on the X-Case-Id header. The auth
+        dependency already checked it; we re-call ``authorize_case_access``
+        anyway for C-3 belt-and-braces (and to populate ``authz_passed``
+        explicitly so the audit row reflects the gate).
+      - Confidential routing: this endpoint REFUSES confidential cases. They
+        must use manual text paste — uploading would push pages through cloud
+        Vision OCR which is forbidden by security policy (Q15).
+      - Gateway never calls the LLM directly: bytes are base64-encoded and
+        forwarded to the AI Engine `/v1/ai/extract_text` endpoint.
+      - Redaction: NOT applied here. The extracted text is returned to the
+        attorney; redaction happens at /v1/oa/analyze time as before.
+      - Audit: writes a row recording file size + page count + ocr count +
+        cost — NEVER the extracted text itself. Per invariant #4 (H-7 fix)
+        the audit row is written even on error paths via the try/finally
+        below.
+      - Rate limit + cost circuit: 1 request, cost = vision OCR usage.
+    """
+    started = time.monotonic()
+    policy_decisions = {
+        "authn_passed": True,
+        "authz_passed": False,
+        "rate_limit_passed": False,
+        "upload_size_passed": False,
+        "upload_type_passed": False,
+        "confidential_blocked": False,
+    }
+
+    # Pull case_id explicitly: multipart bodies are streams so auth_dependency
+    # can't autodetect it from body the way it does for JSON POSTs. (And per
+    # C-3 fix, the dependency never peeks at the body at all now.)
+    case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+
+    # Pre-set audit shape so the finally block always has something coherent
+    # to write — even if we error out before reading the file body.
+    response_payload: Any = None
+    model_used: str | None = None
+    prompt_tokens = 0
+    completion_tokens = 0
+    file_size = 0
+    error: BaseException | None = None
+    file_content_type = getattr(file, "content_type", None)
+    file_name = getattr(file, "filename", None)
+
+    try:
+        if not case_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "X-Case-Id header required for upload",
+            )
+        # C-3 belt-and-braces: explicit ACL re-check. Already enforced by
+        # auth_dependency for header case_id, but we want ``authz_passed``
+        # to reflect a real check on this endpoint.
+        authorize_case_access(user, case_id)
+        policy_decisions["authz_passed"] = True
+
+        # Block confidential cases at the EDGE. Defense in depth: pdf_parser
+        # will also refuse, but we want to reject before reading the upload
+        # body so large privileged scans never even enter our process memory.
+        # Q22: the level comes from the server-side case registry (fail-closed:
+        # an unregistered case is confidential), not from the case_id spelling.
+        if is_confidential(case_id):
+            policy_decisions["confidential_blocked"] = True
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Confidential cases must use manual text entry; upload routes "
+                "through cloud OCR which is forbidden by security policy.",
+            )
+
+        # Validate content type FIRST so we don't slurp a 30MB binary just to
+        # discover it's the wrong format.
+        if file.content_type not in _ALLOWED_UPLOAD_MIMES:
+            raise HTTPException(
+                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                f"unsupported content type: {file.content_type!r}. "
+                f"Allowed: {sorted(_ALLOWED_UPLOAD_MIMES)}.",
+            )
+        policy_decisions["upload_type_passed"] = True
+
+        # RPM check before any heavy work.
+        rate_limit.gate_rpm(user, policy_decisions)
+
+        # Read the file into memory and enforce the byte cap. Reading in one
+        # shot is fine because the cap is single-digit MB by default; we
+        # explicitly avoid streaming-to-disk per the "bytes never touch disk"
+        # requirement.
+        file_bytes = await file.read()
+        file_size = len(file_bytes)
+        max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
+        if file_size > max_bytes:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"upload exceeds limit: {file_size} bytes > "
+                f"{max_bytes} bytes ({settings.MAX_UPLOAD_MB} MB).",
+            )
+        policy_decisions["upload_size_passed"] = True
+
+        # Forward to AI engine. Base64 keeps the AI engine surface JSON-only
+        # and matches the orchestrator's existing httpx.AsyncClient pattern.
+        payload = {
+            "file_bytes_b64": base64.b64encode(file_bytes).decode("ascii"),
+            "content_type": file.content_type,
+            "max_pages": 100,
+            # Confidential cases were refused above; pass the registry level
+            # anyway so the AI Engine's own backstop sees the real value.
+            "security_level": security_level_for_case(case_id),
+        }
+        ai_url = f"{settings.AI_ENGINE_URL.rstrip('/')}/v1/ai/extract_text"
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            # OCR over a 100-page scan can take ~60s through Haiku, so the
+            # timeout intentionally exceeds the orchestrator's 60s.
+            try:
+                # Security Chunk A — C-2. AI Engine refuses requests lacking
+                # X-Internal-Token. Gateway is the only legitimate caller.
+                # Q19: propagate the correlation id (request_id_headers merges it
+                # onto the internal-token headers) so the AI Engine binds the
+                # SAME X-Request-ID and the upload is traceable across both
+                # services' logs end to end.
+                ai_resp = await client.post(
+                    ai_url,
+                    json=payload,
+                    headers=request_id_headers(_internal_headers()),
+                )
+            except httpx.HTTPError as exc:
+                raise HTTPException(
+                    status.HTTP_502_BAD_GATEWAY,
+                    f"AI engine unreachable: {exc}",
+                ) from exc
+
+        if ai_resp.status_code >= 400:
+            # Mirror the AI engine status when meaningful, otherwise 502.
+            # We surface the detail body so the frontend can show a useful
+            # error (e.g. "PDF is password-protected").
+            try:
+                detail = ai_resp.json().get("detail", ai_resp.text)
+            except Exception:
+                detail = ai_resp.text
+            if ai_resp.status_code in (400, 413, 415, 422):
+                raise HTTPException(ai_resp.status_code, detail)
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"AI engine error: {detail}")
+
+        body = ai_resp.json()
+        usage = body.get("usage") or {}
+        cost_usd = float(usage.get("estimated_cost_usd", 0.0) or 0.0)
+        page_count = int(body.get("page_count", 0))
+        ocr_pages_used = body.get("ocr_pages", []) or []
+
+        extracted_text = _PAGE_SEPARATOR.join(body.get("pages", []) or [])
+
+        # Q8 element table (reference numeral -> description). The AI engine
+        # returns it with int keys, but JSON-over-HTTP stringifies them; re-key
+        # to ints for a stable downstream contract. Defensive: any malformed
+        # entry is skipped rather than failing the upload.
+        raw_element_table = body.get("element_table") or {}
+        element_table: dict[int, str] = {}
+        for k, v in raw_element_table.items():
+            try:
+                element_table[int(k)] = str(v)
+            except (TypeError, ValueError):
+                continue
+
+        # Account for cost + quota. Cost counts toward the daily circuit
+        # breaker.
+        prompt_tokens = int(usage.get("input_tokens", 0) or 0)
+        completion_tokens = int(usage.get("output_tokens", 0) or 0)
+        rate_limit.record_usage(
+            user,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost_usd,
+        )
+
+        response_payload = {
+            "page_count": page_count,
+            "ocr_pages_count": len(ocr_pages_used),
+            "char_count": int(body.get("char_count", 0) or 0),
+            "cost_usd": cost_usd,
+        }
+        model_used = settings.LLM_MODEL_CHEAP if ocr_pages_used else "none"
+
+        return {
+            "extracted_text": extracted_text,
+            "page_count": page_count,
+            "ocr_pages_used": ocr_pages_used,
+            "char_count": int(body.get("char_count", 0) or 0),
+            "warnings": body.get("warnings", []) or [],
+            # Q8: surface the reference-numeral element table so the SPA /
+            # downstream analysis can resolve "element 200" in figures.
+            "element_table": element_table,
+            "cost_meta": {
+                "estimated_cost_usd": cost_usd,
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "cache_read_input_tokens": int(usage.get("cache_read_input_tokens", 0) or 0),
+                "cache_creation_input_tokens": int(
+                    usage.get("cache_creation_input_tokens", 0) or 0
+                ),
+            },
+        }
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        policy_decisions["error"] = True
+        raise
+    finally:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        if error is not None:
+            audit_response_payload = _error_response_payload(error)
+            audit_model_used = None
+        else:
+            audit_response_payload = response_payload
+            audit_model_used = model_used
+        _safe_audit_write(
+            user=user,
+            # case_id may be None if the X-Case-Id header was missing (we
+            # still record the row so the operator can see the attempt).
+            case_id=case_id,
+            endpoint="/v1/oa/upload",
+            request_payload={
+                "file_size_bytes": file_size,
+                "content_type": file_content_type,
+                "filename": file_name,
+            },
+            response_payload=audit_response_payload,
+            masked_rules=[],
+            model_used=audit_model_used,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=duration_ms,
+            policy_decisions=policy_decisions,
+        )
+
+
+# ---------- Audit query endpoints (for the Auditor role) ----------
+
+
+@app.get("/v1/audit/recent")
+def audit_recent(limit: int = 50, user: User = Depends(auth_dependency)):
+    if user.role.value not in ("auditor", "it_admin"):
+        raise HTTPException(403, "auditor or it_admin role required")
+    return audit.writer.list_for_tenant(user.tenant_id, limit=limit)
+
+
+@app.get("/v1/audit/verify")
+def audit_verify(
+    scope: str = "tenant",
+    user: User = Depends(auth_dependency),
+):
+    """Walk the audit chain, recompute hashes, report broken rows (Q13
+    tamper evidence).
+
+    Query parameter ``scope``:
+
+    * ``tenant`` (default) — walks only the caller's tenant. Existing
+      behaviour, role-gated to AUDITOR + IT_ADMIN.
+    * ``global``           — walks every tenant's chain, runs the
+      tenant-whitelist + prev-hash-existence checks (H-4 fix). Restricted
+      to AUDITOR only because a global view crosses tenant boundaries —
+      IT_ADMIN's role description is per-tenant connectors / dashboards,
+      not cross-tenant compliance. An attacker who escalated to IT_ADMIN
+      should not be able to enumerate every tenant's case_ids via this
+      endpoint.
+    """
+    if user.role.value not in ("auditor", "it_admin"):
+        raise HTTPException(403, "auditor or it_admin role required")
+    if scope == "global":
+        # Tighter gate for the cross-tenant view — auditor only.
+        if user.role.value != "auditor":
+            raise HTTPException(403, "auditor role required for scope=global")
+        return audit.writer.verify_global_chain()
+    if scope != "tenant":
+        raise HTTPException(400, f"unknown scope {scope!r}; expected 'tenant' or 'global'")
+    return audit.writer.verify_chain(user.tenant_id)
+
+
+# ---------- Case registry admin (Q27, IT_ADMIN only) ----------
+#
+# case_id travels in the JSON body, never the URL (CLAUDE.md §9). The role
+# check runs INSIDE the audited try/finally, so denied attempts are audited
+# too (a 403 from a dependency would skip invariant #4). Every change records
+# the before/after security level in policy_decisions.
+
+
+class CaseRegistryWrite(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    case_id: str = Field(..., min_length=1, max_length=128)
+    security_level: str = Field(..., min_length=1, max_length=32)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class CaseRegistryRef(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    case_id: str = Field(..., min_length=1, max_length=128)
+
+
+def _admin_case_call(request: Request, user: User, endpoint: str, action, audit_extra=None):
+    """Shared audited wrapper for the /v1/admin/cases endpoints."""
+    from backend.shared import case_registry
+
+    started = time.monotonic()
+    policy: dict[str, Any] = {"role_it_admin": False, "rate_limit_passed": False}
+    error: BaseException | None = None
+    result: Any = None
+    try:
+        if user.role != UserRole.IT_ADMIN:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "it_admin role required")
+        policy["role_it_admin"] = True
+        rate_limit.gate_rpm(user, policy)
+        try:
+            result = action(case_registry, policy)
+        except case_registry.RegistryError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        return result
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        raise
+    finally:
+        if audit_extra:
+            policy.update(audit_extra)
+        policy["outcome"] = "ok" if error is None else getattr(error, "status_code", "error")
+        _safe_audit_write(
+            user=user,
+            case_id=policy.get("registry_case_id"),
+            endpoint=endpoint,
+            request_payload=policy.get("registry_request"),
+            response_payload=None if error is not None else policy.get("registry_after"),
+            masked_rules=[],
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            policy_decisions=policy,
+        )
+
+
+@app.get("/v1/admin/cases")
+def admin_list_cases(request: Request, user: User = Depends(auth_dependency)):
+    """List registered cases + the read-only glob patterns + valid levels."""
+    return _admin_case_call(request, user, "/v1/admin/cases", lambda reg, _p: reg.list_cases())
+
+
+@app.post("/v1/admin/cases/lookup")
+def admin_get_case(body: CaseRegistryRef, request: Request, user: User = Depends(auth_dependency)):
+    """One case's stored entry and its EFFECTIVE level (patterns, -CONF and
+    fail-closed defaults applied) — what the pipeline will actually use."""
+
+    def _get(reg, policy):
+        policy["registry_case_id"] = body.case_id
+        entry = reg.get_case(body.case_id)
+        return {"entry": entry, "effective_level": reg.security_level_for_case(body.case_id)}
+
+    return _admin_case_call(request, user, "/v1/admin/cases/lookup", _get)
+
+
+def _registry_change(verb: str, body_case_id: str):
+    def _record(policy, before, after):
+        policy["registry_case_id"] = body_case_id
+        policy["registry_action"] = verb
+        policy["registry_level_before"] = None if before is None else before["level"]
+        policy["registry_active_before"] = None if before is None else before["active"]
+        policy["registry_level_after"] = after["level"]
+        policy["registry_active_after"] = after["active"]
+        policy["registry_after"] = after
+
+    return _record
+
+
+@app.post("/v1/admin/cases", status_code=status.HTTP_201_CREATED)
+def admin_create_case(
+    body: CaseRegistryWrite, request: Request, user: User = Depends(auth_dependency)
+):
+    record = _registry_change("create", body.case_id)
+
+    def _create(reg, policy):
+        policy["registry_case_id"] = body.case_id
+        policy["registry_request"] = body.model_dump()
+        before, after = reg.upsert_case(
+            body.case_id, body.security_level, actor=user.user_id, note=body.note, create=True
+        )
+        record(policy, before, after)
+        return after
+
+    return _admin_case_call(request, user, "/v1/admin/cases:create", _create)
+
+
+@app.put("/v1/admin/cases")
+def admin_update_case(
+    body: CaseRegistryWrite, request: Request, user: User = Depends(auth_dependency)
+):
+    record = _registry_change("update", body.case_id)
+
+    def _update(reg, policy):
+        policy["registry_case_id"] = body.case_id
+        policy["registry_request"] = body.model_dump()
+        before, after = reg.upsert_case(
+            body.case_id, body.security_level, actor=user.user_id, note=body.note, create=False
+        )
+        record(policy, before, after)
+        return after
+
+    return _admin_case_call(request, user, "/v1/admin/cases:update", _update)
+
+
+@app.post("/v1/admin/cases/deactivate")
+def admin_deactivate_case(
+    body: CaseRegistryRef, request: Request, user: User = Depends(auth_dependency)
+):
+    """Cases are never deleted; a deactivated case resolves to confidential."""
+    record = _registry_change("deactivate", body.case_id)
+
+    def _deactivate(reg, policy):
+        policy["registry_case_id"] = body.case_id
+        policy["registry_request"] = body.model_dump()
+        before, after = reg.deactivate_case(body.case_id, actor=user.user_id)
+        record(policy, before, after)
+        return after
+
+    return _admin_case_call(request, user, "/v1/admin/cases/deactivate", _deactivate)
+
+
+# ---------- Redaction (first-class for digiRunner pre-LLM transform plugins) ----------
+
+
+class RedactionPreviewRequest(BaseModel):
+    # H-2: same cap as AnalysisRequest.oa_text — redaction preview is what
+    # the SPA shows BEFORE submitting the OA for analysis, so the upper
+    # bound has to match. extra=forbid prevents a future client from
+    # smuggling tenant_id / user_id (which would be ignored anyway since
+    # those come from auth context, but better to fail loudly).
+    model_config = {"extra": "forbid"}
+
+    text: str = Field(..., max_length=5 * 1024 * 1024)
+
+
+def _do_redact(req: RedactionPreviewRequest, user: User, request: Request, endpoint: str) -> dict:
+    """Shared implementation for /v1/redact and its deprecated alias.
+
+    Writes exactly one audit row per call (invariant #4) — the input text is
+    NEVER stored, only its hash + the rule ids that fired. The whole flow
+    runs inside a try/finally so the audit row is written even on error
+    paths (H-7 fix).
+    """
+    started = time.monotonic()
+    case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+
+    policy_decisions: dict[str, bool] = {
+        "authn_passed": True,
+        "authz_passed": False,
+    }
+    rules: list[str] = []
+    redacted: str = ""
+    result_payload: dict | None = None
+    error: BaseException | None = None
+    try:
+        if not case_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "X-Case-Id header required for redaction (tenant routing)",
+            )
+        # auth_dependency already enforced ACL when case_id was on the
+        # header, but we re-check explicitly so the audit row's authz flag
+        # is meaningful and the C-3 invariant ("body-derived case_ids are
+        # re-checked at handler") generalises uniformly to all endpoints.
+        authorize_case_access(user, case_id)
+        policy_decisions["authz_passed"] = True
+
+        redacted, rules = masking.redact(req.text, user.tenant_id)
+        result_payload = {"rules_triggered": rules, "redacted_chars": len(redacted)}
+        return {"redacted": redacted, "rules_triggered": rules}
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        policy_decisions["error"] = True
+        raise
+    finally:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        audit_response_payload: Any = (
+            _error_response_payload(error) if error is not None else result_payload
+        )
+        _safe_audit_write(
+            user=user,
+            case_id=case_id,
+            endpoint=endpoint,
+            # Never store raw text in audit — only its length + content hash
+            # via the writer's _hash_payload mechanism.
+            request_payload={"text_chars": len(req.text)},
+            response_payload=audit_response_payload,
+            masked_rules=rules,
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=latency_ms,
+            policy_decisions=policy_decisions,
+        )
+
+
+@app.post("/v1/redact")
+def redact(
+    req: RedactionPreviewRequest,
+    request: Request,
+    # H-6: ATTORNEY + PARALEGAL — preview-before-submit lives in the OA
+    # analysis workflow which both roles use. IT_ADMIN + AUDITOR have no
+    # legitimate reason to call this (and AUDITOR doing so would smear
+    # their tenant's audit chain with redaction rows under the auditor's
+    # identity).
+    user: User = Depends(require_roles(UserRole.ATTORNEY, UserRole.PARALEGAL)),
+):
+    """First-class redaction endpoint.
+
+    Intended for digiRunner pre-LLM transform plugins that need to scrub user
+    input before forwarding to the LLM gateway. Same shape as the legacy
+    /v1/debug/redaction_preview alias (which now delegates here).
+
+    Requires:
+      - Authorization: Bearer <token>
+      - X-Case-Id: <case_id>  (for tenant routing inside masking + ACL check)
+      - Role: ATTORNEY or PARALEGAL.
+    """
+    return _do_redact(req, user, request, endpoint="/v1/redact")
+
+
+@app.post("/v1/debug/redaction_preview", deprecated=True)
+def redaction_preview(
+    req: RedactionPreviewRequest,
+    request: Request,
+    response: Response,
+    # H-6: same role gate as /v1/redact — the deprecated alias must enforce
+    # the same authorisation as the first-class endpoint, otherwise it'd be
+    # a permission backdoor.
+    user: User = Depends(require_roles(UserRole.ATTORNEY, UserRole.PARALEGAL)),
+):
+    """DEPRECATED alias for /v1/redact — kept so the existing frontend and
+    smoke-test paths don't break. New callers should use /v1/redact.
+    """
+    # RFC 9745 (Sept 2024 final): Deprecation MUST be a Structured-Field
+    # Date — bare "true" was the obsolete RFC 8594 draft style. We use the
+    # deprecation moment (2026-06-01 00:00 UTC, the day this alias was
+    # introduced) and pair it with a Sunset header (RFC 8594) at +12 months.
+    response.headers["Deprecation"] = "@1748736000"  # 2026-06-01T00:00:00Z
+    response.headers["Sunset"] = "Mon, 01 Jun 2026 00:00:00 GMT"  # +12mo target
+    response.headers["Link"] = '</v1/redact>; rel="successor-version"'
+    return _do_redact(req, user, request, endpoint="/v1/debug/redaction_preview")
+
+
+# ---------- Audit append (for digiRunner post-LLM hooks) ----------
+
+
+class AuditAppendRequest(BaseModel):
+    """Body schema for POST /v1/audit/append.
+
+    SECURITY INVARIANT: this schema deliberately omits `user_id` and
+    `tenant_id`. Those are tagged from the gateway-trusted auth context so an
+    upstream caller cannot forge audit rows on behalf of another user.
+
+    `extra="forbid"` makes that invariant load-bearing: a body containing
+    `user_id`/`tenant_id` (or any other unexpected key) is rejected with 422
+    rather than silently dropped, so a future copy-paste error setting
+    `extra="allow"` can't quietly turn this into audit forgery.
+    """
+
+    # `model_used` happens to start with "model_", which Pydantic v2 reserves
+    # by default; explicitly disable the protected-namespace check so the
+    # import doesn't emit a warning. `extra="forbid"` enforces the documented
+    # security invariant — see class docstring.
+    model_config = {"protected_namespaces": (), "extra": "forbid"}
+
+    # Caps prevent unbounded strings from ballooning the hash-chained log.
+    case_id: str = Field(..., max_length=256)
+    endpoint: str = Field(..., max_length=256)
+    model_used: str | None = Field(default=None, max_length=128)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    latency_ms: int = 0
+    masked_field_rules: list[str] = Field(default_factory=list)
+    policy_decisions: dict[str, bool] = Field(default_factory=dict)
+    error: str | None = Field(default=None, max_length=2048)
+
+
+# Roles permitted to call /v1/audit/append. PARALEGAL is excluded — the audit
+# chain is auditor / it_admin territory; attorneys may need to record analysis
+# events for cases they handle. Phase 2.4 should add a dedicated SERVICE_ACCOUNT
+# role and tighten this further.
+_AUDIT_APPEND_ROLES: frozenset[UserRole] = frozenset(
+    {
+        UserRole.ATTORNEY,
+        UserRole.IT_ADMIN,
+        UserRole.AUDITOR,
+    }
+)
+
+
+@app.post("/v1/audit/append")
+def audit_append(
+    req: AuditAppendRequest,
+    user: User = Depends(auth_dependency),
+):
+    """Append one row to the tenant's audit hash-chain.
+
+    Used by digiRunner post-LLM hooks to record the LLM result + cost +
+    policy decisions after a transform plugin invoked /v1/redact and the
+    request was forwarded to an external LLM gateway outside our orchestrator.
+
+    Caller-supplied fields (case_id, endpoint, model_used, token counts,
+    latency, masked rules, policy decisions, error) are recorded verbatim.
+    `user_id` and `tenant_id` come from the AUTH CONTEXT — NOT from the
+    request body — so an upstream cannot impersonate another user.
+
+    Permission model:
+      - Role gate: only ATTORNEY / IT_ADMIN / AUDITOR (paralegal blocked —
+        they shouldn't be filing audit-chain entries directly).
+      - Case ACL: enforced via authorize_case_access — even an attorney can
+        only append rows for cases they have ACL on. This blocks a logged-in
+        user from polluting the hash-chained log with rows referencing
+        case_ids they don't own (caught by Day 8B review — see commit msg).
+    """
+    started = time.monotonic()
+    # Build the "real" audit row (the one requested by the caller) up front
+    # so the finally block can emit it on success, or fall through to an
+    # error row on failure. We never want to write TWO rows for a single
+    # request — invariant #4 says "exactly one".
+    error: BaseException | None = None
+    appended_ok = False
+    try:
+        if user.role not in _AUDIT_APPEND_ROLES:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"Role '{user.role.value}' is not permitted to append audit rows.",
+            )
+        # C-3: Re-check ACL on the body-supplied case_id. auth_dependency
+        # only inspected X-Case-Id (the body was opaque to it).
+        authorize_case_access(user, req.case_id)
+
+        # `policy_decisions` is typed `dict[str, bool]` on the writer, so we
+        # keep a boolean flag for "did an error happen" and preserve the raw
+        # error string in `response_payload`.
+        policy_decisions = dict(req.policy_decisions)
+        if req.error:
+            policy_decisions["error"] = True
+
+        _safe_audit_write(
+            user=user,  # gateway-trusted; supplies user_id + tenant_id
+            case_id=req.case_id,
+            endpoint=req.endpoint,
+            request_payload={"source": "audit_append"},
+            response_payload={"error": req.error} if req.error else None,
+            masked_rules=req.masked_field_rules,
+            model_used=req.model_used,
+            prompt_tokens=req.prompt_tokens,
+            completion_tokens=req.completion_tokens,
+            latency_ms=req.latency_ms,
+            policy_decisions=policy_decisions,
+        )
+        appended_ok = True
+        return {"appended": True}
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        raise
+    finally:
+        # Only write an error row when the caller-supplied append failed
+        # BEFORE we wrote it ourselves (e.g. role gate rejected, ACL
+        # rejected). If the append itself succeeded the row above is the
+        # one audit row for this request — don't write a second.
+        if not appended_ok:
+            _safe_audit_write(
+                user=user,
+                case_id=req.case_id,
+                endpoint="/v1/audit/append",
+                request_payload={"source": "audit_append", "intended_endpoint": req.endpoint},
+                response_payload=_error_response_payload(error) if error is not None else None,
+                masked_rules=[],
+                model_used=None,
+                prompt_tokens=0,
+                completion_tokens=0,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                policy_decisions={"authn_passed": True, "error": True},
+            )
+
+
+# ---------- Q16 — mandatory sign-off export ----------
+
+
+@app.post("/v1/oa/export", response_model=ExportResponse)
+def export_draft(
+    body: ExportRequest,
+    request: Request,
+    # Q16 responsibility boundary: sign-off is an ATTORNEY act. Paralegals
+    # assist with analysis (they CAN call /v1/oa/analyze and /v1/oa/upload),
+    # but the legal accountability for the final filed document — the act of
+    # ticking "我已逐項確認" — rests with a licensed attorney. So this gate is
+    # ATTORNEY-ONLY, deliberately tighter than analyze/upload. A paralegal
+    # hitting this endpoint gets a 403 from require_roles BEFORE any document
+    # is assembled.
+    user: User = Depends(require_roles(UserRole.ATTORNEY)),
+):
+    """Assemble + return the final draft — ONLY after attorney sign-off (Q16).
+
+    Hard export gate (Q16 decision): unless ``attorney_signoff`` is exactly
+    ``True`` we refuse with 409 and produce NO document. The attorney ticking
+    "我已逐項確認" in the DraftEditor is what flips that flag; an un-ticked
+    checkbox means the request is an auditable refused-export attempt, not an
+    export.
+
+    On success the gateway:
+      1. Re-checks the case ACL on ``body.case_id`` (C-3 belt-and-braces — the
+         dependency only saw the X-Case-Id header, not the JSON body).
+      2. Assembles the document from the ACCEPTED provenance segments.
+      3. Records EXACTLY ONE audit row capturing WHO signed off, the case, the
+         provenance SUMMARY (counts of ai_generated / attorney_edited /
+         attorney_added — the responsibility boundary), signoff=True, and the
+         SHA-256 of the assembled document. It deliberately stores NO raw draft
+         text — only counts + the content hash (CLAUDE.md §9).
+
+    Feedback capture (Q16): the ``attorney_edited`` + ``attorney_added`` counts
+    in the audit row ARE the feedback signal. We don't run a training pipeline
+    here — we just ensure the edit deltas are durably captured in the audit
+    trail so a future loop can mine high-edit exports to improve the AI draft.
+
+    The whole flow runs inside a try/finally so an audit row is written even on
+    the refusal path and even when assembly throws (invariant #4, CLAUDE.md §4).
+    The refused-export attempt is itself an auditable event (signoff=False).
+    """
+    started = time.monotonic()
+    policy_decisions: dict[str, Any] = {
+        "authn_passed": True,
+        # authz starts False — the dependency only saw the X-Case-Id header;
+        # the load-bearing re-check on body.case_id is below (C-3).
+        "authz_passed": False,
+        "signoff_passed": False,
+    }
+    response: ExportResponse | None = None
+    summary = None
+    doc_hash: str | None = None
+    error: BaseException | None = None
+    try:
+        # 1. Confused-deputy guard + ACL re-check on the body case_id, mirroring
+        #    /v1/oa/analyze. If both header and body case_id are present they
+        #    must agree; then the body case_id is ACL-checked explicitly.
+        header_case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+        if header_case_id and header_case_id != body.case_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"case_id mismatch: header={header_case_id!r} body={body.case_id!r}. "
+                "X-Case-Id and body case_id must agree when both are supplied.",
+            )
+        authorize_case_access(user, body.case_id)
+        policy_decisions["authz_passed"] = True
+
+        # 1b. Defence-in-depth: sign-off authority is an explicit, role-gated
+        #     decision. The endpoint dependency already gates to ATTORNEY, but
+        #     re-asserting here means a future refactor that loosened the
+        #     dependency still can't let a non-attorney sign. Records the
+        #     authority role into the audit row.
+        signoff.assert_signoff_authority(user)
+        policy_decisions.update(signoff.signoff_audit_fields(user, signed_off=False))
+
+        # 2. THE HARD GATE. No document without an explicit, exactly-True
+        #    sign-off. We always compute the provenance summary first (it's
+        #    cheap and carries no raw text) so the audit row records the
+        #    responsibility boundary even on the refusal path.
+        summary = signoff.summarise_provenance(body.segments)
+        if body.attorney_signoff is not True:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "attorney sign-off required: tick '我已逐項確認' before export. "
+                "No document was produced.",
+            )
+        policy_decisions["signoff_passed"] = True
+
+        # 3. Assemble the accepted segments + hash the result.
+        document = signoff.assemble_document(body.segments)
+        doc_hash = signoff.content_hash(document)
+        response = ExportResponse(
+            case_id=body.case_id,
+            rejection_id=body.rejection_id,
+            draft_set_id=body.draft_set_id,
+            document=document,
+            content_sha256=doc_hash,
+            provenance_summary=summary,
+            signed_off_by=user.user_id,
+            attorney_signoff=True,
+        )
+        return response
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        policy_decisions["error"] = True
+        raise
+    finally:
+        elapsed = time.monotonic() - started
+        latency_ms = int(elapsed * 1000)
+        signed_off = response is not None  # True only on the success path
+        # Q19 系統 + 業務 metrics for the export path.
+        export_status = 200 if error is None else getattr(error, "status_code", 500)
+        metrics.HTTP_REQUEST_DURATION.observe(
+            elapsed,
+            {"endpoint": "/v1/oa/export", "method": "POST", "status": str(export_status)},
+        )
+        # exports_total is labelled by whether sign-off passed, so the dashboard
+        # can chart accepted vs refused. A refused sign-off (the 409 hard gate)
+        # additionally bumps signoff_refused_total. The ACL-403 / mismatch-400
+        # paths are export attempts too but are NOT sign-off refusals, so they
+        # count under exports_total{signed_off="false"} without touching
+        # signoff_refused_total.
+        metrics.EXPORTS.inc(
+            {"tenant": user.tenant_id, "signed_off": "true" if signed_off else "false"}
+        )
+        if (
+            error is not None
+            and getattr(error, "status_code", None) == status.HTTP_409_CONFLICT
+            and not policy_decisions.get("signoff_passed", False)
+        ):
+            metrics.SIGNOFF_REFUSED.inc()
+        # policy_decisions carries the booleans (typed dict[str, bool] on the
+        # writer); the responsibility-boundary COUNTS go alongside as integer
+        # entries so an auditor reading /v1/audit/recent sees them directly.
+        # The summary object is None only if we threw before computing it
+        # (e.g. the ACL 403) — fall back to a zeroed summary in that case.
+        pd: dict[str, Any] = {
+            **policy_decisions,
+            "attorney_signoff": signed_off,
+        }
+        if summary is not None:
+            pd["prov_total_segments"] = summary.total_segments
+            pd["prov_accepted_segments"] = summary.accepted_segments
+            pd["prov_ai_generated"] = summary.ai_generated
+            pd["prov_attorney_edited"] = summary.attorney_edited
+            pd["prov_attorney_added"] = summary.attorney_added
+            pd["prov_paralegal_edited"] = summary.paralegal_edited
+            pd["prov_paralegal_added"] = summary.paralegal_added
+        # response_payload NEVER contains raw draft text — only the content
+        # hash (on success) or the error shape (on failure). The writer hashes
+        # this into response_hash; even that hashed column stays text-free.
+        if error is not None:
+            response_payload: Any = _error_response_payload(error)
+        else:
+            response_payload = {
+                "content_sha256": doc_hash,
+                "signed_off_by": user.user_id,
+            }
+        _safe_audit_write(
+            user=user,
+            case_id=body.case_id,
+            endpoint="/v1/oa/export",
+            # request_payload omits the raw segment text — only the segment
+            # COUNT + the export handles. The writer would hash whatever we
+            # pass; we keep raw text out of the hashed column entirely.
+            request_payload={
+                "segment_count": len(body.segments),
+                "rejection_id": body.rejection_id,
+                "draft_set_id": body.draft_set_id,
+            },
+            response_payload=response_payload,
+            masked_rules=[],
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=latency_ms,
+            policy_decisions=pd,
+        )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # M-9: bind 127.0.0.1 by default (was 0.0.0.0 — exposed on every LAN
+    # interface). Production runs behind digiRunner / nginx; the
+    # reverse-proxy IS the public edge, not this process. Override via
+    # `LISTEN_HOST=0.0.0.0` for a deployment where this binary IS the edge.
+    uvicorn.run(
+        "backend.gateway.main:app",
+        host=settings.LISTEN_HOST,
+        port=settings.GATEWAY_PORT,
+        reload=False,
+    )

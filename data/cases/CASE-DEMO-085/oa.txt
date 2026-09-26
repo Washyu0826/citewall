@@ -1,0 +1,23 @@
+EUROPEAN PATENT OFFICE
+Communication pursuant to Article 94(3) EPC
+
+Application No.: EP9900005
+Applicant: Brückner Logistics Robotics GmbH
+Examining Division: The Hague
+Examiner: K. Hoffmann
+Date of this communication: 2025-06-10
+Reference: EPC94-2025-0005
+
+The examination of the above-identified application has revealed that it does not meet the requirements of the European Patent Convention for the reasons set out below. The applicant is invited to file observations and, where appropriate, amendments within 4 MONTHS of the date of this communication.
+
+The following documents are referred to in this communication:
+D1: EP9990013
+D2: EP9990014
+
+1. Article 56 EPC (claims 1, 2, 3)
+1.1 Document D1 (EP9990013) is regarded as the closest prior art and discloses a warehouse robot with all features of claim 1 except the last feature. The objective technical problem is to improve efficiency under varying operating conditions. D2 (EP9990014) addresses the same problem and teaches the missing feature; the skilled person would combine D1 with D2 without inventive skill. Claims 2 and 3 add routine design choices.
+
+2. Article 84 EPC (claim 4)
+2.1 In claim 4 the feature "the robot requests additional grid cells when no path exists within its reservation" refers to a parameter without stating how or under which conditions it is measured, so that the skilled person cannot establish whether a given product falls within the claim. The scope of protection is therefore not clearly defined.
+
+The application as filed contains 8 claims.

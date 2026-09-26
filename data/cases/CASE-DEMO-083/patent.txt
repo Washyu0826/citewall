@@ -1,0 +1,42 @@
+(19) European Patent Office
+(11) EP9900003 A1
+(12) EUROPEAN PATENT APPLICATION
+(43) Date of publication: 2024-09-06
+(22) Date of filing: 2023-05-12
+(51) Int Cl.: A61M 5/168
+(71) Applicant: Calvera Medical S.r.l.
+(72) Inventors: Giulia Serra; Marco Bellini; Chiara Conti
+(54) Medical infusion pump with occlusion detection
+
+(57) Abstract
+A infusion pump comprising a peristaltic pumping mechanism (52) acting on an infusion line; a force sensor (54) arranged downstream of the pumping mechanism; the invention shortens time-to-alarm at 1 ml/h from about 40 minutes to under 8 minutes with fewer than one false alarm per 1,000 hours.
+
+Description
+Technical field
+The present invention relates to volumetric infusion pumps for intravenous therapy, and in particular to a infusion pump and a corresponding method.
+
+Background art
+A first known approach uses a single absolute pressure threshold; however, it responds late at low flow rates such as 1 ml/h. A second known approach relies on motor current monitoring alone, which produces false alarms when the line is bent temporarily. Neither approach provides reliable operation over the full range of operating conditions at acceptable cost.
+
+Summary of the invention
+It is an object of the invention to provide a infusion pump overcoming these drawbacks. The object is achieved by a infusion pump comprising a peristaltic pumping mechanism (52) acting on an infusion line; a force sensor (54) arranged downstream of the pumping mechanism; a motor current sensor (56); a processor (58) configured to signal a downstream occlusion when a rate of change of the sensed force and a rise in motor current both exceed respective thresholds within a common time window. Compared with the prior art, the invention shortens time-to-alarm at 1 ml/h from about 40 minutes to under 8 minutes with fewer than one false alarm per 1,000 hours.
+
+Brief description of the drawings
+Fig. 1 shows a schematic view of a infusion pump according to a first embodiment. Fig. 2 shows a flow chart of the method. Fig. 3 shows measurement results comparing the embodiment with the prior art.
+
+Detailed description of embodiments
+The processor (58) evaluates both signals every 100 ms; at 1 ml/h the force-rate threshold is 0.02 N/s. In a variant, the common time window is between 2 and 10 seconds; in a further variant, the thresholds are scaled with the programmed flow rate; in a further variant, the processor reverses the pumping mechanism by a bolus-reduction volume after signalling the occlusion. The features of the embodiments may be combined unless they are technically incompatible.
+
+Reference signs
+50: infusion pump; 52: pumping mechanism; 54: force sensor; 56: motor current sensor; 58: processor; 60: air-in-line detector
+
+
+Claims
+1. A infusion pump comprising: a peristaltic pumping mechanism (52) acting on an infusion line; a force sensor (54) arranged downstream of the pumping mechanism; a motor current sensor (56); a processor (58) configured to signal a downstream occlusion when a rate of change of the sensed force and a rise in motor current both exceed respective thresholds within a common time window.
+2. The infusion pump according to claim 1, wherein the common time window is between 2 and 10 seconds.
+3. The infusion pump according to claim 1, wherein the thresholds are scaled with the programmed flow rate.
+4. The infusion pump according to claim 1, wherein the processor reverses the pumping mechanism by a bolus-reduction volume after signalling the occlusion.
+5. The infusion pump according to claim 1, wherein the bolus-reduction volume is between 0.1 ml and 0.5 ml.
+6. The infusion pump according to claim 2 or 3, wherein the pump comprises an upstream air-in-line detector (60).
+7. A method of detecting a downstream occlusion in an infusion pump, comprising: sensing a force on the infusion line downstream of a pumping mechanism; sensing a motor current of the pumping mechanism; signalling an occlusion when both a force rate of change and a motor current rise exceed thresholds within a common time window.
+8. The method according to claim 7, wherein the common time window is between 2 and 10 seconds.

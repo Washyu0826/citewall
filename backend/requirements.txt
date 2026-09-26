@@ -1,0 +1,86 @@
+# PatentMind backend runtime deps. Pinned to major versions known to work.
+# Optional groups are commented inline — uncomment to enable that backend mode.
+
+# ---------------------------------------------------------------------------
+# core (always required)
+# ---------------------------------------------------------------------------
+fastapi==0.141.1
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+httpx==0.27.2
+numpy==2.1.1
+# IANA tz database for zoneinfo (Q17 deadlines). Linux ships /usr/share/zoneinfo;
+# Windows has none, so ZoneInfo("America/New_York") raises without this.
+tzdata>=2024.1
+
+# ---------------------------------------------------------------------------
+# auth (Q12)
+# ---------------------------------------------------------------------------
+PyJWT==2.15.0
+# argon2id password KDF (P1 hardening). auth.py degrades to the legacy
+# sha256+salt scheme (demo accounts only) with a loud warning if absent.
+argon2-cffi>=23.1.0
+
+# ---------------------------------------------------------------------------
+# crypto (Q3/Q10 — at-rest encryption of the reversible redaction mapping
+# table via per-tenant Fernet keys derived with HKDF-SHA256)
+# ---------------------------------------------------------------------------
+cryptography>=42.0.2
+
+# ---------------------------------------------------------------------------
+# llm clients (optional — pick per LLM_MODE)
+# ---------------------------------------------------------------------------
+anthropic==1.8.0         # LLM_MODE=anthropic (1.x: httpx2-based, Python>=3.10, no sampling params)
+# openai==1.51.0         # LLM_MODE=openai
+
+# ---------------------------------------------------------------------------
+# storage (optional)
+# ---------------------------------------------------------------------------
+qdrant-client==1.19.1    # VECTOR_BACKEND=qdrant (kept un-commented; mock is dep-free anyway)
+redis==5.0.8             # CACHE_BACKEND=redis (Phase 2A — installed unconditionally so CI exercises the wiring)
+psycopg[binary]==3.2.3   # AUDIT_BACKEND=postgres (Q13 — Postgres audit store; tests skip without a server)
+boto3>=1.34              # ARCHIVE_BACKEND=s3 (Q13 — WORM archive to MinIO/S3 Object Lock; tests skip without MinIO)
+
+# ---------------------------------------------------------------------------
+# embedding (optional — only when EMBEDDING_BACKEND=bge-m3)
+# ---------------------------------------------------------------------------
+sentence-transformers==5.1.2
+
+# ---------------------------------------------------------------------------
+# document parsing (Day 2 PDF/DOCX upload)
+# ---------------------------------------------------------------------------
+# pymupdf version kept in sync with the legacy bundle in /requirements.txt;
+# the binary wheel is large but already cached in CI.
+pymupdf==1.24.14
+python-docx==1.1.2
+
+# python-multipart is needed for FastAPI's UploadFile/Form parsing.
+python-multipart==0.0.32
+
+# ---------------------------------------------------------------------------
+# on-prem OCR (optional — only when OCR_BACKEND=tesseract; Q8 / invariant #7)
+# Required to OCR *confidential* scanned PDFs, which must never reach cloud
+# Vision OCR. NOT installed in CI: the `tesseract` binary is a separate system
+# package (`apt-get install tesseract-ocr tesseract-ocr-chi-tra` for the
+# chi_tra+eng default). Left COMMENTED so `pip install -r` does not hard-fail
+# without the binary; backend/ai_engine/ocr_local.py lazy-imports pytesseract
+# and raises a clear RuntimeError if either the binding or the engine is absent.
+# pytesseract==0.3.13   # OCR_BACKEND=tesseract
+# Pillow>=10.4.0        # image decode for pytesseract (often pulled in already)
+
+# ---------------------------------------------------------------------------
+# observability (Day 5 — no-op when SENTRY_DSN env var is unset)
+# ---------------------------------------------------------------------------
+sentry-sdk[fastapi]==2.18.0
+
+# ---------------------------------------------------------------------------
+# externalized prompts (Compat Refactor 1 — backend/ai_engine/prompts/*.yaml)
+# ---------------------------------------------------------------------------
+PyYAML==6.0.2
+
+# ---------------------------------------------------------------------------
+# test (dev — kept here so a plain `pip install -r backend/requirements.txt`
+# venv can run the full suite; CI also installs these explicitly in ci.yml)
+# ---------------------------------------------------------------------------
+pytest>=9.0
+pytest-asyncio>=1.0

@@ -1,0 +1,42 @@
+(19) European Patent Office
+(11) EP9900006 A1
+(12) EUROPEAN PATENT APPLICATION
+(43) Date of publication: 2024-09-09
+(22) Date of filing: 2023-08-15
+(51) Int Cl.: C23C 16/40
+(71) Applicant: Uppland Hårdmetall AB
+(72) Inventors: Erik Sjöberg; Maja Lindqvist
+(54) Coated cutting insert with multilayer aluminium oxide coating
+
+(57) Abstract
+A cutting insert comprising a cemented carbide substrate (112); a titanium carbonitride inner layer (114) with a thickness of 4 µm to 10 µm; the invention increases tool life in turning of 42CrMo4 at 300 m/min by approximately 45 %.
+
+Description
+Technical field
+The present invention relates to coated cemented carbide inserts for metal turning, and in particular to a cutting insert and a corresponding method.
+
+Background art
+A first known approach uses alumina coatings with random texture; however, it suffer crater wear at high cutting speeds. A second known approach relies on (0 0 1)-textured coatings with thin inner layers, which show flaking in interrupted cuts. Neither approach provides reliable operation over the full range of operating conditions at acceptable cost.
+
+Summary of the invention
+It is an object of the invention to provide a cutting insert overcoming these drawbacks. The object is achieved by a cutting insert comprising a cemented carbide substrate (112); a titanium carbonitride inner layer (114) with a thickness of 4 µm to 10 µm; an alpha-alumina outer layer (116) with a thickness of 3 µm to 8 µm; wherein the alpha-alumina layer exhibits a texture coefficient TC(0 0 12) of at least 6. Compared with the prior art, the invention increases tool life in turning of 42CrMo4 at 300 m/min by approximately 45 %.
+
+Brief description of the drawings
+Fig. 1 shows a schematic view of a cutting insert according to a first embodiment. Fig. 2 shows a flow chart of the method. Fig. 3 shows measurement results comparing the embodiment with the prior art.
+
+Detailed description of embodiments
+Example 1 uses a 7 µm Ti(C,N) layer and a 5 µm alumina layer with TC(0 0 12) = 7.4 measured by XRD. In a variant, the texture coefficient TC(0 0 12) is at least 7; in a further variant, a bonding layer (118) of titanium oxycarbonitride is arranged between the inner and outer layers; in a further variant, the outer layer is subjected to wet blasting to a residual compressive stress of at least 1 GPa. The features of the embodiments may be combined unless they are technically incompatible.
+
+Reference signs
+110: insert; 112: substrate; 114: inner layer; 116: outer layer; 118: bonding layer
+
+
+Claims
+1. A cutting insert comprising: a cemented carbide substrate (112); a titanium carbonitride inner layer (114) with a thickness of 4 µm to 10 µm; an alpha-alumina outer layer (116) with a thickness of 3 µm to 8 µm; wherein the alpha-alumina layer exhibits a texture coefficient TC(0 0 12) of at least 6.
+2. The cutting insert according to claim 1, wherein the texture coefficient TC(0 0 12) is at least 7.
+3. The cutting insert according to claim 1, wherein a bonding layer (118) of titanium oxycarbonitride is arranged between the inner and outer layers.
+4. The cutting insert according to claim 1, wherein the outer layer is subjected to wet blasting to a residual compressive stress of at least 1 GPa.
+5. The cutting insert according to claim 1, wherein the substrate contains 5 wt % to 7 wt % cobalt.
+6. The cutting insert according to claim 2 or 3, wherein a titanium nitride top layer is removed from the rake face.
+7. A method of producing a coated cutting insert, comprising: depositing a titanium carbonitride layer by MT-CVD at 850 °C to 900 °C; depositing an alpha-alumina layer by CVD at 1000 °C with a controlled CO2 ratio; wet blasting the coated insert.
+8. The method according to claim 7, wherein the texture coefficient TC(0 0 12) is at least 7.

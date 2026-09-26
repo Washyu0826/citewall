@@ -1,0 +1,722 @@
+{
+ "_README": "query = claim 1 of a granted US patent; relevant = References Cited on the face of the granted US patent (considered by the USPTO examiner: examiner-cited + applicant IDS), via FreePatentsOnline. See PROVENANCE.md.",
+ "source": "freepatentsonline",
+ "ground_truth": "References Cited on the face of the granted US patent (considered by the USPTO examiner: examiner-cited + applicant IDS), via FreePatentsOnline",
+ "built": "2026-09-25",
+ "queries": [
+  {
+   "id": "battery_cooling-US9786968",
+   "topic": "battery_cooling",
+   "target_patent_no": "US9786968",
+   "target_title": "Battery module assembly having coolant flow channel",
+   "query": "A battery module assembly comprising unit modules, each of which comprises unit cells mounted to a cartridge in a state of being electrically connected to each other via bus bars, the battery module assembly comprising: a base plate;",
+   "relevant": [
+    "US20140227577",
+    "US20140205888",
+    "US20130341111",
+    "US20130241493",
+    "US20130045403",
+    "US20120125447",
+    "US20120064383",
+    "US20070134524",
+    "US20060115721",
+    "US5643693"
+   ],
+   "source": "https://www.freepatentsonline.com/9786968.html"
+  },
+  {
+   "id": "battery_cooling-US9673495",
+   "topic": "battery_cooling",
+   "target_patent_no": "US9673495",
+   "target_title": "Battery module assembly having coolant flow channel",
+   "query": "A battery module assembly, comprising: a plurality of unit modules comprising a plurality of unit cells and a plurality of cartridges, wherein each unit module comprises two unit cells, each mounted to a cartridge, and wherein unit cells are electrically connected to each other via bus bars mounted to the cartridges;",
+   "relevant": [
+    "US20140178721",
+    "US20140087221",
+    "US20130344358",
+    "US20130309532",
+    "US20130078489",
+    "US20130071719",
+    "US20120183822",
+    "US20110206948",
+    "US20100136420",
+    "US20080026284",
+    "US20070020516",
+    "US20060162149"
+   ],
+   "source": "https://www.freepatentsonline.com/9673495.html"
+  },
+  {
+   "id": "battery_cooling-US7955726",
+   "topic": "battery_cooling",
+   "target_patent_no": "US7955726",
+   "target_title": "Battery module of high cooling efficiency",
+   "query": "A battery module comprising: first and second frame members;",
+   "relevant": [
+    "US20090325059",
+    "US20090325055",
+    "US20090325054",
+    "US20090325053",
+    "US20090325052",
+    "US20090325051",
+    "US20090229239",
+    "US20090186265",
+    "US7479758",
+    "US7264902",
+    "US7251889",
+    "US7229327"
+   ],
+   "source": "https://www.freepatentsonline.com/7955726.html"
+  },
+  {
+   "id": "battery_cooling-US8399119",
+   "topic": "battery_cooling",
+   "target_patent_no": "US8399119",
+   "target_title": "Battery module and method for cooling the battery module",
+   "query": "A battery module, comprising: a battery cell; and",
+   "relevant": [
+    "US20120082880",
+    "US8067111",
+    "US8030886",
+    "US7997367",
+    "US8007915",
+    "US7981538",
+    "US7976978",
+    "US20110052959",
+    "US7883793",
+    "US20110041525",
+    "US20110027640",
+    "US7879480"
+   ],
+   "source": "https://www.freepatentsonline.com/8399119.html"
+  },
+  {
+   "id": "battery_cooling-US9774015",
+   "topic": "battery_cooling",
+   "target_patent_no": "US9774015",
+   "target_title": "Battery module having structure for preventing mixing of coolant and vent gas",
+   "query": "A battery module comprising: two or more battery cells, which can be charged and discharged, arranged in a stacked state; and",
+   "relevant": [
+    "US20130202939",
+    "US20130045410",
+    "US20120156538",
+    "US20120034507",
+    "US20110318623",
+    "US20110293982",
+    "US20090220853",
+    "US20090186265",
+    "US20060216582"
+   ],
+   "source": "https://www.freepatentsonline.com/9774015.html"
+  },
+  {
+   "id": "battery_cooling-US8895173",
+   "topic": "battery_cooling",
+   "target_patent_no": "US8895173",
+   "target_title": "Battery module for an electric vehicle, and method of assembly thereof",
+   "query": "A battery module for an electric vehicle having a liquid cooling system, the battery module comprising: an auxiliary power module (APM); and",
+   "relevant": [
+    "US8465863",
+    "US8460815",
+    "US20130004806",
+    "US20120028098",
+    "US20110293983",
+    "US20110293982",
+    "US20110162820",
+    "US20110070474",
+    "US7851080",
+    "US20100306995",
+    "US20090258288",
+    "US20090255109"
+   ],
+   "source": "https://www.freepatentsonline.com/8895173.html"
+  },
+  {
+   "id": "battery_cooling-US7794868",
+   "topic": "battery_cooling",
+   "target_patent_no": "US7794868",
+   "target_title": "Battery module of high cooling efficiency",
+   "query": "A battery module comprising: one or more unit cells are mounted in a cartridge such that at least a portion of the outer surfaces of the unit cells are exposed to an outside region;",
+   "relevant": [
+    "US20090325059",
+    "US20090325055",
+    "US20090325054",
+    "US20090325053",
+    "US20090325052",
+    "US20090325051",
+    "US20090186265",
+    "US20090029239",
+    "US7479758",
+    "US7264902",
+    "US7251889",
+    "US7229327"
+   ],
+   "source": "https://www.freepatentsonline.com/7794868.html"
+  },
+  {
+   "id": "battery_cooling-US8999549",
+   "topic": "battery_cooling",
+   "target_patent_no": "US8999549",
+   "target_title": "Cooling member of improved cooling efficiency and battery module employed with the same",
+   "query": "A cooling member mounted at a top and/or a bottom of a battery module configured to have a structure in which a plurality of unit modules, each of which comprises one or more battery cells, is arranged in a lateral direction or a battery pack configured to have a structure in which a plurality of battery modules is arranged in a lateral direction to remove heat generated from the battery cells during charge and discharge of the battery cells, the cooling member comprising: a thermal conduction member disposed at the top and/or the bottom of the battery module or the battery pack, the thermal conduction member comprising a stepped fastening plate having step portions of different lengths, coolant flow channels being formed at interfaces of the fastening plate; and",
+   "relevant": [
+    "US20130115506",
+    "US20120045681",
+    "US20120009457",
+    "US20110052960",
+    "US20110027640",
+    "US20090142628",
+    "US20060214641",
+    "US20060090883",
+    "US20030173063",
+    "US5866997"
+   ],
+   "source": "https://www.freepatentsonline.com/8999549.html"
+  },
+  {
+   "id": "ev_charging-US9421878",
+   "topic": "ev_charging",
+   "target_patent_no": "US9421878",
+   "target_title": "Electric vehicle charging station and method for charging an electric vehicle",
+   "query": "An electric vehicle charging station for charging an electric vehicle, comprising: an electrical connector electrically connectable to a source of electrical energy, the electrical connector adapted for connecting to a battery of the electric vehicle;",
+   "relevant": [
+    "US20110074351",
+    "US7804274",
+    "US20100194529",
+    "US20100013436",
+    "US20100013433",
+    "US20090177580",
+    "US20090174365",
+    "US5344330",
+    "US5306999"
+   ],
+   "source": "https://www.freepatentsonline.com/9421878.html"
+  },
+  {
+   "id": "ev_charging-US8723477",
+   "topic": "ev_charging",
+   "target_patent_no": "US8723477",
+   "target_title": "Charging cable connector for connecting an electric vehicle to a charging station",
+   "query": "Plug device for connecting an electric vehicle on a vehicle side via a charging to a charging station on a charging side, comprising: a housing;",
+   "relevant": [
+    "US20100259218",
+    "US20070126405",
+    "US20020081486",
+    "US6210036",
+    "US6107780",
+    "US6091223",
+    "US5758414",
+    "US5696367",
+    "US5596258",
+    "US5489834",
+    "US5349535",
+    "US5200686"
+   ],
+   "source": "https://www.freepatentsonline.com/8723477.html"
+  },
+  {
+   "id": "ev_charging-US8410369",
+   "topic": "ev_charging",
+   "target_patent_no": "US8410369",
+   "target_title": "Breakaway mechanism for charging cables of electric vehicle charging stations",
+   "query": "A breakaway mechanism for an electric vehicle charging station, comprising: a retention component to be secured to the electric vehicle charging station, wherein the retention component includes a set of one or more finger members; and",
+   "relevant": [
+    "US7878866",
+    "US7420125",
+    "US7020931",
+    "US20060068637",
+    "US6910911",
+    "US6664470",
+    "US6600105",
+    "US5993246",
+    "US5385480",
+    "US5344331",
+    "US4839937"
+   ],
+   "source": "https://www.freepatentsonline.com/8410369.html"
+  },
+  {
+   "id": "ev_charging-US8710372",
+   "topic": "ev_charging",
+   "target_patent_no": "US8710372",
+   "target_title": "Device to facilitate moving an electrical cable of an electric vehicle charging station and method of providing the same",
+   "query": "A device for an electrical cable, the electrical cable being configured to couple an electrical connector with an electric vehicle charging station, the electrical connector being configured to be coupled with an electric vehicle to permit the electric vehicle charging station to provide electricity to a rechargeable energy storage system of the electric vehicle, the device comprising: a receiver assembly comprising a hollow space and being configured to be coupled with the electrical cable;",
+   "relevant": [
+    "US20110202195",
+    "US7972167",
+    "US20110169447",
+    "US7957846",
+    "US7956570",
+    "US7952325",
+    "US7952319",
+    "US7949435",
+    "US20110121791",
+    "US20110106329",
+    "US20110106328",
+    "US20110106327"
+   ],
+   "source": "https://www.freepatentsonline.com/8710372.html"
+  },
+  {
+   "id": "ev_charging-US9705346",
+   "topic": "ev_charging",
+   "target_patent_no": "US9705346",
+   "target_title": "Electric vehicle charging station with cable retaining enclosure",
+   "query": "An enclosure for a charging station comprising a peripheral casing configured to retain a charging cable on an upward facing surface of the peripheral casing between a first portion of the peripheral casing and a charging station mounting surface, wherein the upward facing surface is continuously curved across the upward facing surface and configured such that the contiuously curved upward facing surface has a substantially same radius of curvature as a longitudinal axis of a charging cable received thereon.",
+   "relevant": [
+    "US20110169447",
+    "US20110061981",
+    "US6459234",
+    "US5445252",
+    "US5306999"
+   ],
+   "source": "https://www.freepatentsonline.com/9705346.html"
+  },
+  {
+   "id": "heat_sink-US9943015",
+   "topic": "heat_sink",
+   "target_patent_no": "US9943015",
+   "target_title": "Assembly structure of high-power semiconductors and heat sink",
+   "query": "An assembly structure of high-power semiconductors and heat sink, comprising: a first high-power semiconductor module, the first high-power semiconductor module comprising a first printed circuit board, and a first plurality of high-power semiconductor components provided on a first surface of the first printed circuit board; a second high-power semiconductor module, the second high-power semiconductor module comprising a second printed circuit board, and a second plurality of high-power semiconductor components provided on a first surface of the second printed circuit board; a heat sink comprising at least three primary heat-dissipating fins, the first high-power semiconductor module and the second high-power semiconductor modules are disposed between two adjacent primary heat-dissipating fins respectively; and a plurality of gap-filling layers, the gap-filling layers are provided between the first high-power semiconductor module and the primary heat-dissipating fins, as well as between the second high-power semiconductor module and the primary heat-dissipating fins, the gap-filling layers being tightly fitted on surfaces of the primary heat-dissipating fins; wherein a plurality of heat-conductive metal plates are horizontally fixed on a side portion and the entire top portion of each packaging's of the high-power semiconductor components, the heat-conductive metal plates being electrically connected with large current-flowing pins of the high-power semiconductor components.",
+   "relevant": [
+    "US9437518",
+    "US20130119908",
+    "US7902464",
+    "US20090237883",
+    "US7589970",
+    "US7561436",
+    "US7460373",
+    "US7142428",
+    "US3766439"
+   ],
+   "source": "https://www.freepatentsonline.com/9943015.html"
+  },
+  {
+   "id": "heat_sink-US8472188",
+   "topic": "heat_sink",
+   "target_patent_no": "US8472188",
+   "target_title": "Semiconductor power module, inverter, and method of manufacturing a power module",
+   "query": "A semiconductor power module comprising: an insulated substrate a plurality of power semiconductor devices mounted thereon; and",
+   "relevant": [
+    "US20080291628",
+    "US7215545",
+    "US20070089291",
+    "US6906404",
+    "US20030053294",
+    "US20010014029",
+    "US6052284",
+    "US5966291"
+   ],
+   "source": "https://www.freepatentsonline.com/8472188.html"
+  },
+  {
+   "id": "heat_sink-US7235875",
+   "topic": "heat_sink",
+   "target_patent_no": "US7235875",
+   "target_title": "Modular heat sink decoupling capacitor array forming heat sink fins and power distribution interposer module",
+   "query": "A modular heat sink decoupling capacitor array comprising: a plurality of modules defining parallel distributed decoupling plates;",
+   "relevant": [
+    "US20050288741",
+    "US6972833",
+    "US20030194832",
+    "US6548338",
+    "US6102710",
+    "US6058019",
+    "US5556811"
+   ],
+   "source": "https://www.freepatentsonline.com/7235875.html"
+  },
+  {
+   "id": "heat_sink-US9921008",
+   "topic": "heat_sink",
+   "target_patent_no": "US9921008",
+   "target_title": "Adjustable heat sink fin spacing",
+   "query": "A heat sink comprising: a heat sink base comprising an underside and a topside;",
+   "relevant": [
+    "US20150289359",
+    "US8693200",
+    "US20130340989",
+    "US20130327505",
+    "US20130153187",
+    "US20130138262",
+    "US20110315737",
+    "US20080134506",
+    "US20070227707",
+    "US20070097648",
+    "US7203065",
+    "US7161804"
+   ],
+   "source": "https://www.freepatentsonline.com/9921008.html"
+  },
+  {
+   "id": "heat_sink-US9735083",
+   "topic": "heat_sink",
+   "target_patent_no": "US9735083",
+   "target_title": "Adjustable heat sink fin spacing",
+   "query": "A method of adjusting the spacing of heat sink fins comprising: rotating a threaded rod comprising a first threaded knurl with threads of a first pitch and a second threaded knurl with threads of a second pitch about an axis orthogonal to a major surface of a heat sink base;",
+   "relevant": [
+    "US8693200",
+    "US20130340989",
+    "US20130327505",
+    "US20130138262",
+    "US20110315737",
+    "US20080134506",
+    "US20070227707",
+    "US20070097648",
+    "US7203065",
+    "US7161804",
+    "US6712128",
+    "US5784257"
+   ],
+   "source": "https://www.freepatentsonline.com/9735083.html"
+  },
+  {
+   "id": "heat_sink-US9730365",
+   "topic": "heat_sink",
+   "target_patent_no": "US9730365",
+   "target_title": "Heat sink apparatus and method for power semiconductor device module",
+   "query": "An apparatus comprising: a base plate having a first central portion, a second central portion, a periphery, a module facing surface, a coolant facing surface, and fins connected to the coolant facing surface;",
+   "relevant": [
+    "US9429369",
+    "US20150233647",
+    "US20130118718",
+    "US20110310585",
+    "US20110168358",
+    "US20110083446",
+    "US20110030924",
+    "US20100321888",
+    "US20100172103",
+    "US20100157526",
+    "US20090316360",
+    "US20090314467"
+   ],
+   "source": "https://www.freepatentsonline.com/9730365.html"
+  },
+  {
+   "id": "heat_sink-US9084376",
+   "topic": "heat_sink",
+   "target_patent_no": "US9084376",
+   "target_title": "Heat sink cooling arrangement for multiple power electronic circuits",
+   "query": "A power electronic system, comprising: a cooling air duct that, in operation, channels a flow of cooling air;",
+   "relevant": [
+    "US8081465",
+    "US20110255237",
+    "US20110110039",
+    "US7903403",
+    "US7898810",
+    "US7862410",
+    "US7826216",
+    "US7813129",
+    "US7813121",
+    "US20100118493",
+    "US20100118488",
+    "US7701712"
+   ],
+   "source": "https://www.freepatentsonline.com/9084376.html"
+  },
+  {
+   "id": "heat_sink-US8411438",
+   "topic": "heat_sink",
+   "target_patent_no": "US8411438",
+   "target_title": "Heat sink for power module",
+   "query": "A power module comprising: a power device; and",
+   "relevant": [
+    "US20070051503",
+    "US7059397",
+    "US20060016582",
+    "US6942024",
+    "US6729388",
+    "US20040031587",
+    "US20040022029",
+    "US6672376",
+    "US6615910",
+    "US20020056544",
+    "US6324061"
+   ],
+   "source": "https://www.freepatentsonline.com/8411438.html"
+  },
+  {
+   "id": "touch_sensor-US9244573",
+   "topic": "touch_sensor",
+   "target_patent_no": "US9244573",
+   "target_title": "Capacitive touch panel including embedded sensing electrodes",
+   "query": "A capacitive touch panel, comprising: a first sensing layer including a plurality of first direction sensing electrodes and a plurality of first wiring electrodes; and",
+   "relevant": [
+    "US20100295819",
+    "US20100231531",
+    "US20100045625",
+    "US20100026659",
+    "US20090255737"
+   ],
+   "source": "https://www.freepatentsonline.com/9244573.html"
+  },
+  {
+   "id": "touch_sensor-US9280245",
+   "topic": "touch_sensor",
+   "target_patent_no": "US9280245",
+   "target_title": "Touch panel sensor having dual-mode capacitive sensing for detecting an object",
+   "query": "An apparatus comprising: a touch panel controller configured to operatively couple to a touch panel sensor, the touch panel sensor including a plurality of drive electrodes and at least one sense electrode, a plurality of nodes formed at intersections of the plurality of drive electrodes and the at least one sense electrode, the touch panel controller comprising: output circuitry operatively coupled to the plurality of drive electrodes, the output circuitry configured to generate drive signals to drive the touch panel sensor; and",
+   "relevant": [
+    "US20140145997",
+    "US8358142",
+    "US8319505",
+    "US20120154324",
+    "US20100060593"
+   ],
+   "source": "https://www.freepatentsonline.com/9280245.html"
+  },
+  {
+   "id": "touch_sensor-US9733766",
+   "topic": "touch_sensor",
+   "target_patent_no": "US9733766",
+   "target_title": "Touch-sensing circuit structure for a capacitive touch panel",
+   "query": "A circuit structure for a capacitive touch panel, comprising: a sensing electrode group, comprising: a metal lead; and",
+   "relevant": [
+    "US20100164900",
+    "US7705834",
+    "US20090146943",
+    "US20090128518",
+    "US20090021267",
+    "US20080264699",
+    "US20080136787",
+    "US20070247443",
+    "US20060097991",
+    "US20050270039",
+    "US6188391"
+   ],
+   "source": "https://www.freepatentsonline.com/9733766.html"
+  },
+  {
+   "id": "touch_sensor-US9348470",
+   "topic": "touch_sensor",
+   "target_patent_no": "US9348470",
+   "target_title": "Projected capacitance touch panel with reference and guard electrode",
+   "query": "A mutual capacitance touch panel device, comprising: a substrate; an array of electrode elements formed on the substrate, each electrode element including a drive electrode, a sense electrode and a reference electrode, the reference electrode arranged between the drive electrode and the sense electrode;",
+   "relevant": [
+    "US20110007030",
+    "US20100328240",
+    "US20100309162",
+    "US20100302201",
+    "US20100292945",
+    "US20100079401",
+    "US20090194344",
+    "US20090135157",
+    "US20070074914",
+    "US20060007171",
+    "US20020190773",
+    "US5543588"
+   ],
+   "source": "https://www.freepatentsonline.com/9348470.html"
+  },
+  {
+   "id": "touch_sensor-US8514199",
+   "topic": "touch_sensor",
+   "target_patent_no": "US8514199",
+   "target_title": "Capacitive touch panel and capacitance sensing apparatus and method for the same",
+   "query": "A capacitance sensing apparatus used for a capacitive touch panel and electrically connected to one electrode of the capacitive touch panel through a connection node to measure a capacitance on the electrode, the capacitance sensing apparatus comprising: a first discharging current source electrically connected the connection node to provide a first discharging current;",
+   "relevant": [
+    "US20080157893",
+    "US20070216657",
+    "US7075523"
+   ],
+   "source": "https://www.freepatentsonline.com/8514199.html"
+  },
+  {
+   "id": "touch_sensor-US8144132",
+   "topic": "touch_sensor",
+   "target_patent_no": "US8144132",
+   "target_title": "Multipoint sensing method for capacitive touch panel",
+   "query": "A multipoint sensing method used in a capacitive touch panel comprising a first electrode layer and a second electrode layer being electrically insulated and stacked with said first electrode layer, and adapted to sense multiple touch points when a touch event occurs on one of the first electrode layer and the second electrode layer, the multipoint sensing method comprising the steps of: a). inputting AC signals to multiple first electrodes of the first electrode layer and multiple second electrodes of the second electrode layer before touch event so as to detect a first capacitance between each two adjacent first electrodes, a second capacitance between each two adjacent second electrodes and a vertical capacitance intersected between one of the first electrodes and one of the second electrodes;",
+   "relevant": [
+    "US20100110040",
+    "US20100110022",
+    "US20090256816",
+    "US20070257890",
+    "US20070229470",
+    "US6466036",
+    "US5642134",
+    "US5606346",
+    "US5283556",
+    "US4704501"
+   ],
+   "source": "https://www.freepatentsonline.com/8144132.html"
+  },
+  {
+   "id": "touch_sensor-US9395857",
+   "topic": "touch_sensor",
+   "target_patent_no": "US9395857",
+   "target_title": "Capacitive touch panel",
+   "query": "A capacitive touch panel, comprising: a cover lens;",
+   "relevant": [
+    "US20120319966",
+    "US8330738",
+    "US20120273336",
+    "US8294677",
+    "US8269108",
+    "US8169421",
+    "US8144125",
+    "US8120584",
+    "US8115751",
+    "US8111243"
+   ],
+   "source": "https://www.freepatentsonline.com/9395857.html"
+  },
+  {
+   "id": "touch_sensor-US8723835",
+   "topic": "touch_sensor",
+   "target_patent_no": "US8723835",
+   "target_title": "Touch-sensing display panel, touch panel, touch-sensing device and touch-sensing circuit",
+   "query": "A touch-sensing display panel, comprising: a display panel; and",
+   "relevant": [
+    "US20120019450",
+    "US20110285641",
+    "US20110285617",
+    "US20100271327",
+    "US20100251936",
+    "US20100163861",
+    "US20100141599",
+    "US20100103121",
+    "US20100007616",
+    "US20090115741",
+    "US20090109359",
+    "US20090040192"
+   ],
+   "source": "https://www.freepatentsonline.com/8723835.html"
+  },
+  {
+   "id": "wireless_power-US9281119",
+   "topic": "wireless_power",
+   "target_patent_no": "US9281119",
+   "target_title": "Three-coil topology for wireless power transfer",
+   "query": "A wireless power transfer system comprising a power-transmitting unit and a power-receiving unit, the power-transmitting unit being configured to wirelessly transmit power in the wireless power transfer system, wherein: the power-transmitting unit comprises: an alternating-current (AC) power source;",
+   "relevant": [
+    "US20140339923",
+    "US20140159652",
+    "US8704407",
+    "US20120010079",
+    "US4802080"
+   ],
+   "source": "https://www.freepatentsonline.com/9281119.html"
+  },
+  {
+   "id": "wireless_power-US9855437",
+   "topic": "wireless_power",
+   "target_patent_no": "US9855437",
+   "target_title": "Hinged resonant power transfer coil",
+   "query": "A resonator of a wireless power transfer system, comprising: a plurality of links connected to another with hinges to form a coil housing, the coil housing being adjustable at the hinges to conform to a body of a patient, wherein the plurality of links are connected end to end to form a closed loop; and",
+   "relevant": [
+    "US9560787",
+    "US9515495",
+    "US9515494",
+    "US20160254704",
+    "US20160250703",
+    "US20160218432",
+    "US20160135684",
+    "US9302093",
+    "US9192704",
+    "US20150290373",
+    "US20150229289",
+    "US9106083"
+   ],
+   "source": "https://www.freepatentsonline.com/9855437.html"
+  },
+  {
+   "id": "wireless_power-US8531059",
+   "topic": "wireless_power",
+   "target_patent_no": "US8531059",
+   "target_title": "Wireless power transfer system and a load apparatus in the same wireless power transfer system",
+   "query": "A wireless power transfer system, comprising: a supply-side power supply coil;",
+   "relevant": [
+    "US20110231029",
+    "US20100213770",
+    "US20090058189",
+    "US20090015075",
+    "US20080266748",
+    "US20080197711",
+    "US20070247005",
+    "US6370044"
+   ],
+   "source": "https://www.freepatentsonline.com/8531059.html"
+  },
+  {
+   "id": "wireless_power-US9088307",
+   "topic": "wireless_power",
+   "target_patent_no": "US9088307",
+   "target_title": "Non-resonant and quasi-resonant system for wireless power transmission to multiple receivers",
+   "query": "A wireless power transfer system suitable for wirelessly supplying power from an alternating current (AC) power supply to multiple power receivers, comprising: a power transmitter including a resonator circuit with a transmitter coil, and characterized by a resonance frequency, a quasi-resonant frequency band on either side of the resonance frequency, and upper and lower non-resonant frequency bands above and below the quasi-resonant frequency band, where the non-resonant frequency band is characterized by a coil voltage substantially equal to the Power supply voltage;",
+   "relevant": [
+    "US20120001485",
+    "US20110254377",
+    "US20110181118",
+    "US20100244580",
+    "US7741734"
+   ],
+   "source": "https://www.freepatentsonline.com/9088307.html"
+  },
+  {
+   "id": "wireless_power-US9172436",
+   "topic": "wireless_power",
+   "target_patent_no": "US9172436",
+   "target_title": "Wireless power transfer device and wireless power transfer method",
+   "query": "A wireless power transfer device comprising: a power transmitter including a power transmission resonator composed of a power transmission coil and a resonant capacitance;",
+   "relevant": [
+    "US20120194000",
+    "US20110309792",
+    "US20110169338",
+    "US20110133569",
+    "US20100201311",
+    "US20100201201",
+    "US20100164296",
+    "US20090246090",
+    "US20090079268",
+    "US20090015381",
+    "US20050156560"
+   ],
+   "source": "https://www.freepatentsonline.com/9172436.html"
+  },
+  {
+   "id": "wireless_power-US9786430",
+   "topic": "wireless_power",
+   "target_patent_no": "US9786430",
+   "target_title": "Space-adaptive wireless power transfer system and method using evanescent field resonance",
+   "query": "A magnetic resonance wireless power transfer method, comprising: transferring power from a source coil to a transmitting (Tx) resonant coil using a magnetic induction method;",
+   "relevant": [
+    "US20130113298",
+    "US20120193997",
+    "US20120133214",
+    "US20110285349",
+    "US20110234012",
+    "US20110163609",
+    "US20110101788",
+    "US20100148589",
+    "US20100052431",
+    "US20100044333",
+    "US20100033021",
+    "US20090134711"
+   ],
+   "source": "https://www.freepatentsonline.com/9786430.html"
+  },
+  {
+   "id": "wireless_power-US9472339",
+   "topic": "wireless_power",
+   "target_patent_no": "US9472339",
+   "target_title": "Wireless power transfer system transducers having interchangeable source resonator and capture resonator",
+   "query": "A wireless power transfer system, comprising: a source resonator including a first insulative split carrier-winder assembly having two identical and interchangeable halves, each half defining an interior core retaining pocket and an outer coil retaining surface, a first core tile formed of a material having high magnetic permeability and contained in the interior core retaining pocket of each carrier-winder assembly, and a first wire coil wound around the outer coil retaining surface of each carrier-winder assembly;",
+   "relevant": [
+    "US20150136499",
+    "US20130057364",
+    "US20130033118",
+    "US20120313742",
+    "US8299877",
+    "US8169185",
+    "US20120032522",
+    "US20120025602",
+    "US8035255",
+    "US20110043047",
+    "US7411479",
+    "US20070131505"
+   ],
+   "source": "https://www.freepatentsonline.com/9472339.html"
+  }
+ ]
+}

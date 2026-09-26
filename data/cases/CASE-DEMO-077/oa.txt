@@ -1,0 +1,19 @@
+UNITED STATES PATENT AND TRADEMARK OFFICE
+Office Action Summary
+
+Application No.: US99000005
+Applicant(s): Lumosense Inc.
+Examiner: Michael J. Brennan
+Notification Date: 2026-04-03
+Control No.: USOA-2026-04001
+
+A SHORTENED STATUTORY PERIOD FOR REPLY IS SET TO EXPIRE 3 MONTHS FROM THE MAILING DATE OF THIS COMMUNICATION.
+
+Status: USPTO Non-final Office Action. Claims 1-2 are pending in the application.
+
+DETAILED ACTION
+
+1. Claim(s) 1, 2 rejected under 35 U.S.C. § 102.
+   References: US99500018.
+   Claims 1 and 2 are rejected under 35 U.S.C. § 102 as being anticipated by US99500018. Element-by-element mapping: (a) the 905 nm laser diode (US99500018 col 3 lines 10-15); (b) the MEMS mirror with scan angle exceeding 60 degrees (col 4 lines 20-30); (c) the SPAD receiver array (col 5 lines 5-12). Each and every element of the claims is disclosed in a single reference; the claims therefore lack novelty.
+

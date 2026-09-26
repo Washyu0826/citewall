@@ -1,0 +1,42 @@
+(19) European Patent Office
+(11) EP9900002 A1
+(12) EUROPEAN PATENT APPLICATION
+(43) Date of publication: 2024-09-05
+(22) Date of filing: 2023-04-11
+(51) Int Cl.: F03D 80/40
+(71) Applicant: Skarvik Wind A/S
+(72) Inventors: Jonas Holm; Freja Lund
+(54) Wind turbine blade with de-icing heating mat
+
+(57) Abstract
+A wind turbine blade comprising a blade shell (32) having a leading edge (34); a carbon-fibre heating mat (36) embedded in the shell along the leading edge; the invention restores 95 % of rated power within 40 minutes of an icing event while halving the peak heating power.
+
+Description
+Technical field
+The present invention relates to wind turbine rotor blades operating in cold climates, and in particular to a wind turbine blade and a corresponding method.
+
+Background art
+A first known approach uses hot-air circulation inside the blade; however, it heats the whole cavity and is slow for thick carbon shells. A second known approach relies on simultaneous heating of the entire leading edge, which requires peak power exceeding the auxiliary supply. Neither approach provides reliable operation over the full range of operating conditions at acceptable cost.
+
+Summary of the invention
+It is an object of the invention to provide a wind turbine blade overcoming these drawbacks. The object is achieved by a wind turbine blade comprising a blade shell (32) having a leading edge (34); a carbon-fibre heating mat (36) embedded in the shell along the leading edge; an ice detection sensor (38) arranged in the blade root; a power controller (40) configured to energise zones of the heating mat sequentially from tip to root in response to the ice detection sensor. Compared with the prior art, the invention restores 95 % of rated power within 40 minutes of an icing event while halving the peak heating power.
+
+Brief description of the drawings
+Fig. 1 shows a schematic view of a wind turbine blade according to a first embodiment. Fig. 2 shows a flow chart of the method. Fig. 3 shows measurement results comparing the embodiment with the prior art.
+
+Detailed description of embodiments
+For a 72 m blade five zones of 12 m each are used; the controller (40) switches zones every 6 minutes. In a variant, the heating mat is divided into at least four independently powered zones; in a further variant, the zone nearest the tip receives a power density of at least 3 kW/m²; in a further variant, the ice detection sensor is an accelerometer detecting a mass imbalance of the rotor. The features of the embodiments may be combined unless they are technically incompatible.
+
+Reference signs
+30: blade; 32: blade shell; 34: leading edge; 36: heating mat; 38: ice detection sensor; 40: power controller; 42: protective layer
+
+
+Claims
+1. A wind turbine blade comprising: a blade shell (32) having a leading edge (34); a carbon-fibre heating mat (36) embedded in the shell along the leading edge; an ice detection sensor (38) arranged in the blade root; a power controller (40) configured to energise zones of the heating mat sequentially from tip to root in response to the ice detection sensor.
+2. The wind turbine blade according to claim 1, wherein the heating mat is divided into at least four independently powered zones.
+3. The wind turbine blade according to claim 1, wherein the zone nearest the tip receives a power density of at least 3 kW/m².
+4. The wind turbine blade according to claim 1, wherein the ice detection sensor is an accelerometer detecting a mass imbalance of the rotor.
+5. The wind turbine blade according to claim 1, wherein the heating mat is covered by an erosion-resistant polyurethane layer (42).
+6. The wind turbine blade according to claim 2 or 3, wherein the power controller limits total heating power to 5 % of rated turbine power.
+7. A method of de-icing a wind turbine blade, comprising: detecting ice accretion by means of a sensor in the blade root; energising zones of a heating mat embedded along the leading edge sequentially from tip to root; de-energising each zone once its surface temperature exceeds a release temperature.
+8. The method according to claim 7, wherein the heating mat is divided into at least four independently powered zones.

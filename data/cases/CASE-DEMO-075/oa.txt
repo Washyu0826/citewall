@@ -1,0 +1,19 @@
+UNITED STATES PATENT AND TRADEMARK OFFICE
+Office Action Summary
+
+Application No.: US99000003
+Applicant(s): Voltcore Networks, Inc.
+Examiner: Robert F. Carlson
+Notification Date: 2026-06-09
+Control No.: USOA-2026-06789
+
+A SHORTENED STATUTORY PERIOD FOR REPLY IS SET TO EXPIRE 3 MONTHS FROM THE MAILING DATE OF THIS COMMUNICATION.
+
+Status: USPTO Non-final Office Action. Claims 1-3 are pending in the application.
+
+DETAILED ACTION
+
+1. Claim(s) 1, 2, 3 rejected under 35 U.S.C. § 103.
+   References: US99500015, US99500026.
+   Claims 1-3 are rejected under 35 U.S.C. § 103 over US99500015 in view of US99500026. US99500015 teaches grid-frequency-based EV charging current limiting. US99500026 teaches SOC-based priority scheduling and provides motivation for the combination to maximize throughput in a charging cluster. A skilled artisan would obtain the claimed method with predictable results.
+

@@ -1,0 +1,19 @@
+UNITED STATES PATENT AND TRADEMARK OFFICE
+Office Action Summary
+
+Application No.: US99000001
+Applicant(s): Pinnacle Power Semi, Inc.
+Examiner: Steven J. Park
+Notification Date: 2025-10-22
+Control No.: USOA-2025-10001
+
+A SHORTENED STATUTORY PERIOD FOR REPLY IS SET TO EXPIRE 3 MONTHS FROM THE MAILING DATE OF THIS COMMUNICATION.
+
+Status: USPTO Non-final Office Action. Claims 1-3 are pending in the application.
+
+DETAILED ACTION
+
+1. Claim(s) 1, 2, 3 rejected under 35 U.S.C. § 103.
+   References: US99500021, US99500012.
+   Claims 1-3 are rejected under 35 U.S.C. § 103 as being unpatentable over US99500021 in view of US99500012. The primary reference teaches a GaN HEMT with gate-connected field plate. The secondary reference teaches AlGaN barrier layer thickness in the recited range as a routine design choice. One of ordinary skill in the art would have been motivated to combine these teachings to obtain the claimed device with predictable breakdown voltage improvement.
+

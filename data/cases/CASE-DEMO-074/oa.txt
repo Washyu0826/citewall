@@ -1,0 +1,19 @@
+UNITED STATES PATENT AND TRADEMARK OFFICE
+Office Action Summary
+
+Application No.: US99000002
+Applicant(s): Helix Bio Wearables, Inc.
+Examiner: Patricia M. O'Hara
+Notification Date: 2026-01-17
+Control No.: USOA-2026-01234
+
+A SHORTENED STATUTORY PERIOD FOR REPLY IS SET TO EXPIRE 3 MONTHS FROM THE MAILING DATE OF THIS COMMUNICATION.
+
+Status: USPTO Non-final Office Action. Claims 1-3 are pending in the application.
+
+DETAILED ACTION
+
+1. Claim(s) 1, 2, 3 rejected under 35 U.S.C. § 103.
+   References: US99500006, US99500022.
+   Claims 1-3 are rejected under 35 U.S.C. § 103 over US99500006 in view of US99500022. US99500006 teaches a subcutaneous enzyme-based glucose sensor with BLE transmitter. US99500022 teaches a hydrocolloid adhesive patch for wearable sensors and motivates longer wear times via reduced skin irritation. The combination yields the claimed monitor with a reasonable expectation of success.
+

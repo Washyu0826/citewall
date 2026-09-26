@@ -1,0 +1,42 @@
+(19) European Patent Office
+(11) EP9900007 A1
+(12) EUROPEAN PATENT APPLICATION
+(43) Date of publication: 2024-09-10
+(22) Date of filing: 2023-09-16
+(51) Int Cl.: G06T 7/00
+(71) Applicant: Veltris Vision B.V.
+(72) Inventors: Daan Visser; Iris de Groot
+(54) Method for training a neural network for defect detection with synthetic images
+
+(57) Abstract
+A inspection system comprising a camera (132) capturing images of printed circuit boards; a generator (134) producing synthetic defect images by inserting rendered defects into defect-free images; the invention raises recall on rare defect classes from 71 % to 93 % at unchanged false-call rate.
+
+Description
+Technical field
+The present invention relates to machine-vision inspection of printed circuit boards, and in particular to a inspection system and a corresponding method.
+
+Background art
+A first known approach uses training on real defect images only; however, it lacks examples of rare defect classes. A second known approach relies on simple copy-paste augmentation, which produces visible seams that the network learns as a shortcut. Neither approach provides reliable operation over the full range of operating conditions at acceptable cost.
+
+Summary of the invention
+It is an object of the invention to provide a inspection system overcoming these drawbacks. The object is achieved by a inspection system comprising a camera (132) capturing images of printed circuit boards; a generator (134) producing synthetic defect images by inserting rendered defects into defect-free images; a neural network (136) trained on real and synthetic images; wherein the generator adjusts rendered defect geometry so that a discriminator cannot distinguish synthetic from real defect patches. Compared with the prior art, the invention raises recall on rare defect classes from 71 % to 93 % at unchanged false-call rate.
+
+Brief description of the drawings
+Fig. 1 shows a schematic view of a inspection system according to a first embodiment. Fig. 2 shows a flow chart of the method. Fig. 3 shows measurement results comparing the embodiment with the prior art.
+
+Detailed description of embodiments
+The generator (134) renders 20,000 synthetic images per defect class; training uses 8 GPUs for 12 hours. In a variant, the defects comprise solder bridges, missing components and tombstoning; in a further variant, the ratio of synthetic to real training images is between 1:1 and 5:1; in a further variant, the neural network is a convolutional network with a feature pyramid. The features of the embodiments may be combined unless they are technically incompatible.
+
+Reference signs
+130: inspection system; 132: camera; 134: generator; 136: neural network
+
+
+Claims
+1. A inspection system comprising: a camera (132) capturing images of printed circuit boards; a generator (134) producing synthetic defect images by inserting rendered defects into defect-free images; a neural network (136) trained on real and synthetic images; wherein the generator adjusts rendered defect geometry so that a discriminator cannot distinguish synthetic from real defect patches.
+2. The inspection system according to claim 1, wherein the defects comprise solder bridges, missing components and tombstoning.
+3. The inspection system according to claim 1, wherein the ratio of synthetic to real training images is between 1:1 and 5:1.
+4. The inspection system according to claim 1, wherein the neural network is a convolutional network with a feature pyramid.
+5. The inspection system according to claim 1, wherein the system flags boards whose defect probability exceeds 0.8 for manual review.
+6. The inspection system according to claim 2 or 3, wherein the camera captures images under three illumination angles.
+7. A computer-implemented method of training a neural network for defect detection, comprising: rendering defects into defect-free images of printed circuit boards; adjusting rendered defect geometry until a discriminator cannot distinguish synthetic from real defect patches; training the neural network on real and synthetic images.
+8. The method according to claim 7, wherein the defects comprise solder bridges, missing components and tombstoning.

@@ -1,0 +1,42 @@
+(19) European Patent Office
+(11) EP9900004 A1
+(12) EUROPEAN PATENT APPLICATION
+(43) Date of publication: 2024-09-07
+(22) Date of filing: 2023-06-13
+(51) Int Cl.: F25B 49/02
+(71) Applicant: Thermaris Klimatechnik AG
+(72) Inventors: Felix Aebi; Nora Keller
+(54) Heat pump with refrigerant leak mitigation
+
+(57) Abstract
+A heat pump comprising a refrigerant circuit (72) containing a flammable refrigerant; an outdoor unit (74) housing a compressor; the invention keeps indoor refrigerant concentration below 20 % of the lower flammability limit in all tested leak scenarios.
+
+Description
+Technical field
+The present invention relates to domestic heat pumps using flammable refrigerants such as R290, and in particular to a heat pump and a corresponding method.
+
+Background art
+A first known approach uses placing the whole circuit outdoors; however, it requires a water circuit that can freeze. A second known approach relies on limiting refrigerant charge only, which caps heating capacity for larger dwellings. Neither approach provides reliable operation over the full range of operating conditions at acceptable cost.
+
+Summary of the invention
+It is an object of the invention to provide a heat pump overcoming these drawbacks. The object is achieved by a heat pump comprising a refrigerant circuit (72) containing a flammable refrigerant; an outdoor unit (74) housing a compressor; a gas sensor (76) arranged in an indoor hydraulic module; shut-off valves (78) operable to isolate the refrigerant circuit inside the outdoor unit when the gas sensor detects refrigerant. Compared with the prior art, the invention keeps indoor refrigerant concentration below 20 % of the lower flammability limit in all tested leak scenarios.
+
+Brief description of the drawings
+Fig. 1 shows a schematic view of a heat pump according to a first embodiment. Fig. 2 shows a flow chart of the method. Fig. 3 shows measurement results comparing the embodiment with the prior art.
+
+Detailed description of embodiments
+Pump-down takes 45 s at 50 Hz compressor speed; the valves (78) close when suction pressure drops below 1.2 bar. In a variant, the shut-off valves are normally-closed solenoid valves; in a further variant, the compressor performs a pump-down into the outdoor unit before the valves close; in a further variant, the gas sensor is a non-dispersive infrared sensor. The features of the embodiments may be combined unless they are technically incompatible.
+
+Reference signs
+70: heat pump; 72: refrigerant circuit; 74: outdoor unit; 76: gas sensor; 78: shut-off valves; 80: ventilation fan
+
+
+Claims
+1. A heat pump comprising: a refrigerant circuit (72) containing a flammable refrigerant; an outdoor unit (74) housing a compressor; a gas sensor (76) arranged in an indoor hydraulic module; shut-off valves (78) operable to isolate the refrigerant circuit inside the outdoor unit when the gas sensor detects refrigerant.
+2. The heat pump according to claim 1, wherein the shut-off valves are normally-closed solenoid valves.
+3. The heat pump according to claim 1, wherein the compressor performs a pump-down into the outdoor unit before the valves close.
+4. The heat pump according to claim 1, wherein the gas sensor is a non-dispersive infrared sensor.
+5. The heat pump according to claim 1, wherein a ventilation fan (80) of the hydraulic module is activated on detection.
+6. The heat pump according to claim 2 or 3, wherein the refrigerant charge is less than 150 g.
+7. A method of operating a heat pump with a flammable refrigerant, comprising: monitoring refrigerant concentration in an indoor hydraulic module; pumping the refrigerant down into an outdoor unit on detection; closing shut-off valves to isolate the refrigerant inside the outdoor unit.
+8. The method according to claim 7, wherein the shut-off valves are normally-closed solenoid valves.

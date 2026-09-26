@@ -1,0 +1,25 @@
+# Backend images build from the repo root; keep secrets, runtime state and
+# heavy trees out of the context.
+.git
+.env
+.env.*
+!.env.example
+**/__pycache__
+**/*.pyc
+.pytest_cache*
+.ruff_cache
+.venv
+frontend
+presentation
+docs
+tests
+data/*.db
+data/backups
+data/audit_archive
+data/audit_outbox.jsonl
+data/rag_context_cache
+data/eval
+data/oa_samples
+data/cases
+data/processed
+data/raw

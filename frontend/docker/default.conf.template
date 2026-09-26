@@ -1,0 +1,45 @@
+# PatentMind SPA (nginx-unprivileged, :8080). ${GATEWAY_UPSTREAM} is the only
+# variable substituted at container start; nginx's own $vars are left alone
+# because they are not set in the environment.
+server {
+    listen 8080;
+    server_name _;
+    server_tokens off;
+    root /usr/share/nginx/html;
+
+    # OA uploads: gateway caps at 25 MB; leave a little headroom.
+    client_max_body_size 26m;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # /api/v1/... -> ${GATEWAY_UPSTREAM}/v1/...  (prefix stripped, as in vite)
+    location /api/ {
+        include /etc/nginx/snippets/security-headers.conf;
+        proxy_pass ${GATEWAY_UPSTREAM}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Request-Id $request_id;
+        # Analyze rides the whole local-LLM chain (minutes on a 3060).
+        proxy_read_timeout 450s;
+        proxy_send_timeout 120s;
+        proxy_buffering off;
+    }
+
+    # Hashed build assets: cache forever.
+    location /assets/ {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # SPA routes -> index.html (never cached, so a redeploy is picked up).
+    location / {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "no-store" always;
+        try_files $uri /index.html;
+    }
+}

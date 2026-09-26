@@ -1,0 +1,36 @@
+# Example Prometheus scrape config for PatentMind (Q19).
+#
+# Both services expose an in-process text exposition at /metrics
+# (Content-Type: text/plain; version=0.0.4). Drop this under
+# prometheus.yml `scrape_configs:` and adjust the targets to your hosts.
+#
+# SECURITY (Q30): /metrics is gated at the app layer. Set METRICS_TOKEN in the
+# services' .env and give Prometheus the same value as a bearer credential
+# (below). With METRICS_TOKEN unset, /metrics only answers loopback clients —
+# i.e. a Prometheus running on the same host. Keep network restrictions too
+# (internal-only interface / reverse proxy) as defence in depth.
+
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: patentmind-gateway
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/patentmind_metrics_token  # = METRICS_TOKEN
+    static_configs:
+      - targets: ["gateway:8010"]
+        labels:
+          service: gateway
+
+  - job_name: patentmind-ai-engine
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/patentmind_metrics_token  # = METRICS_TOKEN
+    static_configs:
+      - targets: ["ai_engine:8011"]
+        labels:
+          service: ai_engine

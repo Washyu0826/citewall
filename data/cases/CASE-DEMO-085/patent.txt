@@ -1,0 +1,42 @@
+(19) European Patent Office
+(11) EP9900005 A1
+(12) EUROPEAN PATENT APPLICATION
+(43) Date of publication: 2024-09-08
+(22) Date of filing: 2023-07-14
+(51) Int Cl.: G05D 1/02
+(71) Applicant: Brückner Logistics Robotics GmbH
+(72) Inventors: Tobias Wendt; Sara Nilsson
+(54) Autonomous warehouse robot with collision-free path replanning
+
+(57) Abstract
+A warehouse robot comprising a drive unit (92) with differential wheels; a lidar sensor (94) providing a two-dimensional scan; the invention reduces deadlocks by 90 % and keeps replanning latency below 50 ms for fleets of 500 robots.
+
+Description
+Technical field
+The present invention relates to mobile robots transporting goods in automated warehouses, and in particular to a warehouse robot and a corresponding method.
+
+Background art
+A first known approach uses central replanning by the fleet server; however, it introduces latency exceeding one second for large fleets. A second known approach relies on purely local obstacle avoidance, which causes deadlocks between neighbouring robots. Neither approach provides reliable operation over the full range of operating conditions at acceptable cost.
+
+Summary of the invention
+It is an object of the invention to provide a warehouse robot overcoming these drawbacks. The object is achieved by a warehouse robot comprising a drive unit (92) with differential wheels; a lidar sensor (94) providing a two-dimensional scan; a communication module (96) receiving reservations of grid cells from a fleet server; a planner (98) configured to replan a path locally only through grid cells reserved for the robot when the lidar sensor detects an obstacle not present in a shared map. Compared with the prior art, the invention reduces deadlocks by 90 % and keeps replanning latency below 50 ms for fleets of 500 robots.
+
+Brief description of the drawings
+Fig. 1 shows a schematic view of a warehouse robot according to a first embodiment. Fig. 2 shows a flow chart of the method. Fig. 3 shows measurement results comparing the embodiment with the prior art.
+
+Detailed description of embodiments
+The grid has 0.5 m cells; the planner (98) runs at 20 Hz on an embedded processor. In a variant, the reservation covers a time window of at most 5 seconds ahead; in a further variant, the planner uses a time-expanded A* search; in a further variant, the robot requests additional grid cells when no path exists within its reservation. The features of the embodiments may be combined unless they are technically incompatible.
+
+Reference signs
+90: robot; 92: drive unit; 94: lidar sensor; 96: communication module; 98: planner
+
+
+Claims
+1. A warehouse robot comprising: a drive unit (92) with differential wheels; a lidar sensor (94) providing a two-dimensional scan; a communication module (96) receiving reservations of grid cells from a fleet server; a planner (98) configured to replan a path locally only through grid cells reserved for the robot when the lidar sensor detects an obstacle not present in a shared map.
+2. The warehouse robot according to claim 1, wherein the reservation covers a time window of at most 5 seconds ahead.
+3. The warehouse robot according to claim 1, wherein the planner uses a time-expanded A* search.
+4. The warehouse robot according to claim 1, wherein the robot requests additional grid cells when no path exists within its reservation.
+5. The warehouse robot according to claim 1, wherein the lidar sensor is mounted at a height of 15 cm to 25 cm.
+6. The warehouse robot according to claim 2 or 3, wherein the robot reduces speed to 0.3 m/s when replanning.
+7. A method of navigating a warehouse robot, comprising: receiving a reservation of grid cells from a fleet server; detecting an obstacle not present in a shared map; replanning a path locally only through reserved grid cells.
+8. The method according to claim 7, wherein the reservation covers a time window of at most 5 seconds ahead.

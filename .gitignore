@@ -1,0 +1,56 @@
+# Runtime data (regenerated on boot)
+data/audit.db
+data/redaction_mapping.db
+data/patentmind.db
+data/*.db
+
+# Generated test PDFs (regenerable via scripts/generate_oa_pdfs.py)
+data/oa_samples/pdf/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Playwright runtime artifacts — traces, video, screenshots, HTML report.
+# Baseline snapshots under frontend/tests/e2e/__screenshots__/ ARE committed.
+frontend/test-results/
+frontend/playwright-report/
+
+# Claude Code worktrees (locally created, not for commit)
+.claude/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+/tmp/patentmind*.log
+
+# verify.sh artifacts (project-relative tmp dir)
+tmp/
+
+# Env
+.env
+.env.local
+# but keep the template committed
+!.env.example
+
+# Local debug / analyze output (one-off curl test results)
+.analyze_*.json
+/.analyze_result.json
+
+# Eval harness output (timestamped per run, not for commit)
+data/eval_results/
+frontend/demo_video_out/

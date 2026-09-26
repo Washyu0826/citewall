@@ -1,0 +1,4 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+# Shell scripts must stay LF so they run under Linux cron / bash.
+*.sh text eol=lf

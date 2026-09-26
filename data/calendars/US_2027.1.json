@@ -1,0 +1,27 @@
+{
+  "jurisdiction": "US",
+  "version": "2027.1",
+  "source": "Computed from 5 U.S.C. 6103 + OPM observed-date rule (scripts/fetch_holidays.py)",
+  "fetched_at": "2026-09-25T13:58:19+00:00",
+  "metadata": {
+    "verified": "rule-based",
+    "note": "Statutory federal holidays only. USPTO ad-hoc closures (e.g. executive-order closures such as 2025-12-24/26) are NOT included — add them when announced.",
+    "sources": [
+      "https://www.opm.gov/policy-data-oversight/pay-leave/federal-holidays/"
+    ]
+  },
+  "holidays": {
+    "2027-01-01": "New Year's Day",
+    "2027-01-18": "MLK Day",
+    "2027-02-15": "Presidents' Day",
+    "2027-05-31": "Memorial Day",
+    "2027-06-18": "Juneteenth",
+    "2027-07-05": "Independence Day",
+    "2027-09-06": "Labor Day",
+    "2027-10-11": "Columbus Day",
+    "2027-11-11": "Veterans Day",
+    "2027-11-25": "Thanksgiving",
+    "2027-12-24": "Christmas",
+    "2027-12-31": "New Year's Day (observed)"
+  }
+}

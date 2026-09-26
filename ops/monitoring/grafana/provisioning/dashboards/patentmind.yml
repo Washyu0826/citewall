@@ -1,0 +1,11 @@
+apiVersion: 1
+providers:
+  - name: PatentMind
+    folder: PatentMind
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      # Filled at container start from docs/observability/grafana/*.json and
+      # ops/grafana/*.json with ${DS_PROMETHEUS} resolved.
+      path: /var/lib/grafana/dashboards

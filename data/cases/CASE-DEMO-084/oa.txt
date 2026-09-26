@@ -1,0 +1,16 @@
+EUROPEAN PATENT OFFICE
+Communication pursuant to Article 94(3) EPC
+
+Application No.: EP9900004
+Applicant: Thermaris Klimatechnik AG
+Examining Division: Munich
+Examiner: S. Rossi
+Date of this communication: 2025-05-09
+Reference: EPC94-2025-0004
+
+The examination of the above-identified application has revealed that it does not meet the requirements of the European Patent Convention for the reasons set out below. The applicant is invited to file observations and, where appropriate, amendments within 4 MONTHS of the date of this communication.
+
+1. Article 123(2) EPC (claim 5)
+1.1 The amendment introducing the numerical range in claim 5 is not directly and unambiguously derivable from the application as filed, which discloses only a single example value. The amendment adds subject-matter extending beyond the content of the application as filed.
+
+The application as filed contains 8 claims.
