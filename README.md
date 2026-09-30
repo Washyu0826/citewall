@@ -93,8 +93,11 @@ bash scripts/start_delivery.sh
 ## 技術棧
 
 **前端** React 19 · Vite 8 · Tailwind 4 · TanStack Query · 繁中/英文 · 深色模式
+
 **後端** FastAPI · Qdrant（混合檢索）· Redis · PostgreSQL · MinIO（WORM 封存）· Keycloak（OIDC）
+
 **AI** Dify · Ollama（地端）· Claude（雲端，一般案件可選用）· PaddleOCR-VL（地端 OCR）
+
 **閘道** digiRunner（TPIsoftware 開源 API 閘道）
 
 ## 前案（Prior Art）
