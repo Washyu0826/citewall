@@ -1,5 +1,6 @@
 /**
- * Strings for the 2026-09 redesign surfaces (shell, dashboard, case list).
+ * Strings for the 2026-09 redesign surfaces (shell, dashboard, case list,
+ * workspace, sign-in, audit log, case registry).
  * Merged into the `common` namespace by i18n.js (deep merge), so keys live
  * beside the legacy ones without growing that file further.
  */
@@ -247,6 +248,66 @@ export const pagesZhTW = {
     empty: '沒有符合條件的案件。',
     open_analysis: '開啟分析',
   },
+  // --- Phase 4: sign-in, audit log, case registry ---
+  landing: {
+    poc_note: '示範環境：使用模擬模型，所有案件與當事人資料皆為虛構。',
+  },
+  login: {
+    user_alice: '分析 OA、逐句審閱草稿、簽核匯出',
+    user_bob: '協助整理 OA 與草稿；只能存取 CASE-2025-001、002，不能簽核',
+    user_carol: '管理案件機密等級、查看本事務所的稽核紀錄；不能開啟案件內容',
+    user_dave: '唯讀：查看所有稽核紀錄並驗證雜湊鏈',
+  },
+  login_page: {
+    pick_desc: '不同身分看到的頁面與權限不同。',
+  },
+  magic: {
+    link_cta: '用 Email 寄送登入連結',
+    demo_label: '示範用：正式環境只會寄到信箱，不會顯示在畫面上',
+  },
+  audit_page: {
+    title: '稽核紀錄',
+    desc: '每個請求一筆紀錄，只能新增、不能修改或刪除。紀錄以 HMAC 雜湊鏈串接，隨時可以驗證是否遭竄改。',
+    summary: '驗證摘要',
+    scope_global: '驗證範圍：所有事務所',
+    scope_tenant: '驗證範圍：本事務所',
+    col: {
+      time: '時間（UTC）',
+      user: '使用者',
+      case: '案件',
+      endpoint: '端點',
+      model: '模型',
+      tokens: 'Token',
+      latency: '延遲（毫秒）',
+      masking: '遮罩規則',
+      gates: '閘道判斷',
+    },
+    gate: {
+      authz_passed: '權限',
+      rate_limit_passed: '頻率限制',
+      quota_passed: '配額',
+      cache_hit: '快取命中',
+      circuit_open: '斷路器開啟',
+    },
+    yes: '是',
+    no: '否',
+  },
+  admin: {
+    fail_closed: '沒有登錄、也不符合任何規則的案件，一律視為機密，只使用地端模型。',
+    patterns: '萬用規則（唯讀，需修改登錄檔）',
+  },
+  admin_page: {
+    add_desc: '案號只放在請求內容裡，不會出現在網址或記錄檔路徑。',
+    optional: '（選填）',
+    registered: '已登錄的案件',
+    search: '搜尋案號或備註',
+    count: '共 {{count}} 件',
+    fail_closed_title: '預設一律機密',
+    confirm_title: '停用 {{id}}？',
+    confirm_desc: '停用後，這個案件一律以機密處理（只使用地端模型）。登錄紀錄會保留，不會刪除。',
+    confirm_action: '確定停用',
+    cancel: '取消',
+  },
 };
 
 export const pagesEn = {
@@ -487,5 +548,65 @@ export const pagesEn = {
     count_other: '{{count}} cases',
     empty: 'No case matches these filters.',
     open_analysis: 'Open in workspace',
+  },
+  landing: {
+    poc_note: 'Demo environment: mock models, and every case and party is fictitious.',
+  },
+  login: {
+    user_alice: 'Analyze OAs, review drafts sentence by sentence, sign off exports',
+    user_bob: 'Prepares OAs and drafts; only CASE-2025-001 and 002; cannot sign off',
+    user_carol: "Manages case confidentiality and sees the firm's audit log; cannot open case content",
+    user_dave: 'Read-only: every audit record, and verifies the hash chain',
+  },
+  login_page: {
+    pick_desc: 'Each identity sees different pages and permissions.',
+  },
+  magic: {
+    link_cta: 'Email me a sign-in link',
+    demo_label: 'Demo only: in production the link is emailed, never shown here',
+  },
+  audit_page: {
+    title: 'Audit log',
+    desc: 'One record per request — append-only, never updated or deleted. Records are linked by an HMAC hash chain that can be verified at any time.',
+    summary: 'Verification summary',
+    scope_global: 'Scope: all firms',
+    scope_tenant: 'Scope: this firm',
+    col: {
+      time: 'Time (UTC)',
+      user: 'User',
+      case: 'Case',
+      endpoint: 'Endpoint',
+      model: 'Model',
+      tokens: 'Tokens',
+      latency: 'Latency (ms)',
+      masking: 'Masking rules',
+      gates: 'Gate decisions',
+    },
+    gate: {
+      authz_passed: 'Access',
+      rate_limit_passed: 'Rate limit',
+      quota_passed: 'Quota',
+      cache_hit: 'Cache hit',
+      circuit_open: 'Breaker open',
+    },
+    yes: 'yes',
+    no: 'no',
+  },
+  admin: {
+    fail_closed: 'A case with no entry and no matching rule is confidential and stays on on-prem models.',
+    patterns: 'Wildcard rules (read-only — edit the registry file)',
+  },
+  admin_page: {
+    add_desc: 'The case number travels only in the request body — never in a URL or log path.',
+    optional: '(optional)',
+    registered: 'Registered cases',
+    search: 'Search case number or note',
+    count_one: '{{count}} case',
+    count_other: '{{count}} cases',
+    fail_closed_title: 'Confidential by default',
+    confirm_title: 'Deactivate {{id}}?',
+    confirm_desc: 'Once deactivated the case is always treated as confidential (on-prem models only). The entry is kept, never deleted.',
+    confirm_action: 'Deactivate',
+    cancel: 'Cancel',
   },
 };

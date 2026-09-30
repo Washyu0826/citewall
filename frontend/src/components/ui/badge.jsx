@@ -40,7 +40,7 @@ const STATUS_TONE = {
   },
   brand: {
     soft: 'bg-brand-soft text-brand-fg ring-brand-fg/25',
-    solid: 'bg-brand text-white ring-brand-hover',
+    solid: 'bg-primary text-white ring-primary-hover',
     outline: 'bg-transparent text-brand-fg ring-brand-fg/40',
   },
   confidential: {

@@ -5,6 +5,7 @@
 // no audit entry (the gateway 403s /v1/audit/* for them anyway).
 import { test, expect } from '@playwright/test';
 import {
+  EMPTY_REGISTRY,
   mockLogin,
   mockQuota,
   mockAuditRecent,
@@ -27,9 +28,9 @@ test.describe('Audit flow', () => {
     await mockAuditVerify(page);
     await loginAsDave(page);
 
-    await expect(page.getByRole('heading', { name: /Audit Log/ })).toBeVisible();
-    await expect(page.locator('th', { hasText: /User/ })).toBeVisible();
-    await expect(page.locator('th', { hasText: /Endpoint/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '稽核紀錄' })).toBeVisible();
+    await expect(page.locator('th', { hasText: '使用者' })).toBeVisible();
+    await expect(page.locator('th', { hasText: '端點' })).toBeVisible();
     await expect(page.locator('td', { hasText: '/v1/oa/analyze' }).first()).toBeVisible();
     await expect(page.locator('span', { hasText: /^CASE_REF$/ }).first()).toBeVisible();
   });
@@ -50,7 +51,7 @@ test.describe('Audit flow', () => {
       });
     });
     await page.route('**/api/v1/admin/cases**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [], patterns: {} }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(EMPTY_REGISTRY) })
     );
 
     await page.goto('/');

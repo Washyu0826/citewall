@@ -79,7 +79,7 @@ export default function Cases({ session }) {
               className={cn(
                 'h-9 rounded-brand px-3 text-sm font-medium transition-colors',
                 filter === f
-                  ? 'bg-brand text-white'
+                  ? 'bg-primary text-white'
                   : 'border border-line-strong bg-surface-raised text-fg-secondary hover:bg-surface-hover'
               )}
             >

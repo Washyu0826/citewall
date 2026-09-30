@@ -2,7 +2,7 @@
 // the gateway surfaces an alert on screen. All tests are hermetic via
 // page.route() mocks.
 import { test, expect } from '@playwright/test';
-import { mockCases, mockLogin, mockQuota, DEMO_USERS } from './helpers/mock_backend.js';
+import { EMPTY_REGISTRY, mockCases, mockLogin, mockQuota, DEMO_USERS } from './helpers/mock_backend.js';
 
 test.describe('Login flow', () => {
   test('landing renders with hero + role cards', async ({ page }) => {
@@ -40,7 +40,7 @@ test.describe('Login flow', () => {
     await mockLogin(page, 'carol');
     await mockQuota(page);
     await page.route('**/api/v1/admin/cases**', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [], patterns: {} }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(EMPTY_REGISTRY) })
     );
     // AppShell calls auditVerify on mount for it_admin / auditor — mock so it
     // doesn't error out (would otherwise show a fail chip but not crash).

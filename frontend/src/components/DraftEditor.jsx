@@ -477,9 +477,10 @@ function blockedReason(text, t) {
 /**
  * Renders a draft sentence with its citations as pills. Each pill opens an
  * accessible popover (focus / tap / Enter — not hover-only; UX_REVIEW T7) with
- * the source passage and a jump to the references panel.
+ * the source passage and a jump to the references panel. Also used for the
+ * rejection's strategy paragraph, so no raw [GROUNDED_REF_n] marker is shown.
  */
-function CitationText({ text, citationLookup, onCitationClick }) {
+export function CitationText({ text, citationLookup, onCitationClick }) {
   const parts = useMemo(
     () => text.split(/(\[GROUNDED_REF_\d+\]|\[UNSUPPORTED_REF_\d+\]|\[CITATION_REMOVED\])/g),
     [text]

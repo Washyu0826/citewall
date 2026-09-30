@@ -188,13 +188,5 @@ function AnalyzeRoute({ session, onLogout, onTrustChange }) {
 }
 
 function AuditRoute({ session, onLogout }) {
-  const navigate = useNavigate();
-  return (
-    <AuditView
-      session={session}
-      onLogout={onLogout}
-      onSwitchView={buildSwitchView(navigate)}
-      embedded
-    />
-  );
+  return <AuditView session={session} onLogout={onLogout} />;
 }

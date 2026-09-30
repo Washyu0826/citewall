@@ -80,7 +80,7 @@ export default function Home({ session }) {
         <Stat label={t('home.stats.confidential')} value={casesQ.isLoading ? '—' : stats.confidential} icon={Lock} />
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
+      <div className="grid items-start gap-6 xl:grid-cols-[2fr_1fr]">
         <Card>
           <CardHeader>
             <div>

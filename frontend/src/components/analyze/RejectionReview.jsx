@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, BookOpen, ShieldAlert, ShieldCheck } from 'lucide-react';
 
-import DraftEditor from '../DraftEditor.jsx';
+import DraftEditor, { CitationText } from '../DraftEditor.jsx';
 import ConfidencePips from '../ui/ConfidencePips.jsx';
 import { Badge } from '../ui/badge.jsx';
 import { Button } from '../ui/button.jsx';
@@ -70,7 +70,13 @@ export default function RejectionReview({
           <>
             <section>
               <h3 className="mb-2 text-sm font-medium text-fg-muted">{t('workspace.strategy')}</h3>
-              <p className="text-[15px] leading-7 text-fg">{draft.strategy}</p>
+              <p className="text-[15px] leading-7 text-fg">
+                <CitationText
+                  text={draft.strategy || ''}
+                  citationLookup={citationLookup}
+                  onCitationClick={onCitationClick}
+                />
+              </p>
             </section>
             <section>
               <h3 className="mb-2 text-sm font-medium text-fg-muted">{t('workspace.draft')}</h3>

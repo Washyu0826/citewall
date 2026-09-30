@@ -124,7 +124,7 @@ test.describe('Visual regression — dark mode', () => {
     await page.goto('/');
     await page.getByRole('button', { name: /Dave/ }).click();
     await page.waitForURL(/\/audit/);
-    await expect(page.getByRole('heading', { name: /Audit Log/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '稽核紀錄' })).toBeVisible();
     await waitForStackSettled(page);
     await expect(page).toHaveScreenshot('audit_table_dark.png', shot);
   });

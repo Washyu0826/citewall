@@ -31,11 +31,9 @@ async function loginAs(page, user) {
   await page.waitForURL(user === 'carol' ? /\/admin\/cases/ : /\/home/, { timeout: 5000 });
 }
 
+// Runs on both projects: the nav rail stays visible (icon-only) on mobile and
+// the buttons keep their accessible names.
 test.describe('case registry admin', () => {
-  test.beforeEach(({ viewport }) => {
-    test.skip(viewport && viewport.width < 1024, 'nav rail link is desktop-only');
-  });
-
   test('it_admin can list, add, change level and deactivate', async ({ page }) => {
     const calls = [];
     await page.route('**/api/v1/admin/cases**', async (route) => {
@@ -83,11 +81,19 @@ test.describe('case registry admin', () => {
       .poll(() => calls.find((c) => c.method === 'PUT')?.body?.security_level)
       .toBe('confidential');
 
-    page.once('dialog', (d) => d.accept());
-    await page
+    // Deactivation asks for confirmation in an accessible dialog (not
+    // window.confirm); cancelling sends nothing.
+    const rowDeactivate = page
       .getByTestId('admin-row-CASE-2025-001')
-      .getByRole('button', { name: /停用|Deactivate/ })
-      .click();
+      .getByRole('button', { name: /停用|Deactivate/ });
+    await rowDeactivate.click();
+    await page.getByRole('dialog').getByRole('button', { name: /取消|Cancel/ }).first().click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expect(calls.some((c) => c.path.endsWith('/deactivate'))).toBe(false);
+
+    await rowDeactivate.click();
+    await expect(page.getByRole('dialog')).toContainText('CASE-2025-001');
+    await page.getByTestId('admin-deactivate-confirm').click();
     await expect
       .poll(() => calls.find((c) => c.path.endsWith('/deactivate'))?.body)
       .toEqual({ case_id: 'CASE-2025-001' });

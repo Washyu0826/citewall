@@ -14,8 +14,8 @@ const buttonVariants = cva(
     variants: {
       variant: {
         // `primary` and `default` are aliases so existing call sites keep working.
-        primary: 'bg-brand text-white shadow-elev-1 hover:bg-brand-hover',
-        default: 'bg-brand text-white shadow-elev-1 hover:bg-brand-hover',
+        primary: 'bg-primary text-white shadow-elev-1 hover:bg-primary-hover',
+        default: 'bg-primary text-white shadow-elev-1 hover:bg-primary-hover',
         destructive: 'bg-rose-700 text-white shadow-elev-1 hover:bg-rose-800',
         confidential: 'bg-purple-800 text-white shadow-elev-1 hover:bg-purple-900',
         outline:

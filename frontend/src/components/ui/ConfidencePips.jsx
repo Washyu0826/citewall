@@ -14,29 +14,28 @@ export default function ConfidencePips({ score, labelKey }) {
   const what = t(labelKey);
   const bandText = t(`confidence.band.${view.band}`);
   const full = t('confidence.aria', { what, band: bandText, pct: view.pct });
+  // Fixed text size: the glyph sits in headers and banners of different sizes.
   return (
     <span
-      className="inline-flex items-center gap-1"
+      className="inline-flex items-center gap-1 whitespace-nowrap text-sm text-fg-muted"
       role="img"
       aria-label={full}
       title={full}
       data-testid="confidence-pips"
       data-filled={view.filled}
     >
-      <span className="text-slate-500 dark:text-slate-400">{what}</span>
+      <span>{what}</span>
       <span aria-hidden="true" className="inline-flex gap-0.5">
         {Array.from({ length: PIP_MAX }, (_, i) => (
           <span
             key={i}
             className={`inline-block h-1.5 w-1.5 rounded-full ${
-              i < view.filled
-                ? 'bg-slate-600 dark:bg-slate-300'
-                : 'border border-slate-400 dark:border-slate-500'
+              i < view.filled ? 'bg-fg-secondary' : 'border border-fg-muted'
             }`}
           />
         ))}
       </span>
-      <span className="text-slate-500 dark:text-slate-400">{bandText}</span>
+      <span>{bandText}</span>
     </span>
   );
 }

@@ -81,6 +81,10 @@
   --color-brand-hover: var(--cw-brand-hover);
   --color-brand-soft: var(--cw-brand-soft);
   --color-brand-fg: var(--cw-brand-fg);
+  /* Filled controls (primary buttons, selected chips). Separate from brand so
+     the dark top bar can stay navy-950 while dark-mode buttons stay visible. */
+  --color-primary: var(--cw-primary);
+  --color-primary-hover: var(--cw-primary-hover);
   /* Warm accent — the single non-navy brand colour (P2). */
   --color-accent: var(--cw-accent);
 
@@ -120,6 +124,8 @@
     --cw-brand-hover: #1e40af; /* navy-800 */
     --cw-brand-soft: #eff6ff; /* navy-50 */
     --cw-brand-fg: #1e3a8a;
+    --cw-primary: #1e3a8a; /* white text 10.4:1 */
+    --cw-primary-hover: #1e40af;
     --cw-accent: #d97706; /* amber-600 */
 
     --cw-fg: #0f172a; /* slate-900 18.7:1 */
@@ -153,6 +159,8 @@
     --cw-brand-hover: #1e3a8a;
     --cw-brand-soft: rgba(30, 58, 138, 0.35);
     --cw-brand-fg: #93c5fd; /* navy-300 */
+    --cw-primary: #1d4ed8; /* blue-700 — white text 6.7:1, visible on slate-900 */
+    --cw-primary-hover: #2563eb;
     --cw-accent: #f59e0b;
 
     --cw-fg: #f8fafc;

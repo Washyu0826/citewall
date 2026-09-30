@@ -526,6 +526,17 @@ export function mockExportResponse(page) {
   return installed;
 }
 
+/**
+ * GET /api/v1/admin/cases with nothing registered — the real response shape
+ * (`case_registry.list_cases()`): three arrays. A `patterns: {}` / no-`levels`
+ * mock used to crash the registry page mid-test (FAILURE_LOG B-7).
+ */
+export const EMPTY_REGISTRY = Object.freeze({
+  cases: [],
+  patterns: [],
+  levels: ['confidential', 'public', 'top_secret'],
+});
+
 /** GET /api/v1/cases fixture: ACL-scoped cases with server security levels. */
 export function defaultCases() {
   return {

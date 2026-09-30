@@ -16,6 +16,24 @@ export const adminApi = {
     call('/v1/admin/cases/deactivate', { method: 'POST', token, body: { case_id } }),
 };
 
+const DEFAULT_LEVELS = ['public', 'confidential'];
+
+/**
+ * Coerce a /v1/admin/cases body into {cases, patterns, levels} arrays. A
+ * malformed body (older gateway, proxy error page, bad mock) must render as an
+ * empty registry — it used to throw inside render and take down the whole SPA
+ * through the top-level error boundary. Pure — unit tested.
+ */
+export function normalizeRegistry(body) {
+  const arr = (v) => (Array.isArray(v) ? v : []);
+  const levels = arr(body?.levels).filter((l) => typeof l === 'string');
+  return {
+    cases: arr(body?.cases).filter((c) => c && typeof c.case_id === 'string'),
+    patterns: arr(body?.patterns).filter((p) => p && typeof p.pattern === 'string'),
+    levels: levels.length ? levels : DEFAULT_LEVELS,
+  };
+}
+
 /** Case-insensitive filter over case_id + note. Pure — unit tested. */
 export function filterCases(cases, query) {
   const q = (query || '').trim().toLowerCase();

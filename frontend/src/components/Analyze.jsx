@@ -88,6 +88,12 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   const analyzeMut = useAnalyze(session.token);
   const running = analyzeMut.isPending;
 
+  // Opened with no current case: publish the workspace default so the top-bar
+  // switcher, the trust band and this page all name the same case (B-6).
+  useEffect(() => {
+    if (!initialCaseId && caseId) setCurrentCase(caseId);
+  }, [initialCaseId, caseId, setCurrentCase]);
+
   // The shell switched case: follow it, keep the typed OA, drop the old result.
   useEffect(() => {
     if (!initialCaseId) return;

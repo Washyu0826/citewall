@@ -1,6 +1,30 @@
 import { describe, expect, it } from 'vitest';
 
-import { filterCases } from './admin.js';
+import { filterCases, normalizeRegistry } from './admin.js';
+
+describe('normalizeRegistry', () => {
+  it('passes a well-formed body through', () => {
+    const body = {
+      cases: [{ case_id: 'CASE-1', level: 'public' }],
+      patterns: [{ pattern: 'CASE-DEMO-*', level: 'public' }],
+      levels: ['confidential', 'public', 'top_secret'],
+    };
+    expect(normalizeRegistry(body)).toEqual(body);
+  });
+  it('turns a malformed body into an empty registry instead of throwing', () => {
+    // The shape that crashed the page: patterns as an object, levels missing.
+    expect(normalizeRegistry({ cases: [], patterns: {} })).toEqual({
+      cases: [],
+      patterns: [],
+      levels: ['public', 'confidential'],
+    });
+    expect(normalizeRegistry(null).cases).toEqual([]);
+    expect(normalizeRegistry('<html>502</html>').levels).toEqual(['public', 'confidential']);
+  });
+  it('drops rows without an id', () => {
+    expect(normalizeRegistry({ cases: [{ case_id: 'A' }, {}, null] }).cases).toEqual([{ case_id: 'A' }]);
+  });
+});
 
 const cases = [
   { case_id: 'CASE-2025-001', note: 'pilot client' },
