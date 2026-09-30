@@ -11,6 +11,7 @@
 > [English README](README.en.md) ｜ 授權：[Apache-2.0](LICENSE) ｜ 安全回報：[SECURITY.md](SECURITY.md)
 
 律師上傳審查意見（OA），CiteWall 會自動**分析核駁理由、找出前案、起草申復書、算出法定期限**；
+
 律師逐句審核、簽核後才能匯出。
 
 ## 為什麼叫 CiteWall
