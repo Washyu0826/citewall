@@ -1,4 +1,4 @@
-# CiteWall
+# <img src="https://img.shields.io/badge/Law-Justice-1E293B?style=for-the-badge&logo=scale-balanced&logoColor=white" height="28" alt="Law" />CiteWall
 
 > **台灣專利審查意見（OA）答辯的隱私優先 AI 助手**
 >
