@@ -163,7 +163,7 @@ invariant has broken.
 | Q20 — 排程 wrapper 已出（`scripts/run_backup.py` + `backup_cron.sh` + schtasks，見 DELIVERY_RUNBOOK §7）| **must upgrade to streaming replication before prod**（snapshot cron 達不到 RPO<5min）|
 | 2026-09-25 branch — 未實機驗證 | 真 API key 跑 `scripts/anthropic_smoke.py`（Sonnet 5 schema + effort、citations 切塊）；GPU 上跑 PaddleOCR-VL / Qwen3 embedding + reranker；docker 實跑 Dify 1.17.1、digiRunner release-v4.7.3、Qdrant 1.19、audit Postgres `hash_version` 遷移 |
 | 期限規則 / 日曆 | 規則未經專利師覆核（`rules_reviewed=false`；覆核清單 `docs/DEADLINE_RULES_REVIEW.md`）；KR 2026/27、EP 2026 已對照官方來源核實（2026-09-26）；CN/EP 2027 未公布 |
-| 稽核 HMAC key 輪替 | 不支援 — 換 `AUDIT_HMAC_KEY` 後舊 v2 列驗不過；需 key id / 多 key 驗證 |
+| 稽核 HMAC key 輪替 | ✅ 已支援（Q21）：`AUDIT_HMAC_KEYS=k1:…,k2:…` + `AUDIT_HMAC_ACTIVE_KID`，每列記 `hash_key_id`；舊金鑰須留在金鑰環，否則該列回報 `unverifiable`（步驟見 `ops/README.md`）。後續：每租戶一把金鑰 |
 | 公開發布 | 真實 OA/公報 PDF 已刪除、文件內真實申請人與文號已改虛構、delivery 截圖已遮蔽（2026-09-26）；仍保留 `TW202617461` 作為 seed/評測專利號（綁定 seed、eval set 與測試）；公開 repo 請以 `git archive`/`git ls-files` 快照建立，勿複製工作目錄（`frontend/.env.local`、`dist/`、`data/*.db` 為 gitignored） |
 
 ## 4. Design invariants — never violate these

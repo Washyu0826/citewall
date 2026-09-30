@@ -379,6 +379,92 @@ The compose file correctly binds all ports to `127.0.0.1` (comment in line 7-9 e
 
 ---
 
+## Addendum 2026-09-29 — privacy / distributed-correctness review
+
+Read-only design review (privacy and latency ranked as the two non-negotiables).
+Discussion record: `docs/research/08_架構討論_Dify_digiRunner_多租戶.md`.
+
+### H-9. Sentry could ship raw OA text off the machine — ✅ FIXED 2026-09-29
+
+**Files:** `backend/shared/observability.py` (`init_sentry`), `frontend/src/lib/sentry.jsx`
+
+`send_default_pii=False` only covers cookies / headers / user IP. The Python SDK
+defaults `include_local_variables=True` and `max_request_body_size="medium"`
+(confirmed against the Sentry options docs, 2026-09-29), and also attaches
+logging breadcrumbs; neither is governed by `send_default_pii`. An exception
+raised before `masking.redact()` — e.g. in `orchestrate_analysis`, whose frame
+holds `req.oa_text` — would send the **unredacted OA** (frame locals + request
+body) to Sentry. With a sentry.io DSN that bypasses redaction, the egress guard
+and confidential routing (invariants #3 / #7). The code comment claimed "OA
+content goes through redaction", which is false for pre-redaction errors. The
+browser SDK had the same gap for exception messages, console / fetch
+breadcrumbs and request data. Not exploitable while `SENTRY_DSN` is unset
+(the default).
+
+**Fix.** Backend: `include_local_variables=False`, `max_request_body_size="never"`,
+and `scrub_sentry_event()` on `before_send` + `before_send_transaction` (drops
+request body / query / headers, frame vars, exception messages, log params,
+breadcrumb messages + data, span data, extra, user; keeps exception type and
+code locations). Frontend: same policy in `frontend/src/lib/sentryScrub.js`
+wired to `beforeSend` / `beforeSendTransaction`. Tests:
+`tests/unit/test_sentry_scrubbing.py` (4), `frontend/src/lib/sentryScrub.test.js` (3).
+**Still recommended:** self-hosted Sentry, or no DSN for confidential tenants.
+
+### H-10. Audit chain forks under concurrent writer processes — ✅ FIXED 2026-09-30
+
+**File:** `backend/gateway/audit.py` (`write` → `_append_chained`)
+
+Read-tail → compute → insert was serialised by a process-local
+`threading.RLock`, with the tail read and the insert in separate
+transactions. Two gateway replicas on one store could chain off the same
+`prev_row_hash`, and `verify_global_chain` then reports the fork as tampering.
+**Reproduced before fixing:** 4 processes × 40 writes on one SQLite file gave
+160 rows but only 157 distinct `prev_row_hash` values (3 forks).
+
+**Fix.** Each backend implements `_append_chained(build)`: tail read + insert in
+ONE transaction under a cross-process lock — SQLite `BEGIN IMMEDIATE` (writer
+connection `timeout=30`), Postgres `pg_advisory_xact_lock(hashtext('patentmind.audit_chain:<schema>'))`.
+The in-process RLock stays for the shared connection. Test:
+`tests/integration/test_audit_chain_multiprocess.py` (fails on the old code,
+passes now). **Not yet run against a live Postgres** (no server on the dev box).
+
+### M-12. Cost circuit breaker was global — ✅ FIXED 2026-09-30
+
+One tenant's spend tripped `cost_circuit_state()` and degraded every tenant.
+Analyze now uses `tenant_cost_circuit_state(tenant_id)`: trips on that
+tenant's daily spend (`COST_CIRCUIT_TENANT_DAILY_USD`, default 100) or the
+fleet backstop (`COST_CIRCUIT_DAILY_USD`, default raised 100 → 1000, now
+env-configurable). Redis mode keeps a per-tenant micro-dollar counter
+`cost:tenant:<id>:daily:<day>`. `cost_circuit_state()` is unchanged (metrics /
+quota endpoint). Tests: 2 new cases in `tests/unit/test_quota_atomicity.py`.
+
+### M-14. Revocation store outage was unhandled — ✅ FIXED 2026-09-30
+
+`RedisRevocationStore` let redis errors escape (500s; logout errored). Now
+store errors raise `RevocationUnavailable`; `verify_token` and `revoke_token`
+answer **503 + Retry-After** (`REVOCATION_RETRY_AFTER_SEC`, default 5) — fail
+closed; logout audits the failed attempt and never reports success while the
+token is live. Tests: `tests/unit/test_revocation_unavailable.py` (3, incl. a
+real connection to an unused port). Short-lived access token + refresh (ADR-02
+option 2) is still open.
+
+### Open findings from the same review (not fixed)
+
+| ID | Severity | Finding | Evidence | Direction |
+|---|---|---|---|---|
+| M-13 | Medium | Global audit verify is a full-chain scan, polled every 60 s per open browser (AppShell badge) — O(rows × viewers), rows grow for 7+ years | `verify_global_chain`; HANDOFF Day 9C | Incremental verify from the last sealed Merkle checkpoint; compute server-side on a schedule |
+| M-15 | Medium | AI Engine is stateful by default: `VECTOR_BACKEND=memory` keeps the index in process memory, so replicas diverge and restarts lose it | `config.py:187` | Boot guard: memory backends only in mock / test |
+| M-16 | Medium | **Confirmed 2026-09-30:** requests rejected inside `auth_dependency` (expired / invalid / revoked token, revocation store down) never reach a handler's try/finally, so they write **no audit row** — invariant #4 does not hold for auth failures | `auth.py` `verify_token` raised from the FastAPI dependency; handlers audit only after it returns | Exception handler / middleware that writes one `_preauth_` row per rejected request (rate-limited to avoid log flooding) |
+| L-8 | Low | `request_hash` / `response_hash` are unkeyed SHA-256 of the JSON payload — short payloads are dictionary-guessable | `audit.py:321` | Keyed HMAC |
+| L-9 | Low | Audit rows hold direct identifiers (`user_id`, `case_id`) — erasure conflicts with retention | `audit.py:60` | ADR-01: pseudonymise with a shreddable per-tenant identity key |
+
+**Regression run for H-9 / H-10 / M-12 / M-14 (2026-09-30, Python 3.14 uv env,
+no docker, no torch):** `tests/unit` 1414 passed / 23 skipped;
+`tests/integration` 264 passed / 9 skipped; frontend `sentryScrub.test.js`
+3 passed. Playwright not run.
+
+---
+
 ## Low / defer
 
 - **L-1.** No CSRF protection — correctly N/A because all endpoints use `Authorization: Bearer` (header is not cross-site auto-sent). If a future switch to cookie auth happens, revisit.

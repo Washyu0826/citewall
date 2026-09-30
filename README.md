@@ -1,143 +1,127 @@
-# PatentMind Platform（patentmind-platform）
+# CiteWall
 
-> **安全、自動化的專利 Office Action（OA）答辯分析平台**
-> NCCU GDGoC × Computex 2026 ｜ [English README](README.en.md) ｜ 授權：[Apache-2.0](LICENSE) ｜ 安全回報：[SECURITY.md](SECURITY.md)
+> **台灣專利審查意見（OA）答辯的隱私優先 AI 助手**
 >
-> 這個 repo 是 PatentMind AI 的 POC：完整 frontend + backend，把架構決策驗證到能跑端到端。
-> Production hardening 清單見 `CLAUDE.md`。
+> 學生作品 — 與 TPIsoftware（昕力資訊）合作的 GDG on Campus 專案（NCCU GDGoC × Computex 2026）
+>
+> [English README](README.en.md) ｜ 授權：[Apache-2.0](LICENSE) ｜ 安全回報：[SECURITY.md](SECURITY.md)
 
-## 為什麼存在
+律師上傳審查意見（OA），CiteWall 會自動**分析核駁理由、找出前案、起草申復書、算出法定期限**；
+律師逐句審核、簽核後才能匯出。
 
-律師事務所做專利 Office Action 答辯：
-- 看 OA、找 prior art、寫答辯狀，現在大多是人工作業（每案工時因事務所而異，尚無可信的公開統計）
-- 引用法源容易抄錯（幻覺風險）
-- 期日算錯就完蛋
-- 客戶資料絕對不能外流
+## 為什麼叫 CiteWall
 
-PatentMind 把這個流程半自動化，律師仍對最終 draft 負完全責任。
+法律 AI 最大的風險是**捏造引用**——引錯一個法條或前案，就是專業責任事故。
+所以我們在 LLM 和律師之間築一道**引用牆**：草稿中的每個引用都必須對應到真的檢索到的來源，
+對不上就移除並標出來。**LLM 永遠不是最後的裁判。**
 
-## 三件事這個 POC 已驗證可行
+## 解決什麼問題
 
-1. **`scripts/verify.sh` 全綠** — 從 login → redaction → RAG → grounded draft → verifier → deadline → audit chain 完整跑通。
-2. **20 題架構 reasoning 都有對應的可執行 code**。grep `# Q\d+:` 看每個決策的落地點。
-3. **Frontend 可看到** AI draft、grounded citation、律師逐句簽核 (Q16)、audit 不可竄改驗證 (Q13)，並支援 zh-TW / EN 切換與暗色模式。
+| 律師事務所的痛點 | CiteWall 的做法 |
+|---|---|
+| 答辯大多是人工作業，費時 | 自動解析 OA、檢索前案、起草申復書 |
+| AI 可能捏造引用 | 引用牆：確定性驗證 + 逐句對齊 + 律師簽核 |
+| 客戶資料不能外流 | 個資先遮罩再送模型；機密案件只走地端模型 |
+| 期限算錯就失權 | 多國期限引擎（台、美、日、歐、中、韓），附計算依據 |
+| 出事要能追查 | 每個請求一筆稽核紀錄，雜湊鏈防竄改 |
+
+## 架構
+
+![CiteWall 架構：從上傳 OA 到申復書草稿的安全管線](presentation/assets/architecture.png)
+
+三條設計原則，由測試強制守住：
+
+1. **閘道永遠不直接呼叫模型**——所有 AI 推論都經過 AI 推論引擎。
+2. **遮罩之後才送推論**——個資和客戶識別碼在離開閘道前就換成代碼，對照表只存在地端。
+3. **每個請求都寫一筆稽核**——成功、快取命中、失敗都一樣。
+
+### 資料怎麼流動
+
+![每一步都知道資料在誰手上](presentation/assets/flow_data.png)
+
+**實機驗證（2026-06-11）**：前端 → digiRunner → 閘道 → AI 推論引擎 → Dify → Ollama（qwen2.5:7b），
+一次完整分析約 25–28 秒。
+
+## 引用牆怎麼運作
+
+| 層 | 做什麼 | 擋下什麼 |
+|---|---|---|
+| 1. 引用硬牆 | 每個引用都要對應到檢索到的前案，或 OA 本身引述的法條 | 捏造的專利號、判例、法條 |
+| 2. 逐句對齊 | 檢查每句話和它引用的段落是否真的相符 | 引用是真的，但內容對不上 |
+| 3. 律師簽核 | 被移除或對不上的句子不能直接接受；每句都要決定才能匯出 | 前兩層漏掉的 |
+
+驗證模型只提供參考意見；**「引用是否有效」完全由確定性的程式決定**，即使驗證模型被 prompt injection 攻擊，也放不進捏造的引用。
 
 ## 快速開始
 
+不需要任何 API key，預設使用 mock 模型。
+
 ```bash
-# 0. 一鍵 demo（後端 + 前端 + seed + 自動產 secrets）
-bash scripts/start_demo.sh
+# 一鍵 demo：後端 + 前端 + 範例資料，自動產生金鑰
+bash scripts/start_demo.sh          # 開啟 http://localhost:5173
 
-# 0a. 交付版全 stack（Docker infra + digiRunner/Dify 探測，可跑 LLM_MODE=dify 真模型）
-bash scripts/start_delivery.sh
-
-# 1. 後端（完整 POC）— 啟動 gateway :8010 + ai_engine :8011，並 seed demo patent
-bash scripts/start_backend.sh
-
-# 1a. 後端（最小 MVP）— 單一 process、單一 /v1/oa/analyze API
-bash scripts/start_minimal.sh
-
-# 2. 驗證（完整 POC）— 應印 "ALL CHECKS PASSED"
+# 驗證整條流程（應印出 ALL CHECKS PASSED）
 bash scripts/verify.sh
 
-# 3. 前端
-cd frontend && npm install && npm run dev   # http://localhost:5173
+# 完整交付版：Docker 基礎設施 + digiRunner + Dify（真模型）
+bash scripts/start_delivery.sh
 ```
 
-> Demo 登入密碼為 `demo-{帳號}`（例如 `demo-alice`），詳見 `.env.example`。
+需求：Python 3.13、Node 24。登入密碼為 `demo-帳號`（例如 `demo-alice`）。
 
-## 依架構決策對應的試玩腳本
+## 試玩
 
-| 試玩 | 動作 | 觀察重點 |
-|------|------|----------|
-| Q12 case ACL | 用 Carol 登入 → 嘗試分析 CASE-2025-001 | 403 被擋（Carol 不在這 case 名單） |
-| Q10 Redaction | Alice 登入 → 在分析頁按「預覽 redaction」 | email/phone/案件編號被換成 placeholder |
-| Q14 Grounded | 跑分析後看 `[GROUNDED_REF_1]` pill | 點開顯示來源 patent + section + 原文；未通過驗證的引用顯示為已移除 |
-| Q16 律師簽核 | 在 draft 區域逐句 Accept/Edit | 紫底 = AI、綠底 = 律師改寫；全簽完才能匯出 |
-| Q13 Audit | Dave 登入 → Audit 頁 | 看到 mask rules 紀錄 + 「驗證 hash chain」綠燈 |
-| Q15 機密路由 | Case_id 結尾 `-CONF` 重跑分析 | audit row 的 model_used 變地端模型 |
-| Q9 Cache | 同樣 OA + 同 case 連按兩次「分析」 | 第二次 audit row model_used=`cache`，token=0 |
-| Q17 Deadline | 在分析頁看期日 → 點「計算依據」 | 期日落在週末/假日會自動 roll forward，並可展開計算依據 |
+| 想看什麼 | 怎麼做 | 會看到 |
+|---|---|---|
+| 引用牆 | 分析後點草稿中的引用 | 來源專利和原文；沒通過驗證的引用顯示為已移除 |
+| 個資遮罩 | 分析頁按「預覽 redaction」 | email、電話、案號被換成代碼 |
+| 案件權限 | 用 carol 登入，分析 CASE-2025-001 | 被拒（403），她不在這個案件名單 |
+| 機密路由 | 案號結尾改成 `-CONF` 再分析 | 稽核紀錄的模型變成地端模型 |
+| 稽核鏈 | 用 audit_dave 登入，進稽核頁 | 按「驗證 hash chain」顯示綠燈 |
 
-## 架構速覽
+| 帳號 | 角色 | 用途 |
+|---|---|---|
+| `alice` | 律師 | 分析、簽核 |
+| `bob` | 助理 | 協助擬稿 |
+| `carol` | IT 管理員 | 儀表板、案件登錄 |
+| `audit_dave` | 稽核員 | 查看與驗證稽核鏈 |
 
-```
-Vite SPA  ──/api──▶  [可選: digiRunner OSS :18080 前線 gateway]
-                       │
-                       ▼
-                     Gateway :8010 (厚 Gateway)
-                       │
-                       ├─ Auth (Q12)         │ JWT + case_id ACL + 撤銷/logout
-                       ├─ RateLimit (Q18)    │ RPM + quota + circuit breaker
-                       ├─ Mask (Q3+Q10)      │ regex + dict + reversible
-                       ├─ Cache (Q9)         │ tenant:user:case scoped
-                       ├─ Orchestrator (Q1)  │ 6-step business flow
-                       └─ Audit (Q13)        │ append-only + hash chain
-                       │
-                       ▼ HTTP
-                  AI Engine :8011 (single-step inference)
-                       ├─ parse_oa (Q11 spotlight)
-                       ├─ retrieve (Q6+Q7 hierarchical+claim-tree)
-                       ├─ draft   (Q14 grounded)
-                       ├─ verify  (Q14 verifier)
-                       └─ deadline (Q17 multi-jurisdiction)
-                       │
-                       └─ llm_client (Q15 router: mock | anthropic | local | dify)
-                       │  LLM_MODE=dify
-                       ▼
-                  Dify CE :8088 (patentmind-analyze-oa workflow → Ollama qwen2.5:7b)
-```
+## 技術棧
 
-**實機鏈路（2026-06-11 驗證全綠）**：SPA :5173 → digiRunner :18080（`/dgrc`）→
-gateway :8010 → ai_engine :8011 → Dify :8088 → Ollama `qwen2.5:7b`，
-全鏈路 analyze 約 25–28 秒。起停見 `docs/DELIVERY_RUNBOOK.md`。
+**前端** React 19 · Vite 8 · Tailwind 4 · TanStack Query · 繁中/英文 · 深色模式
+**後端** FastAPI · Qdrant（混合檢索）· Redis · PostgreSQL · MinIO（WORM 封存）· Keycloak（OIDC）
+**AI** Dify · Ollama（地端）· Claude（雲端，一般案件可選用）· PaddleOCR-VL（地端 OCR）
+**閘道** digiRunner（TPIsoftware 開源 API 閘道）
 
-完整 Q→code 對應請見 `docs/ARCHITECTURE.md`。
+## 前案（Prior Art）
+
+CiteWall 不是從零開始，它建立在兩個先前的專案之上：
+
+| 前案 | 做了什麼 | CiteWall 延伸了什麼 |
+|---|---|---|
+| [shin-lee-patent-rag](https://github.com/Washyu0826/shin-lee-patent-rag)（2026-04） | 台灣專利 RAG 問答：bge-m3 + HyDE + reranker，信心不足時拒答，並以 100 篇 TIPO 專利做對照實驗 | 從「找得到」走向「引用可信」：確定性引用硬牆、逐句對齊 |
+| shin-lee（2026-04～06，GDG on Campus 合作） | OA 答辯系統 POC：厚閘道、遮罩、稽核鏈、Dify 與 digiRunner 串接 | 多租戶、分散式正確性、隱私強化，以及公開發布前的全面審查 |
+
+## 目前狀態
+
+這是**概念驗證（POC）**，未完成 [SECURITY.md](SECURITY.md) 的強化前，請勿對外開放。
+
+- **測試**（2026-09-30）：後端 pytest 1678 passed；前端 vitest 73 passed、Playwright 97 passed
+- **已知問題與修正狀態**：[`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md)
+- **還沒做的**：正式 SAML IdP、資料庫即時複寫、每租戶獨立金鑰、稽核增量驗證；期限規則尚未經專利師覆核
 
 ## 文件導覽
 
-- **`docs/DECISIONS.md`** — 20 題的最終決策表
-- **`docs/QUESTIONS.md`** — 每題的選項分析（reasoning trace）
-- **`docs/ARCHITECTURE.md`** — 每個決策對應到哪份 code、為什麼
-- **`docs/SECURITY_AUDIT.md`** — 安全自審報告
-- **`CLAUDE.md`** — 給 Claude Code agent 的接手文件（含 TODO list）
+| 想了解 | 看這份 |
+|---|---|
+| 為什麼這樣設計 | [`docs/DECISIONS.md`](docs/DECISIONS.md)、[`docs/QUESTIONS.md`](docs/QUESTIONS.md) |
+| 每個決策對應哪段程式 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| 安全自審與已知問題 | [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md) |
+| 部署與起停 | [`docs/DELIVERY_RUNBOOK.md`](docs/DELIVERY_RUNBOOK.md) |
+| 開發史與接手 | [`HANDOFF.md`](HANDOFF.md)、[`CLAUDE.md`](CLAUDE.md) |
 
-## Demo 帳號
+## 授權
 
-| User | Role | Tenant | 看得到的 case | 用途 |
-|------|------|--------|---------------|------|
-| `alice` | attorney | tenant_a | CASE-2025-001~003 | 跑分析、簽核 |
-| `bob` | paralegal | tenant_a | CASE-2025-001~002 | 看分析、協助擬稿（受限） |
-| `carol` | it_admin | tenant_b | (無) | 看儀表板、配額 |
-| `audit_dave` | auditor | tenant_a | * (全 tenant_a) | 審計、驗 chain |
+[Apache License 2.0](LICENSE)。參與貢獻請見 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-## 實作狀態
-
-多數原始 stub 已在 Day 8–14 衝刺實作完成，由 env knob 切換：
-
-- 真實 LLM 後端：`LLM_MODE=anthropic | local`（Ollama）`| dify`（Dify CE → qwen2.5:7b）
-- 真實 Qdrant：`VECTOR_BACKEND=qdrant`；真實 Redis：`CACHE_BACKEND=redis`
-  （rate-limit / JWT 撤銷亦可 `=redis`）
-- OIDC / SAML / magic link endpoints（stub IdP）已上
-- 本地 WORM audit 封存（`audit_archive.py`，Object Lock 語意）+ audit outbox
-- PDF/DOCX 上傳 + Tesseract 地端 OCR + Vision OCR fallback
-- Prometheus `/metrics`（兩個 service）、備份/還原/DR drill、假日行事曆 fetcher
-
-**測試基準（2026-09-25，未啟動 docker 服務）**：pytest **1615 passed / 48 skipped**、vitest **58 passed**、Playwright **92 passed**。2026-09-25 審查分支的變更（案件機密登錄、稽核 HMAC、NER 遮罩、Sonnet 5 / Haiku 4.5、Qdrant 1.19 hybrid、期限規則等）見 `CHANGELOG.md` 與 `HANDOFF.md` §27–28。
-
-仍未實作（POC 範圍外）：Vision 圖示區域萃取（`pdf_parser.py:476`）、真 IdP
-（Keycloak）、真 S3 Object Lock 目標、audit 遷移 Postgres、RS256、
-streaming replication、Grafana dashboards。
-
-> 完整清單看 `CLAUDE.md` §3「Hardening status」與 `docs/SECURITY_AUDIT.md`。
-
-## 貢獻與安全
-
-- 參與貢獻請見 [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
-- 回報安全漏洞請循 [SECURITY.md](SECURITY.md)（私下揭露，勿開公開 issue）。
-
-## License
-
-[Apache License 2.0](LICENSE) — 自由使用、修改、散布，含明確專利授權條款。
-
-> **資料免責**：`data/cases/` 內的案件皆為合成資料。請勿將任何真實、未公開的客戶案件或可識別個資 commit 進本 repo（這正是本專案要解決的問題）。詳見 [SECURITY.md](SECURITY.md)。
+> **資料說明**：`data/cases/` 內的案件全部是合成資料。請勿 commit 任何真實、未公開的客戶案件或可識別個資——這正是本專案要解決的問題。

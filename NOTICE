@@ -1,8 +1,10 @@
-PatentMind Platform (patentmind-platform)
+CiteWall
 Copyright 2026 Washyu0826
 
-This product was originally developed as part of an
-NCCU GDGoC × Computex 2026 project.
+Student project — a GDG on Campus collaboration with TPIsoftware
+(NCCU GDGoC × Computex 2026). Originally developed under the working name
+"PatentMind"; internal identifiers (log names, Keycloak realm, Dify workflow
+names) still use that name.
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 

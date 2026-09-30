@@ -1026,8 +1026,9 @@ vitest 58 passed; Playwright 92 passed / 33 skipped; ruff clean; eslint 0 errors
    reviewer: `docs/DEADLINE_RULES_REVIEW.md`.
 5. **Real public data**: ✅ removed on 2026-09-26 (PDFs deleted, identifiers replaced,
    delivery screenshots redacted). `TW202617461` is kept as the seed/eval patent number.
-6. **Audit HMAC key rotation is unsupported** — rotating `AUDIT_HMAC_KEY` makes old
-   v2 rows fail verification; needs a key id + multi-key verify.
+6. ✅ **Audit HMAC key rotation** — done in `06e2b0e` (Q21): keyring
+   `AUDIT_HMAC_KEYS` + `AUDIT_HMAC_ACTIVE_KID`, rows carry `hash_key_id`, unknown kid
+   reported `unverifiable` (steps in `ops/README.md`). Remaining: per-tenant keys.
 7. Existing demo `.env` files: `start_demo.sh` now generates `MAPPING_ENCRYPTION_KEY`,
    so mappings written under the old JWT-derived key become undecryptable (placeholders
    stay masked). Real cases must be registered in `data/case_registry.json` or they
