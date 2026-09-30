@@ -20,7 +20,7 @@
 | 2 分析工作台 | 步驟式流程、1366×768 佈局、引用彈出視窗、移除內部編號 | 程式完成，待看畫面、待改 e2e |
 | 3 審閱與匯出 | 全案簽核進度、合併匯出 DOCX | 待做 |
 | 4 其他頁面 | 登入、稽核、案件登錄、手機版 | 待做 |
-| 5 部署 | `docker compose up`（mock 模式）驗證；公開 demo（平台待定，建議 Cloud Run） | 待做 |
+| 5 部署 | `docker compose up`（mock 模式）驗證；公開 demo（平台待定，建議 Cloud Run）；**MinIO 映像檔已從 Docker Hub 移除，需改用支援 S3 Object Lock 的替代方案**（見 FAILURE_LOG E-4） | 待做 |
 | 6 說明書 | 自動截圖 → `docs/USER_GUIDE.md`、README 更新 | 待做 |
 
 ## 進度紀錄

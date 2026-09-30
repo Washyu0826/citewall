@@ -107,6 +107,14 @@
 - **影響**：網站使用條款（是否允許自動擷取）仍未確認，資料收集計畫卡在這一點。
 - **待辦**：手動開啟網頁確認。
 
+## E-4　MinIO 從 Docker Hub 移除映像檔，CI 的服務測試整個沒跑（2026-09-30）
+
+- **現象**：推上 GitHub 後，CI 的 `backend-services` 在拉 `minio/minio:RELEASE.2025-04-22T22-12-26Z` 時失敗（pull access denied），後面的 Postgres／Redis／Qdrant 測試都沒有執行。
+- **原因**：MinIO 自 2025-10 起改為只提供原始碼，並在 2026-09-11 到 14 日之間把 Docker Hub 上的 `minio/minio`、`minio/mc` 整個移除（多個開源專案同時回報）。
+- **影響**：CI 無法驗證 Postgres 路徑，包括 H-10 稽核鏈的 advisory lock；`docker-compose.yml` 的 MinIO 服務也拉不到，稽核 WORM 封存（`ARCHIVE_BACKEND=s3`）在部署時沒有現成的映像檔可用。
+- **暫時處理**：CI 的 MinIO 步驟改為 `continue-on-error`，S3 相關測試會自動略過，其他服務的測試照常執行。
+- **待決定**：替換成支援 **S3 Object Lock** 的方案（需先查證各替代品是否真的支援 WORM），列入部署階段。
+
 ## 待確認的資料不一致
 
 - RTX 3060 的顯存：HANDOFF 記錄 8GB，另一份記錄寫 12GB。

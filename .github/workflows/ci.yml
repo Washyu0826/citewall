@@ -162,7 +162,13 @@ jobs:
           pip install -r backend/requirements.txt
           pip install pillow
 
+      # MinIO removed its images from Docker Hub (2026-09-11..14; it is now a
+      # source-only distribution), so this pull currently fails. Don't let it
+      # take down the Postgres / Redis / Qdrant tests: the S3-archive tests
+      # skip themselves when no endpoint answers. Replacing the Object Lock
+      # target is tracked in docs/FRONTEND_REDESIGN_PLAN.md (phase 5).
       - name: Start MinIO (Object Lock) + create WORM bucket
+        continue-on-error: true
         run: |
           docker run -d --name minio -p 19000:9000 \
             -e MINIO_ROOT_USER=patentmind -e MINIO_ROOT_PASSWORD=patentmind-minio \
