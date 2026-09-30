@@ -119,8 +119,7 @@ CiteWall 不是從零開始，它建立在兩個先前的專案之上：
 
 - **測試**（2026-09-30）：後端 pytest 1678 passed；前端 vitest 73 passed、Playwright 97 passed
 - **已知問題與修正狀態**：[`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md)
-- **還沒做的**：正式 SAML IdP、資料庫即時複寫、每租戶獨立金鑰、稽核增量驗證；期限規則尚未經專利師覆核
-
+- **還沒做的**：正式 SAML IdP、資料庫即時複寫、每租戶獨立金鑰、稽核增量驗證
 ## 八、文件導覽
 
 | 想了解 | 看這份 |
