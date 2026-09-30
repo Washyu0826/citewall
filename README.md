@@ -1,7 +1,7 @@
 # CiteWall   
 
-![Legal Tech](https://img.shields.io/badge/LEGAL_TECH-LAW-243c5a?style=for-the-badge)
-![AI Assistant](https://img.shields.io/badge/AI-ASSISTANT-blue?style=for-the-badge)
+![Legal Tech](https://img.shields.io/badge/Legal_Tech-Law-243c5a)
+![AI Assistant](https://img.shields.io/badge/AI-Assistant-007acc)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 > **台灣專利審查意見（OA）答辯的隱私優先 AI 助手**
