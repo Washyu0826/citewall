@@ -426,7 +426,9 @@ ONE transaction under a cross-process lock — SQLite `BEGIN IMMEDIATE` (writer
 connection `timeout=30`), Postgres `pg_advisory_xact_lock(hashtext('patentmind.audit_chain:<schema>'))`.
 The in-process RLock stays for the shared connection. Test:
 `tests/integration/test_audit_chain_multiprocess.py` (fails on the old code,
-passes now). **Not yet run against a live Postgres** (no server on the dev box).
+passes now). Postgres path: `tests/unit/test_audit_postgres.py` passes against a
+real Postgres 16 in CI (`backend-services`, 2026-09-30) — single writer only; a
+multi-process Postgres race test is still to add.
 
 ### M-12. Cost circuit breaker was global — ✅ FIXED 2026-09-30
 
