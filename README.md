@@ -75,6 +75,14 @@ bash scripts/start_delivery.sh
 
 ## 試玩
 
+| 帳號 | 角色 | 用途 |
+|---|---|---|
+| `alice` | 律師 | 分析、簽核 |
+| `bob` | 助理 | 協助擬稿 |
+| `carol` | IT 管理員 | 儀表板、案件登錄 |
+| `audit_dave` | 稽核員 | 查看與驗證稽核鏈 |
+
+
 | 想看什麼 | 怎麼做 | 會看到 |
 |---|---|---|
 | 引用牆 | 分析後點草稿中的引用 | 來源專利和原文；沒通過驗證的引用顯示為已移除 |
@@ -83,22 +91,16 @@ bash scripts/start_delivery.sh
 | 機密路由 | 案號結尾改成 `-CONF` 再分析 | 稽核紀錄的模型變成地端模型 |
 | 稽核鏈 | 用 audit_dave 登入，進稽核頁 | 按「驗證 hash chain」顯示綠燈 |
 
-| 帳號 | 角色 | 用途 |
-|---|---|---|
-| `alice` | 律師 | 分析、簽核 |
-| `bob` | 助理 | 協助擬稿 |
-| `carol` | IT 管理員 | 儀表板、案件登錄 |
-| `audit_dave` | 稽核員 | 查看與驗證稽核鏈 |
 
 ## 技術棧
 
-**前端** React 19 · Vite 8 · Tailwind 4 · TanStack Query · 繁中/英文 · 深色模式
+**前端 :** React 19 · Vite 8 · Tailwind 4 · TanStack Query · 繁中/英文 · 深色模式
 
-**後端** FastAPI · Qdrant（混合檢索）· Redis · PostgreSQL · MinIO（WORM 封存）· Keycloak（OIDC）
+**後端 :** FastAPI · Qdrant（混合檢索）· Redis · PostgreSQL · MinIO（WORM 封存）· Keycloak（OIDC）
 
-**AI** Dify · Ollama（地端）· Claude（雲端，一般案件可選用）· PaddleOCR-VL（地端 OCR）
+**AI :** Dify · Ollama（地端）· Claude（雲端，一般案件可選用）· PaddleOCR-VL（地端 OCR）
 
-**閘道** digiRunner（TPIsoftware 開源 API 閘道）
+**閘道 :** digiRunner（TPIsoftware 開源 API 閘道）
 
 ## 前案（Prior Art）
 
