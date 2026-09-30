@@ -1,4 +1,4 @@
-# <img src="https://api.iconify.design/lucide:gavel.svg?color=%23d97706" height="32" alt="Law / Gavel" /> CiteWall
+# <img src="https://api.iconify.design/lucide:gavel.svg?color=%23d97706" height="64" alt="Law / Gavel" /> CiteWall
 
 > **台灣專利審查意見（OA）答辯的隱私優先 AI 助手**
 >
