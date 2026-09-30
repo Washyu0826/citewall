@@ -29,7 +29,7 @@
 | 期限算錯就失權 | 多國期限引擎（台、美、日、歐、中、韓），附計算依據 |
 | 出事要能追查 | 每個請求一筆稽核紀錄，雜湊鏈防竄改 |
 
-## 系統架構
+## 一、系統架構
 
 ![CiteWall 架構：從上傳 OA 到申復書草稿的安全管線](presentation/assets/architecture.png)
 
@@ -39,14 +39,14 @@
 2. **遮罩之後才送推論**——個資和客戶識別碼在離開閘道前就換成代碼，對照表只存在地端。
 3. **每個請求都寫一筆稽核**——成功、快取命中、失敗都一樣。
 
-### 資料流
+## 二、資料流
 
 ![每一步都知道資料在誰手上](presentation/assets/flow_data.png)
 
 **實機驗證（2026-06-11）**：前端 → digiRunner → 閘道 → AI 推論引擎 → Dify → Ollama（qwen2.5:7b），
 一次完整分析約 25–28 秒。
 
-## 運作機制
+## 三、運作機制
 
 | 層 | 做什麼 | 擋下什麼 |
 |---|---|---|
@@ -56,24 +56,8 @@
 
 驗證模型只提供參考意見；**「引用是否有效」完全由確定性的程式決定**，即使驗證模型被 prompt injection 攻擊，也放不進捏造的引用。
 
-## 快速開始
 
-不需要任何 API key，預設使用 mock 模型。
-
-```bash
-# 一鍵 demo：後端 + 前端 + 範例資料，自動產生金鑰
-bash scripts/start_demo.sh          # 開啟 http://localhost:5173
-
-# 驗證整條流程（應印出 ALL CHECKS PASSED）
-bash scripts/verify.sh
-
-# 完整交付版：Docker 基礎設施 + digiRunner + Dify（真模型）
-bash scripts/start_delivery.sh
-```
-
-需求：Python 3.13、Node 24。登入密碼為 `demo-帳號`（例如 `demo-alice`）。
-
-## 權限設定
+## 四、權限設定
 
 | 帳號 | 角色 | 用途 |
 |---|---|---|
@@ -91,8 +75,25 @@ bash scripts/start_delivery.sh
 | 機密路由 | 案號結尾改成 `-CONF` 再分析 | 稽核紀錄的模型變成地端模型 |
 | 稽核鏈 | 用 audit_dave 登入，進稽核頁 | 按「驗證 hash chain」顯示綠燈 |
 
+### 快速開始
 
-## 技術棧
+不需要任何 API key，預設使用 mock 模型。
+
+```bash
+# 一鍵 demo：後端 + 前端 + 範例資料，自動產生金鑰
+bash scripts/start_demo.sh          # 開啟 http://localhost:5173
+
+# 驗證整條流程（應印出 ALL CHECKS PASSED）
+bash scripts/verify.sh
+
+# 完整交付版：Docker 基礎設施 + digiRunner + Dify（真模型）
+bash scripts/start_delivery.sh
+```
+
+需求：Python 3.13、Node 24。登入密碼為 `demo-帳號`（例如 `demo-alice`）。
+
+
+## 五、技術棧
 
 - **前端 :** React 19 · Vite 8 · Tailwind 4 · TanStack Query · 繁中/英文 · 深色模式
 
@@ -102,7 +103,7 @@ bash scripts/start_delivery.sh
 
 - **閘道 :** digiRunner（TPIsoftware 開源 API 閘道）
 
-## 前案（Prior Art）
+## 六、前作與研究（Prior Art）
 
 CiteWall 不是從零開始，它建立在兩個先前的專案之上：
 
@@ -111,7 +112,7 @@ CiteWall 不是從零開始，它建立在兩個先前的專案之上：
 | [shin-lee-patent-rag](https://github.com/Washyu0826/shin-lee-patent-rag)（2026-04） | 台灣專利 RAG 問答：bge-m3 + HyDE + reranker，信心不足時拒答，並以 100 篇 TIPO 專利做對照實驗 | 從「找得到」走向「引用可信」：確定性引用硬牆、逐句對齊 |
 | shin-lee（2026-04～06，GDG on Campus 合作） | OA 答辯系統 POC：厚閘道、遮罩、稽核鏈、Dify 與 digiRunner 串接 | 多租戶、分散式正確性、隱私強化，以及公開發布前的全面審查 |
 
-## 目前狀態
+## 七、開發階段
 
 這是**概念驗證（POC）**，未完成 [SECURITY.md](SECURITY.md) 的強化前，請勿對外開放。
 
@@ -119,7 +120,7 @@ CiteWall 不是從零開始，它建立在兩個先前的專案之上：
 - **已知問題與修正狀態**：[`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md)
 - **還沒做的**：正式 SAML IdP、資料庫即時複寫、每租戶獨立金鑰、稽核增量驗證；期限規則尚未經專利師覆核
 
-## 文件導覽
+## 八、文件導覽
 
 | 想了解 | 看這份 |
 |---|---|
@@ -129,7 +130,7 @@ CiteWall 不是從零開始，它建立在兩個先前的專案之上：
 | 部署與起停 | [`docs/DELIVERY_RUNBOOK.md`](docs/DELIVERY_RUNBOOK.md) |
 | 開發史與接手 | [`HANDOFF.md`](HANDOFF.md)、[`CLAUDE.md`](CLAUDE.md) |
 
-## 授權
+## 九、授權
 
 [Apache License 2.0](LICENSE)。參與貢獻請見 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
