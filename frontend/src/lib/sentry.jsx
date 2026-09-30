@@ -13,6 +13,8 @@
 /* eslint-disable react-refresh/only-export-components */
 import { Component, useEffect, useState } from 'react';
 
+import { scrubSentryEvent } from './sentryScrub.js';
+
 let _enabled = false;
 let _Boundary = null; // resolved Sentry.ErrorBoundary component
 
@@ -40,8 +42,12 @@ export async function initSentry() {
       release: import.meta.env.VITE_SENTRY_RELEASE || undefined,
       integrations: [Sentry.browserTracingIntegration()],
       tracesSampleRate: Number(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE ?? 0.1),
-      // Don't send PII by default — OA text might be confidential.
+      // sendDefaultPii only covers IP / cookies / identity. Exception messages,
+      // breadcrumbs (console, fetch) and request data can still quote OA text,
+      // so every event is scrubbed before it leaves the browser.
       sendDefaultPii: false,
+      beforeSend: (event) => scrubSentryEvent(event),
+      beforeSendTransaction: (event) => scrubSentryEvent(event),
     });
     _Boundary = Sentry.ErrorBoundary;
     _enabled = true;

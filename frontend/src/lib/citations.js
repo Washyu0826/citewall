@@ -30,3 +30,26 @@ export function buildCitationLookup(relatedPriorArt) {
 export function lookupForRejection(lookup, rejectionId) {
   return lookup?.[rejectionId] || lookup?.[FALLBACK_KEY] || {};
 }
+
+/**
+ * The retrieval hits that ground ONE rejection's draft, in [GROUNDED_REF_n]
+ * order, each flagged with whether the examiner also cited that patent.
+ *
+ * The references panel used to show only hits whose patent the examiner had
+ * cited — so a draft's [GROUNDED_REF_n] often pointed at a passage the panel
+ * never displayed. Grounding is per rejection (metadata.rejection_id), so the
+ * panel must be too. Untagged hits (older gateway) fall back to the cited
+ * filter.
+ */
+export function hitsForRejection(result, rejectionId) {
+  const rejection = (result?.oa?.rejections || []).find((r) => r.rejection_id === rejectionId);
+  const cited = new Set(rejection?.cited_prior_art || []);
+  const all = result?.related_prior_art || [];
+  const tagged = all.some((h) => h?.metadata?.rejection_id);
+  const hits = tagged
+    ? all
+        .filter((h) => h?.metadata?.rejection_id === rejectionId)
+        .sort((a, b) => (a.metadata.ref_index || 0) - (b.metadata.ref_index || 0))
+    : all.filter((h) => cited.has(h.patent_no));
+  return hits.map((h) => ({ ...h, examinerCited: cited.has(h.patent_no) }));
+}

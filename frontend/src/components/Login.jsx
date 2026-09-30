@@ -45,7 +45,7 @@ const DEMO_USERS = [
  * no gradient / card shadows / marketing value bullets. Identity selection
  * is a plain bordered list. Conservative navy + amber accent palette.
  *
- * Contract preserved for e2e: a "PatentMind" brand string, one <button>
+ * Contract preserved for e2e: a "CiteWall" brand string, one <button>
  * per identity whose accessible name contains the person's name, and the
  * error surfaced as <div role="alert">.
  */
@@ -98,7 +98,7 @@ export default function Login({ onLogin }) {
       <header className="border-b-4 border-amber-400 bg-navy-900 text-white">
         <div className="mx-auto flex h-16 max-w-5xl items-center gap-3 px-6">
           <div className="flex h-9 w-9 items-center justify-center rounded bg-white/10 text-sm font-bold ring-1 ring-white/20">
-            PM
+            CW
           </div>
           <div className="leading-tight">
             <div className="text-base font-semibold tracking-tight">{t('app_title')}</div>

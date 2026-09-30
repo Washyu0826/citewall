@@ -100,6 +100,8 @@ export const api = {
   magicConsume: (token) => call('/v1/auth/magic/consume', { method: 'POST', body: { token } }),
   // H-5: revoke the session jti server-side so the token dies with the logout.
   logout: (token) => call('/v1/auth/logout', { method: 'POST', token }),
+  // Cases the caller may open (dashboard / case list). No case_id in the URL.
+  cases: (token) => call('/v1/cases', { token }),
   quota: (token, case_id) =>
     call(`/v1/quota?case_id=${encodeURIComponent(case_id || '')}`, { token }),
   analyze: (token, payload) =>
@@ -117,6 +119,15 @@ export const api = {
   // caller can surface the sign-off-required message instead of swallowing it.
   exportDraft: (token, payload) =>
     call('/v1/oa/export', {
+      method: 'POST',
+      token,
+      body: payload,
+      headers: { 'X-Case-Id': payload.case_id },
+    }),
+  // Whole-response export: every rejection's reviewed sentences in one DOCX,
+  // same sign-off gate as exportDraft (409 without attorney_signoff).
+  exportResponse: (token, payload) =>
+    call('/v1/oa/export_response', {
       method: 'POST',
       token,
       body: payload,

@@ -16,7 +16,7 @@ import { useTheme } from '../lib/theme.jsx';
 import { toast } from '../lib/toast.jsx';
 
 /**
- * PatentMind Design System — 內部視覺審稿頁（/design，免登入）。
+ * CiteWall Design System — 內部視覺審稿頁（/design，免登入）。
  *
  * 每張卡都用「真實 token + 真實元件 class」render：色票直接取
  * tailwind.config.js 的 navy 階、Badge/Button 用 ui/ 的真元件、簽核三態
@@ -60,10 +60,10 @@ export default function DesignSystem() {
         <div>
           <div className="mb-1 flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-md bg-navy-900 text-xs font-bold text-white dark:bg-navy-700">
-              PM
+              CW
             </span>
             <h1 className="text-2xl font-bold text-navy-900 dark:text-navy-100">
-              PatentMind Design System
+              CiteWall Design System
             </h1>
           </div>
           <p className="text-sm text-slate-500 dark:text-slate-400">
@@ -423,7 +423,7 @@ export default function DesignSystem() {
           </div>
           <div className="overflow-hidden rounded-lg border dark:border-slate-700">
             <div className="flex items-center justify-between bg-navy-900 px-3 py-2 text-white dark:bg-navy-800">
-              <span className="text-sm font-semibold">PatentMind AI</span>
+              <span className="text-sm font-semibold">CiteWall</span>
               <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-2xs text-emerald-300">
                 ✓ 紀錄已驗證
               </span>
@@ -448,7 +448,7 @@ export default function DesignSystem() {
       </main>
 
       <footer className="mx-auto mt-8 max-w-6xl text-center text-2xs text-slate-400 dark:text-slate-600">
-        PatentMind Design System v1 · 與 docs/DESIGN_SYSTEM.md 對照 · 此頁不出現在正式導覽，僅供
+        CiteWall Design System v1 · 與 docs/DESIGN_SYSTEM.md 對照 · 此頁不出現在正式導覽，僅供
         /design 直接訪問審稿
       </footer>
     </div>

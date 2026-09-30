@@ -1,87 +1,109 @@
+/* eslint-disable react-refresh/only-export-components -- navItemsForRole is shared with App.jsx */
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Cloud,
   FileSearch,
-  Folder,
+  FolderOpen,
+  Home,
+  Languages,
   Lock,
   LogOut,
+  Moon,
   ScrollText,
   Server,
   Shield,
   ShieldAlert,
   ShieldCheck,
-  Cloud,
-  Languages,
   Sun,
-  Moon,
+  UserRound,
 } from 'lucide-react';
 
-import { useAuditVerify } from '../api/queries.js';
+import { useAuditVerify, useCases } from '../api/queries.js';
 import i18n, { htmlLangFor } from '../lib/i18n';
 import { useTheme } from '../lib/theme.jsx';
-import { Button } from './ui/button.jsx';
-import { Badge } from './ui/badge.jsx';
-import StackStatus from './StackStatus.jsx';
+import { useCurrentCase } from '../lib/currentCase.jsx';
+import { isConfidentialLevel } from '../lib/cases.js';
 import { chainChipView } from '../lib/chainChip.js';
+import { cn } from '../lib/utils';
+import { Badge } from './ui/badge.jsx';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  Tooltip,
+  TooltipProvider,
+} from './ui/overlay.jsx';
+import StackStatus from './StackStatus.jsx';
+import { DeadlineCell, SecurityBadge } from './cases/CaseBits.jsx';
 
 /**
- * Day 9C — CHUNK-1 + CHUNK-8 app shell.
+ * Authenticated chrome: brand bar (case switcher, audit-chain chip, account
+ * menu), trust band, role-aware navigation and — for IT/audit roles only —
+ * the integration status footer.
  *
- * Single source of truth for the chrome around every authenticated page:
- *
- *   • Top bar (navy.900): brand left + chain-verify chip + user/role/logout right
- *   • Trust band: three persistent chips (Redaction, Mapping, Routing)
- *   • Left nav rail (collapsible): Analyze / Cases / Audit
- *
- * Children render inside <main>. The three-pane Analyze grid and AuditView's
- * own scrollable content are deliberately untouched — this shell only owns
- * the chrome, not the layout inside each route.
- *
- * Why a single shell instead of duplicating the header per-route:
- *   1. The trust band (CHUNK-8) MUST appear on every page (PRODUCT_STRATEGY
- *      §10 — "make trust visible" / CLAUDE.md invariants #3, #4, #6, #7).
- *      Mounting it once at shell level guarantees no route can ship without it.
- *   2. The chain-verify chip polls every 60s; mounting it inside a route
- *      would tear down the interval on navigation, defeating the polling.
- *
- * `trustContext` lets the active route inject runtime info (entity counts,
- * current case_id) without the shell having to import from those routes.
+ * Trust signals come from the server: the routing chip reads the current
+ * case's security level from GET /v1/cases, never from the shape of the
+ * case_id (unregistered cases are confidential server-side, so guessing from
+ * a "-CONF" suffix would under-report them).
  */
+
+export const CASE_ROLES = ['attorney', 'paralegal'];
+const CASE_LIST_ROLES = ['attorney', 'paralegal', 'auditor'];
+
+export function navItemsForRole(role) {
+  switch (role) {
+    case 'auditor':
+      return [
+        { id: 'audit', to: '/audit', labelKey: 'nav.audit', Icon: ScrollText },
+        { id: 'cases', to: '/cases', labelKey: 'nav.cases', Icon: FolderOpen },
+      ];
+    case 'it_admin':
+      return [
+        { id: 'admin-cases', to: '/admin/cases', labelKey: 'nav.admin_cases', Icon: Shield },
+        { id: 'audit', to: '/audit', labelKey: 'nav.audit', Icon: ScrollText },
+      ];
+    default:
+      return [
+        { id: 'home', to: '/home', labelKey: 'nav.home', Icon: Home },
+        { id: 'cases', to: '/cases', labelKey: 'nav.cases', Icon: FolderOpen },
+        { id: 'analyze', to: '/analyze', labelKey: 'nav.analyze', Icon: FileSearch },
+      ];
+  }
+}
+
 export default function AppShell({ session, onLogout, children, trustContext }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const [navCollapsed, setNavCollapsed] = useState(false);
+  const role = session?.role;
 
-  const isAuditor = session?.role === 'auditor';
-  const isItAdmin = session?.role === 'it_admin';
-  const auditScope = isAuditor ? 'global' : 'tenant';
-  const canCallAudit = isAuditor || isItAdmin;
+  const isAuditor = role === 'auditor';
+  const canCallAudit = isAuditor || role === 'it_admin';
+  const canListCases = CASE_LIST_ROLES.includes(role);
 
-  // CHUNK-8 — poll chain verify so the chip reflects real state. P1③: this is
-  // now a TanStack Query that SHARES its key (['audit','verify',scope]) with
-  // the AuditView page, so the chip + the page no longer issue two separate
-  // verify requests. Polls every 60s; only enabled for audit-capable roles.
-  const verifyQ = useAuditVerify(session?.token, auditScope, {
+  const verifyQ = useAuditVerify(session?.token, isAuditor ? 'global' : 'tenant', {
     poll: true,
     enabled: canCallAudit,
   });
+  const casesQ = useCases(session?.token, canListCases);
+  const cases = casesQ.data?.cases;
+
   const auditState = useMemo(() => {
     if (!canCallAudit) return { status: 'idle', verified: 0, broken: 0, error: null };
     if (verifyQ.error) {
-      return {
-        status: 'fail',
-        verified: 0,
-        broken: 0,
-        error: verifyQ.error?.message || 'verify failed',
-      };
+      return { status: 'fail', verified: 0, broken: 0, error: verifyQ.error?.message || 'verify failed' };
     }
     if (!verifyQ.data) return { status: 'idle', verified: 0, broken: 0, error: null };
-    // verify_global_chain returns broken as list[tuple]; verify_chain returns
-    // list[str]. Length is the right signal either way.
     const brokenCount = Array.isArray(verifyQ.data.broken) ? verifyQ.data.broken.length : 0;
     return {
       status: brokenCount === 0 ? 'ok' : 'fail',
@@ -92,63 +114,53 @@ export default function AppShell({ session, onLogout, children, trustContext }) 
   }, [canCallAudit, verifyQ.data, verifyQ.error]);
 
   const navItems = useMemo(
-    () => [
-      { id: 'analyze', to: '/analyze', label: t('nav.analyze'), Icon: FileSearch },
-      { id: 'cases', to: '/cases', label: t('nav.cases'), Icon: Folder },
-      { id: 'audit', to: '/audit', label: t('nav.audit'), Icon: ScrollText },
-      // Q27: case-registry admin, it_admin only (route is not mounted otherwise).
-      ...(isItAdmin
-        ? [{ id: 'admin-cases', to: '/admin/cases', label: t('admin.nav'), Icon: Shield }]
-        : []),
-    ],
-    [t, isItAdmin]
+    () => navItemsForRole(role).map((item) => ({ ...item, label: t(item.labelKey) })),
+    [role, t]
   );
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <TopBar
-        session={session}
-        onLogout={onLogout}
-        auditState={auditState}
-        canCallAudit={canCallAudit}
-        onNavigateAudit={() => navigate('/audit')}
-        t={t}
-      />
-      <TrustBand session={session} trustContext={trustContext} t={t} />
-      <div className="flex flex-1">
-        <NavRail
-          items={navItems}
-          collapsed={navCollapsed}
-          setCollapsed={setNavCollapsed}
-          activePath={location.pathname}
-          onNavigate={navigate}
-          t={t}
+    <TooltipProvider>
+      <div className="flex min-h-screen flex-col bg-surface text-fg">
+        <a
+          href="#main"
+          className="sr-only z-50 rounded bg-surface-raised px-3 py-2 text-sm font-medium text-fg focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+        >
+          {t('nav.skip_to_content')}
+        </a>
+        <TopBar
+          session={session}
+          onLogout={onLogout}
+          auditState={auditState}
+          canCallAudit={canCallAudit}
+          onNavigateAudit={() => navigate('/audit')}
+          cases={CASE_ROLES.includes(role) ? cases : null}
+          onOpenCase={() => navigate('/analyze')}
+          onAllCases={() => navigate('/cases')}
         />
-        <main className="min-w-0 flex-1">{children}</main>
+        <TrustBand
+          session={session}
+          trustContext={trustContext}
+          cases={cases}
+          onWorkspace={location.pathname === '/analyze'}
+        />
+        <div className="flex min-h-0 flex-1">
+          <NavRail
+            items={navItems}
+            collapsed={navCollapsed}
+            setCollapsed={setNavCollapsed}
+            activePath={location.pathname}
+            onNavigate={navigate}
+            t={t}
+          />
+          <main id="main" tabIndex={-1} className="min-w-0 flex-1 focus:outline-none">
+            {children}
+          </main>
+        </div>
+        {/* Integration lights matter to IT / audit, not to the attorney
+            reading drafts all day (UX_REVIEW M3). */}
+        {canCallAudit && <ShellFooter t={t} />}
       </div>
-      <ShellFooter t={t} />
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Footer — integration stack status + build tag                            */
-/* -------------------------------------------------------------------------- */
-
-function ShellFooter({ t }) {
-  // Sticky so the integration chips stay visible without scrolling — the
-  // Analyze page is taller than the viewport and the chips are the demo's
-  // "the whole stack is alive" cue. Solid background + border keeps content
-  // legible when it slides underneath.
-  return (
-    <footer className="sticky bottom-0 z-20 border-t border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
-      <div className="mx-auto flex max-w-[1920px] flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 sm:px-6">
-        <StackStatus />
-        <span className="ml-auto hidden text-2xs text-slate-400 dark:text-slate-500 sm:inline">
-          {t('landing.footer')}
-        </span>
-      </div>
-    </footer>
+    </TooltipProvider>
   );
 }
 
@@ -156,61 +168,143 @@ function ShellFooter({ t }) {
 /*  Top bar                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function TopBar({ session, onLogout, auditState, canCallAudit, onNavigateAudit, t }) {
-  const roleKey = `shell.role_badge.${session?.role || 'attorney'}`;
+function TopBar({ session, onLogout, auditState, canCallAudit, onNavigateAudit, cases, onOpenCase, onAllCases }) {
+  const { t } = useTranslation();
   return (
-    <header className="bg-navy-900 text-white shadow-xs">
-      <div className="mx-auto flex h-14 max-w-[1920px] items-center gap-4 px-4 sm:px-6">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-white/10 text-sm font-bold ring-1 ring-white/20 backdrop-blur-sm">
-            PM
+    <header className="border-b-2 border-accent bg-brand text-white">
+      <div className="mx-auto flex h-14 max-w-[1920px] items-center gap-3 px-4 sm:px-6">
+        <div className="flex shrink-0 items-center gap-2.5">
+          <div
+            className="flex h-8 w-8 items-center justify-center rounded-brand bg-white text-sm font-bold tracking-tight text-navy-900"
+            aria-hidden="true"
+          >
+            CW
           </div>
-          <span className="whitespace-nowrap text-sm font-semibold tracking-tight sm:text-base">
-            {t('app_title')}
+          <span className="text-base font-semibold tracking-tight">{t('app_title')}</span>
+          <span className="hidden rounded bg-white/10 px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-navy-100 ring-1 ring-white/15 md:inline">
+            {t('app_tag_poc')}
           </span>
         </div>
 
-        <div className="ml-auto flex items-center gap-2 sm:gap-3">
-          <LanguageToggle />
-          <ThemeToggle />
-          <ChainChip
-            state={auditState}
-            canCallAudit={canCallAudit}
-            onClick={onNavigateAudit}
-            t={t}
-          />
-          {session && (
-            <div className="hidden items-center gap-3 sm:flex">
-              <div className="text-right text-xs leading-tight">
-                <div className="font-medium text-white">{session.display_name}</div>
-                <div className="text-2xs text-navy-200">
-                  <span className="font-mono">{session.tenant_id}</span>
-                </div>
-              </div>
-              <span className="rounded-full bg-white/10 px-2 py-0.5 text-2xs font-medium uppercase tracking-wider text-navy-50 ring-1 ring-white/15">
-                {t(roleKey, { defaultValue: session.role })}
-              </span>
-            </div>
-          )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            onClick={onLogout}
-            className="gap-1.5 bg-white/10 text-white ring-1 ring-white/15 hover:bg-white/20 hover:text-white"
-            aria-label={t('buttons.logout')}
-          >
-            <LogOut className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
-            <span className="hidden sm:inline">{t('buttons.logout')}</span>
-          </Button>
+        {cases && <CaseSwitcher cases={cases} onOpenCase={onOpenCase} onAllCases={onAllCases} />}
+
+        <div className="ml-auto flex items-center gap-2">
+          <ChainChip state={auditState} canCallAudit={canCallAudit} onClick={onNavigateAudit} t={t} />
+          <div className="hidden items-center gap-2 sm:flex">
+            <LanguageToggle />
+            <ThemeToggle />
+          </div>
+          <AccountMenu session={session} onLogout={onLogout} />
         </div>
       </div>
     </header>
   );
 }
 
+function CaseSwitcher({ cases, onOpenCase, onAllCases }) {
+  const { t } = useTranslation();
+  const { caseId, setCaseId } = useCurrentCase();
+  const current = cases.find((c) => c.case_id === caseId);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        data-testid="case-switcher"
+        className="ml-2 hidden min-w-0 max-w-xs items-center gap-2 rounded-brand bg-white/10 px-3 py-1.5 text-left text-sm ring-1 ring-white/15 hover:bg-white/15 md:flex"
+      >
+        <span className="text-navy-100">{t('case_switcher.label')}</span>
+        <span className="truncate font-mono font-medium">{caseId || t('case_switcher.none')}</span>
+        {caseId && (current ? isConfidentialLevel(current.security_level) : true) && (
+          <Lock className="h-3.5 w-3.5 shrink-0 text-purple-200" aria-hidden="true" />
+        )}
+        <ChevronDown className="h-4 w-4 shrink-0 text-navy-100" aria-hidden="true" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-96">
+        <DropdownMenuLabel>{t('case_switcher.choose')}</DropdownMenuLabel>
+        {cases.length === 0 && (
+          <p className="px-2.5 py-2 text-sm text-fg-muted">{t('case_switcher.empty')}</p>
+        )}
+        {cases.map((c) => (
+          <DropdownMenuItem
+            key={c.case_id}
+            onSelect={() => {
+              setCaseId(c.case_id);
+              onOpenCase();
+            }}
+            className="flex-col items-stretch gap-1.5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 font-mono text-sm font-medium text-fg">
+                {c.case_id === caseId && <Check className="h-3.5 w-3.5 text-brand-fg" aria-hidden="true" />}
+                {c.case_id}
+              </span>
+              <SecurityBadge level={c.security_level} size="sm" />
+            </div>
+            {c.last_analysis?.statutory_deadline && <DeadlineCell iso={c.last_analysis.statutory_deadline} />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onAllCases}>
+          <FolderOpen className="h-4 w-4" aria-hidden="true" />
+          {t('case_switcher.all_cases')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function AccountMenu({ session, onLogout }) {
+  const { t } = useTranslation();
+  const { theme, setTheme } = useTheme();
+  const isDark = theme === 'dark';
+  const isZh = (i18n.language || '').startsWith('zh');
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        data-testid="account-menu"
+        aria-label={t('account.menu')}
+        className="flex items-center gap-2 rounded-brand px-2 py-1.5 hover:bg-white/10"
+      >
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/20">
+          <UserRound className="h-4 w-4" aria-hidden="true" />
+        </span>
+        <span className="hidden text-left leading-tight lg:block">
+          <span className="block text-sm font-medium">{session?.display_name}</span>
+          <span className="block text-2xs text-navy-100">
+            {t(`shell.role_badge.${session?.role || 'attorney'}`, { defaultValue: session?.role })}
+          </span>
+        </span>
+        <ChevronDown className="h-4 w-4 text-navy-100" aria-hidden="true" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="w-64">
+        <div className="px-2.5 py-2">
+          <p className="text-xs text-fg-muted">{t('account.signed_in_as')}</p>
+          <p className="text-sm font-medium text-fg">{session?.display_name}</p>
+          <p className="mt-1 text-xs text-fg-muted">
+            {t('account.tenant')}：<span className="font-mono">{session?.tenant_id}</span>
+          </p>
+        </div>
+        <DropdownMenuSeparator />
+        {/* Language + theme live here too so phones can reach them (UX_REVIEW A8). */}
+        <DropdownMenuItem onSelect={() => applyLanguage(isZh ? 'en' : 'zh-TW')}>
+          <Languages className="h-4 w-4" aria-hidden="true" />
+          {t('account.language')}：{isZh ? 'English' : '繁體中文'}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => setTheme(isDark ? 'light' : 'dark')}>
+          {isDark ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
+          {isDark ? t('account.theme_light') : t('account.theme_dark')}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onLogout} data-testid="logout">
+          <LogOut className="h-4 w-4" aria-hidden="true" />
+          {t('account.logout')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
-/*  Language toggle — zh-TW / EN                                              */
+/*  Language / theme                                                          */
 /* -------------------------------------------------------------------------- */
 
 const LANG_KEY = 'pm.lang';
@@ -231,7 +325,6 @@ function LanguageToggle() {
   const { t } = useTranslation();
   const [lang, setLang] = useState(i18n.language || 'zh-TW');
 
-  // Restore persisted choice once on mount.
   useEffect(() => {
     let saved = null;
     try {
@@ -244,27 +337,38 @@ function LanguageToggle() {
     setLang(initial);
   }, []);
 
-  const choose = (lng) => {
-    applyLanguage(lng);
-    setLang(lng);
-  };
+  useEffect(() => {
+    const onChange = (lng) => setLang(lng);
+    i18n.on('languageChanged', onChange);
+    return () => i18n.off('languageChanged', onChange);
+  }, []);
 
   const isZh = (lang || '').startsWith('zh');
-
   return (
     <div
-      className="flex items-center gap-0.5 rounded-md bg-white/10 p-0.5 ring-1 ring-white/15"
+      className="flex items-center rounded-brand bg-white/10 p-0.5 ring-1 ring-white/15"
       role="group"
       aria-label={t('shell_extra.language')}
     >
-      <Languages
-        className="ml-1 mr-0.5 hidden h-3.5 w-3.5 text-navy-100 sm:block"
-        strokeWidth={1.75}
-        aria-hidden="true"
-      />
-      <LangButton active={isZh} onClick={() => choose('zh-TW')} label="繁中" />
-      <LangButton active={!isZh} onClick={() => choose('en')} label="EN" />
+      <LangButton active={isZh} onClick={() => applyLanguage('zh-TW')} label="繁中" />
+      <LangButton active={!isZh} onClick={() => applyLanguage('en')} label="EN" />
     </div>
+  );
+}
+
+function LangButton({ active, onClick, label }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'rounded px-2 py-1 text-xs font-medium transition-colors',
+        active ? 'bg-white text-navy-900' : 'text-navy-50 hover:bg-white/15'
+      )}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -280,34 +384,14 @@ function ThemeToggle() {
       onClick={() => setTheme(isDark ? 'light' : 'dark')}
       aria-label={label}
       title={label}
-      className="inline-flex items-center justify-center rounded-md bg-white/10 p-1.5 text-navy-50 ring-1 ring-white/15 hover:bg-white/20"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-brand bg-white/10 text-navy-50 ring-1 ring-white/15 hover:bg-white/20"
     >
-      {isDark ? (
-        <Sun className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
-      ) : (
-        <Moon className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
-      )}
-    </button>
-  );
-}
-
-function LangButton({ active, onClick, label }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`whitespace-nowrap rounded px-1.5 py-0.5 text-2xs font-medium transition-colors ${
-        active ? 'bg-white text-navy-900' : 'text-navy-50 hover:bg-white/15'
-      }`}
-    >
-      {label}
+      {isDark ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
     </button>
   );
 }
 
 function ChainChip({ state, canCallAudit, onClick, t }) {
-  // Label/tone decision is pure — see lib/chainChip.js (unit-tested).
   const { failed, tone, labelKey } = chainChipView(state, canCallAudit);
   const Icon = failed ? ShieldAlert : ShieldCheck;
   const label = t(labelKey);
@@ -321,33 +405,54 @@ function ChainChip({ state, canCallAudit, onClick, t }) {
       onClick={onClick}
       data-testid="trust-chain-chip"
       aria-label={rowsText ? `${label} · ${rowsText}` : label}
-      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition-colors ${tone}`}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-brand px-2.5 py-1 text-xs font-medium ring-1 transition-colors',
+        tone
+      )}
       title={failed ? t('shell.audit_chip.fail') : t('shell.audit_chip.tooltip')}
     >
       <Icon className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
-      {/* Icon-only on phones (the name stays on aria-label); text from sm. */}
       <span className="hidden whitespace-nowrap sm:inline">{label}</span>
-      {rowsText && (
-        <span className="hidden font-mono text-2xs opacity-80 sm:inline">· {rowsText}</span>
-      )}
+      {rowsText && <span className="hidden font-mono opacity-80 xl:inline">· {rowsText}</span>}
     </button>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Trust band — CHUNK-8                                                      */
+/*  Trust band                                                                */
 /* -------------------------------------------------------------------------- */
 
-function TrustBand({ session, trustContext, t }) {
-  const caseId = trustContext?.caseId || '';
-  const isConfidential = typeof caseId === 'string' && caseId.toUpperCase().endsWith('-CONF');
-  const maskedCount = trustContext?.maskedEntityCount ?? 0;
+function TrustBand({ session, trustContext, cases, onWorkspace }) {
+  const { t } = useTranslation();
+  const { caseId } = useCurrentCase();
+  // In the workspace the case being analysed (reported by Analyze) is the one
+  // whose routing matters; elsewhere it is the selected case.
+  const activeCase = (onWorkspace && trustContext?.caseId) || caseId || '';
+  const maskedCount = onWorkspace ? (trustContext?.maskedEntityCount ?? 0) : 0;
+  const row = cases?.find((c) => c.case_id === activeCase);
+  // Fail-closed: a case we don't have a registry answer for is confidential.
+  const level = row?.security_level;
+  const confidential = activeCase ? (level ? isConfidentialLevel(level) : true) : false;
+
+  let routing;
+  if (!activeCase) {
+    routing = { tone: 'neutral', Icon: Cloud, label: t('case_switcher.none'), hint: t('security.unknown_hint') };
+  } else if (confidential) {
+    routing = {
+      tone: 'confidential',
+      Icon: Lock,
+      label: t('shell.trust.routing_confidential'),
+      hint: level ? t('security.confidential_hint') : t('security.unknown_hint'),
+    };
+  } else {
+    routing = { tone: 'success', Icon: Cloud, label: t('shell.trust.routing_auto'), hint: t('security.public_hint') };
+  }
 
   return (
-    <div className="border-b border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+    <div className="border-b border-line bg-surface-raised">
       <div
         data-testid="trust-band"
-        className="mx-auto flex max-w-[1920px] flex-wrap items-center gap-2 px-4 py-2 sm:px-6"
+        className="mx-auto flex max-w-[1920px] flex-wrap items-center gap-2 px-4 py-1.5 sm:px-6"
       >
         <TrustChip
           testId="trust-redaction"
@@ -358,116 +463,109 @@ function TrustBand({ session, trustContext, t }) {
               ? t('shell.trust.redaction_active', { count: maskedCount })
               : t('shell.trust.redaction_default')
           }
-          title={t('shell.trust.redaction_tooltip')}
+          hint={t('shell.trust.redaction_tooltip')}
         />
         <TrustChip
           testId="trust-mapping"
           Icon={Server}
           tone="neutral"
           label={t('shell.trust.mapping_default')}
-          title={t('shell.trust.mapping_tooltip')}
+          hint={t('shell.trust.mapping_tooltip')}
         />
-        <TrustChip
-          testId="trust-routing"
-          Icon={isConfidential ? Lock : Cloud}
-          tone={isConfidential ? 'confidential' : 'success'}
-          label={
-            isConfidential ? t('shell.trust.routing_confidential') : t('shell.trust.routing_auto')
-          }
-          title={
-            isConfidential
-              ? t('shell.trust.routing_tooltip_conf')
-              : t('shell.trust.routing_tooltip_auto')
-          }
-        />
+        <TrustChip testId="trust-routing" Icon={routing.Icon} tone={routing.tone} label={routing.label} hint={routing.hint} />
         {session?.tenant_id && (
-          <div className="ml-auto flex items-center gap-1.5 font-mono text-2xs text-slate-500">
-            <span>{t('shell_extra.tenant')}</span>
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+          <span className="ml-auto hidden items-center gap-1.5 text-xs text-fg-muted sm:flex">
+            {t('shell_extra.tenant')}
+            <span className="rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-fg-secondary">
               {session.tenant_id}
             </span>
-          </div>
+          </span>
         )}
       </div>
     </div>
   );
 }
 
-function TrustChip({ Icon, label, title, tone, testId }) {
-  // Tone is now a semantic STATUS_TONE key (brand/neutral/success/confidential/
-  // warning/error); the Badge component owns the tone→class mapping so it stays
-  // in one place and every class string is static for the JIT scanner.
+function TrustChip({ Icon, label, hint, tone, testId }) {
   return (
-    <Badge data-testid={testId} title={title} tone={tone}>
-      <Icon className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
-      <span>{label}</span>
-    </Badge>
+    <Tooltip content={hint}>
+      <Badge data-testid={testId} tone={tone} tabIndex={0} aria-description={hint}>
+        <Icon className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+        <span>{label}</span>
+      </Badge>
+    </Tooltip>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Left nav rail                                                             */
+/*  Navigation                                                                */
 /* -------------------------------------------------------------------------- */
 
 function NavRail({ items, collapsed, setCollapsed, activePath, onNavigate, t }) {
-  // Mobile (< sm): the rail collapses to an icon strip but stays visible —
-  // the old POC had a top-bar inline nav at every viewport, so existing
-  // e2e tests still need a clickable "Audit" button on iPhone X.
-  // Desktop: respects the user's expand/collapse preference.
   return (
     <nav
       aria-label={t('nav.primary')}
       data-testid="nav-rail"
-      className={`flex shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] duration-150 dark:border-slate-700 dark:bg-slate-900 ${
-        collapsed ? 'sm:w-16' : 'sm:w-60'
-      } w-16`}
+      className={cn(
+        'flex w-16 shrink-0 flex-col border-r border-line bg-surface-raised transition-[width] duration-150',
+        collapsed ? 'sm:w-16' : 'sm:w-56'
+      )}
     >
-      <div className="flex-1 space-y-1 px-2 py-3">
+      <ul className="flex-1 space-y-1 px-2 py-3">
         {items.map(({ id, to, label, Icon }) => {
           const isActive = activePath === to || activePath.startsWith(to + '/');
           return (
-            <Button
-              key={id}
-              type="button"
-              variant="ghost"
-              onClick={() => onNavigate(to)}
-              aria-current={isActive ? 'page' : undefined}
-              aria-label={label}
-              title={label}
-              className={`group w-full justify-start gap-3 px-3 py-2 ${
-                isActive
-                  ? 'bg-navy-50 text-navy-900 ring-1 ring-navy-200 hover:bg-navy-50 hover:text-navy-900 dark:bg-navy-900/40 dark:text-navy-100 dark:ring-navy-800 dark:hover:bg-navy-900/40 dark:hover:text-navy-100'
-                  : ''
-              }`}
-            >
-              <Icon
-                className={`h-5 w-5 shrink-0 ${isActive ? 'text-navy-700 dark:text-navy-300' : 'text-slate-500 dark:text-slate-400'}`}
-                strokeWidth={1.75}
-                aria-hidden="true"
-              />
-              <span className={`truncate ${collapsed ? 'hidden' : 'hidden sm:inline'}`}>
-                {label}
-              </span>
-            </Button>
+            <li key={id}>
+              <Tooltip content={collapsed ? label : null} side="right">
+                <button
+                  type="button"
+                  onClick={() => onNavigate(to)}
+                  aria-current={isActive ? 'page' : undefined}
+                  aria-label={label}
+                  data-testid={`nav-${id}`}
+                  className={cn(
+                    'relative flex h-10 w-full items-center gap-3 rounded-brand px-3 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-brand-soft text-brand-fg'
+                      : 'text-fg-secondary hover:bg-surface-hover hover:text-fg'
+                  )}
+                >
+                  {isActive && (
+                    <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-accent" aria-hidden="true" />
+                  )}
+                  <Icon className="h-5 w-5 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                  <span className={cn('truncate', collapsed ? 'hidden' : 'hidden sm:inline')}>{label}</span>
+                </button>
+              </Tooltip>
+            </li>
           );
         })}
-      </div>
-      <div className="hidden border-t border-slate-200 p-2 dark:border-slate-700 sm:block">
-        <Button
+      </ul>
+      <div className="hidden border-t border-line p-2 sm:block">
+        <button
           type="button"
-          variant="ghost"
-          size="sm"
           onClick={() => setCollapsed((c) => !c)}
           aria-label={collapsed ? t('nav.expand') : t('nav.collapse')}
-          className="w-full text-slate-500 hover:text-slate-700"
+          className="flex h-9 w-full items-center justify-center rounded-brand text-fg-muted hover:bg-surface-hover hover:text-fg"
         >
           {collapsed ? (
-            <ChevronRight className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+            <ChevronRight className="h-4 w-4" aria-hidden="true" />
           ) : (
-            <ChevronLeft className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+            <ChevronLeft className="h-4 w-4" aria-hidden="true" />
           )}
-        </Button>
+        </button>
       </div>
     </nav>
+  );
+}
+
+function ShellFooter({ t }) {
+  return (
+    <footer className="border-t border-line bg-surface-raised">
+      <div className="mx-auto flex max-w-[1920px] flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 sm:px-6">
+        <StackStatus />
+        <span className="ml-auto hidden text-xs text-fg-muted sm:inline">{t('landing.footer')}</span>
+      </div>
+    </footer>
   );
 }

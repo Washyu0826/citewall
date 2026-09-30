@@ -1,9 +1,10 @@
-// Loading skeletons. Plain divs with Tailwind animate-pulse.
+// Loading skeletons. Plain divs with Tailwind animate-pulse (removed under
+// prefers-reduced-motion by the global rule in index.css).
 
 const LINE_WIDTHS = ['w-full', 'w-5/6', 'w-4/6', 'w-11/12', 'w-3/4'];
 
 export function Skeleton({ className = '' }) {
-  return <div className={`animate-pulse rounded bg-slate-200 dark:bg-slate-700 ${className}`} />;
+  return <div className={`animate-pulse rounded bg-surface-sunken ${className}`} aria-hidden="true" />;
 }
 
 export function SkeletonText({ lines = 3, className = '' }) {
@@ -22,9 +23,7 @@ export function SkeletonBar({ className = '' }) {
 
 export function SkeletonCard({ className = '' }) {
   return (
-    <div
-      className={`space-y-3 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900 ${className}`}
-    >
+    <div className={`space-y-3 rounded-brand border border-line bg-surface-raised p-4 ${className}`}>
       <Skeleton className="h-4 w-1/3" />
       <SkeletonText lines={3} />
       <SkeletonBar />

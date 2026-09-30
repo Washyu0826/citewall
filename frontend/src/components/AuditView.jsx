@@ -359,7 +359,7 @@ function LegacyHeader({ session, onSwitchView, onLogout, t }) {
       <div className="mx-auto flex max-w-7xl items-center gap-4 px-6 py-3">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded bg-navy-900 text-sm font-bold text-white">
-            PM
+            CW
           </div>
           <span className="font-semibold">{t('app_title')}</span>
         </div>

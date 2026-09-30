@@ -21,6 +21,16 @@ export function useQuota(token, caseId, enabled = true) {
   });
 }
 
+/** Accessible cases + server-resolved security level + last-analysis metadata. */
+export function useCases(token, enabled = true) {
+  return useQuery({
+    queryKey: ['cases'],
+    queryFn: () => api.cases(token),
+    enabled: enabled && !!token,
+    staleTime: 30_000,
+  });
+}
+
 export function useAuditRecent(token, enabled = true) {
   return useQuery({
     queryKey: ['audit', 'recent'],

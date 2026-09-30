@@ -61,14 +61,14 @@ test.describe('Visual regression', () => {
     test.skip(viewport && viewport.width < 1280, 'desktop snapshot');
     await page.goto('/');
     // Wait for hero text to render — it's the latest-painted element.
-    await expect(page.locator('text=PatentMind').first()).toBeVisible();
+    await expect(page.locator('text=CiteWall').first()).toBeVisible();
     await expect(page).toHaveScreenshot('landing_desktop_1440.png', screenshotOpts(page));
   });
 
   test('landing — mobile', async ({ page, viewport }) => {
     test.skip(viewport && viewport.width >= 1280, 'mobile snapshot');
     await page.goto('/');
-    await expect(page.locator('text=PatentMind').first()).toBeVisible();
+    await expect(page.locator('text=CiteWall').first()).toBeVisible();
     await expect(page).toHaveScreenshot('landing_mobile_375.png', screenshotOpts(page));
   });
 

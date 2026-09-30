@@ -9,7 +9,7 @@ test.describe('Login flow', () => {
     await page.goto('/');
 
     // Hero brand + tagline are visible.
-    await expect(page.locator('text=PatentMind').first()).toBeVisible();
+    await expect(page.locator('text=CiteWall').first()).toBeVisible();
 
     // All four demo identity cards render. The button text is just the user
     // initial + name + role label, so a name-matcher is the most stable.
@@ -26,8 +26,8 @@ test.describe('Login flow', () => {
     await page.getByRole('button', { name: /Alice/ }).click();
 
     await page.waitForURL(/\/analyze/, { timeout: 5000 });
-    // The Analyze header carries the literal "PatentMind AI" brand line.
-    await expect(page.locator('header').getByText('PatentMind AI')).toBeVisible();
+    // The Analyze header carries the literal "CiteWall" brand line.
+    await expect(page.locator('header').getByText('CiteWall')).toBeVisible();
   });
 
   test('Carol logs in as IT Admin with tenant_b', async ({ page, viewport }) => {

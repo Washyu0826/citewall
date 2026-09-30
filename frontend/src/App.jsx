@@ -1,14 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router';
-import { useTranslation } from 'react-i18next';
-import { Folder } from 'lucide-react';
 
 import Login from './components/Login.jsx';
 import Analyze from './components/Analyze.jsx';
 import AuditView from './components/AuditView.jsx';
 import AppShell from './components/AppShell.jsx';
 import CaseAdmin from './components/CaseAdmin.jsx';
-import { Button } from './components/ui/button.jsx';
+import Home from './components/pages/Home.jsx';
+import Cases from './components/pages/Cases.jsx';
+import { CurrentCaseProvider, useCurrentCase } from './lib/currentCase.jsx';
 import { SESSION_EXPIRED_EVENT, api } from './api/client.js';
 import { queryClient } from './lib/queryClient.js';
 import { toast } from './lib/toast.jsx';
@@ -26,23 +26,23 @@ function DesignRoute() {
 }
 
 /**
- * Role-aware landing route. After login each role lands on the page it can
- * actually use, instead of everyone defaulting to /analyze:
- *   • auditor   → /audit   (read-only audit log is the auditor's home)
- *   • it_admin  → /analyze (no dedicated home in the POC; /cases is a
- *                           placeholder and /audit 403s for non-tenant_a, so
- *                           the gentler default is the analyze input form)
- *   • attorney
- *   • paralegal → /analyze (the core working surface)
+ * Role-aware landing route — each role lands on the page it actually uses:
+ *   • attorney / paralegal → /home         (deadlines + cases)
+ *   • auditor              → /audit        (read-only audit log)
+ *   • it_admin             → /admin/cases  (case registry)
  */
 function landingPathForRole(role) {
   switch (role) {
     case 'auditor':
       return '/audit';
+    case 'it_admin':
+      return '/admin/cases';
     default:
-      return '/analyze';
+      return '/home';
   }
 }
+
+const CASE_WORK_ROLES = ['attorney', 'paralegal'];
 
 /**
  * Slice B + Day 9C: router-based shell with persistent chrome.
@@ -106,32 +106,39 @@ export default function App() {
   }
 
   const landingPath = landingPathForRole(session.role);
+  const canWorkCases = CASE_WORK_ROLES.includes(session.role);
 
   return (
-    <AppShell session={session} onLogout={handleLogout} trustContext={trustContext}>
-      <Routes>
-        <Route path="/login" element={<Navigate to={landingPath} replace />} />
-        <Route
-          path="/analyze"
-          element={
-            <AnalyzeRoute
-              session={session}
-              onLogout={handleLogout}
-              onTrustChange={setTrustContext}
+    // Keyed by user so a new login never inherits the previous user's case.
+    <CurrentCaseProvider key={session.user_id || session.display_name}>
+      <AppShell session={session} onLogout={handleLogout} trustContext={trustContext}>
+        <Routes>
+          <Route path="/login" element={<Navigate to={landingPath} replace />} />
+          {canWorkCases && <Route path="/home" element={<Home session={session} />} />}
+          {canWorkCases && (
+            <Route
+              path="/analyze"
+              element={
+                <AnalyzeRoute
+                  session={session}
+                  onLogout={handleLogout}
+                  onTrustChange={setTrustContext}
+                />
+              }
             />
-          }
-        />
-        <Route path="/audit" element={<AuditRoute session={session} onLogout={handleLogout} />} />
-        <Route path="/cases" element={<CasesPlaceholder />} />
-        {/* Q27 case-registry admin — only mounted for it_admin (the gateway
-            403s every other role as well). */}
-        {session.role === 'it_admin' && (
-          <Route path="/admin/cases" element={<CaseAdmin session={session} />} />
-        )}
-        <Route path="/design" element={<DesignRoute />} />
-        <Route path="*" element={<Navigate to={landingPath} replace />} />
-      </Routes>
-    </AppShell>
+          )}
+          {session.role !== 'it_admin' && <Route path="/cases" element={<Cases session={session} />} />}
+          <Route path="/audit" element={<AuditRoute session={session} onLogout={handleLogout} />} />
+          {/* Q27 case-registry admin — only mounted for it_admin (the gateway
+              403s every other role as well). */}
+          {session.role === 'it_admin' && (
+            <Route path="/admin/cases" element={<CaseAdmin session={session} />} />
+          )}
+          <Route path="/design" element={<DesignRoute />} />
+          <Route path="*" element={<Navigate to={landingPath} replace />} />
+        </Routes>
+      </AppShell>
+    </CurrentCaseProvider>
   );
 }
 
@@ -165,13 +172,17 @@ function buildSwitchView(navigate) {
 
 function AnalyzeRoute({ session, onLogout, onTrustChange }) {
   const navigate = useNavigate();
+  const { caseId } = useCurrentCase();
   return (
+    // Analyze follows `initialCaseId` itself (keeps the typed OA, drops the
+    // old result) — no remount on case switch.
     <Analyze
       session={session}
       onLogout={onLogout}
       onSwitchView={buildSwitchView(navigate)}
       embedded
       onTrustChange={onTrustChange}
+      initialCaseId={caseId || undefined}
     />
   );
 }
@@ -185,54 +196,5 @@ function AuditRoute({ session, onLogout }) {
       onSwitchView={buildSwitchView(navigate)}
       embedded
     />
-  );
-}
-
-/**
- * Phase 4 will populate this with the case-management UI.
- * For slice B we only reserve the route so links don't 404.
- */
-function CasesPlaceholder() {
-  return <CasesPlaceholderInner />;
-}
-
-function CasesPlaceholderInner() {
-  const navigate = useNavigate();
-  const { t } = useTranslation();
-  return (
-    <div className="flex min-h-[60vh] items-center justify-center px-6 py-12">
-      <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-8 text-center shadow-xs dark:border-slate-700 dark:bg-slate-900 md:p-12">
-        <Folder
-          className="mx-auto mb-3 h-12 w-12 text-navy-700 dark:text-navy-200"
-          strokeWidth={1.5}
-          aria-hidden="true"
-        />
-        <h1 className="mb-1 text-xl font-semibold text-slate-900 dark:text-slate-100">
-          {t('placeholder.cases_title')}
-        </h1>
-        <p className="mb-6 text-sm text-slate-500 dark:text-slate-400">
-          {t('placeholder.cases_subtitle')}
-        </p>
-
-        <ul className="mb-6 space-y-2 text-left text-sm text-slate-600 dark:text-slate-300">
-          {[
-            t('placeholder.cases_bullet_1'),
-            t('placeholder.cases_bullet_2'),
-            t('placeholder.cases_bullet_3'),
-          ].map((bullet, i) => (
-            <li key={i} className="flex items-start gap-2">
-              <span className="mt-0.5 text-navy-700 dark:text-navy-200" aria-hidden="true">
-                •
-              </span>
-              <span>{bullet}</span>
-            </li>
-          ))}
-        </ul>
-
-        <Button type="button" variant="primary" onClick={() => navigate('/analyze')}>
-          {t('placeholder.back_to_analyze')}
-        </Button>
-      </div>
-    </div>
   );
 }

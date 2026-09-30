@@ -5,5 +5,5 @@ import { test, expect } from '@playwright/test';
 
 test('login screen renders product name', async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('text=PatentMind').first()).toBeVisible();
+  await expect(page.locator('text=CiteWall').first()).toBeVisible();
 });

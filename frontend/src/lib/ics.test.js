@@ -18,7 +18,7 @@ describe('buildDeadlineIcs', () => {
     expect(ics).toContain('DTSTART;VALUE=DATE:20250708');
     expect(ics).toContain('TRIGGER:-P7D');
     expect(ics).toContain('TRIGGER:-P3D');
-    expect(ics).toContain('UID:CASE-1-statutory@patentmind.local');
+    expect(ics).toContain('UID:CASE-1-statutory@citewall.local');
   });
 
   it('uses CRLF line endings and escapes TEXT values (RFC 5545)', () => {

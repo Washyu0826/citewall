@@ -88,7 +88,7 @@ export function buildDeadlineIcs({ caseId, deadline, t }) {
     .join('\n');
 
   const events = vevent({
-    uid: `${caseId}-statutory@patentmind.local`,
+    uid: `${caseId}-statutory@citewall.local`,
     dateValue: statutory,
     summary: t('analyze.ics.statutory_summary', { caseId }),
     description: meta,
@@ -97,7 +97,7 @@ export function buildDeadlineIcs({ caseId, deadline, t }) {
   if (internal) {
     events.push(
       ...vevent({
-        uid: `${caseId}-internal@patentmind.local`,
+        uid: `${caseId}-internal@citewall.local`,
         dateValue: internal,
         summary: t('analyze.ics.internal_summary', { caseId }),
         description: meta,
@@ -109,7 +109,7 @@ export function buildDeadlineIcs({ caseId, deadline, t }) {
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//PatentMind AI//OA Deadline//EN',
+    'PRODID:-//CiteWall//OA Deadline//EN',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     ...events,

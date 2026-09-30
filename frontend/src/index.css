@@ -4,16 +4,17 @@
 
 @custom-variant dark (&:is(.dark *));
 
-@utility container {
-  margin-inline: auto;
-  padding-inline: 2rem;
-  @media (width >= --theme(--breakpoint-sm)) {
-    max-width: none;
-  }
-  @media (width >= 1400px) {
-    max-width: 1400px;
-  }
-}
+/*
+ * CiteWall design tokens — docs/DESIGN_SYSTEM.md (primitives → semantic → component).
+ *
+ * Components consume the SEMANTIC utilities below (bg-surface-raised, text-fg-muted,
+ * border-line …) instead of raw `bg-white dark:bg-slate-900` pairs: dark mode is
+ * resolved once, here, by swapping the underlying variables on `.dark`.
+ *
+ * `@theme inline` is required: the utilities must reference the runtime variables
+ * (var(--surface)), not a value frozen at :root, or the `.dark` override would never
+ * reach them.
+ */
 
 @theme {
   --text-2xs: 0.6875rem;
@@ -21,12 +22,12 @@
   --text-3xs: 0.625rem;
   --text-3xs--line-height: 0.875rem;
 
-  --font-sans:
-    Inter, Noto Sans TC, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto,
-    sans-serif;
   --font-mono:
-    JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    ui-monospace, SFMono-Regular, 'SF Mono', 'Cascadia Code', Menlo, Consolas,
+    'Noto Sans Mono CJK TC', monospace;
+  --font-serif: 'Noto Serif TC', 'Songti TC', Georgia, serif;
 
+  /* Primitive brand ramp (DESIGN_SYSTEM §2.1). navy-900 is the pinned brand. */
   --color-navy-50: #eff6ff;
   --color-navy-100: #dbeafe;
   --color-navy-200: #bfdbfe;
@@ -37,37 +38,17 @@
   --color-navy-700: #1d4ed8;
   --color-navy-800: #1e40af;
   --color-navy-900: #1e3a8a;
+  --color-navy-950: #172554;
 
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
+  /* radius.brand = 6px — "law-firm software", not consumer SaaS (§4.3). */
+  --radius-brand: 6px;
 
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
+  /* Elevation (§4.4) — borders carry structure; shadows stay subtle. */
+  --shadow-elev-1: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-elev-2: 0 4px 8px -2px rgba(15, 23, 42, 0.08);
+  --shadow-elev-3: 0 12px 24px -8px rgba(15, 23, 42, 0.12);
 
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
+  --ease-out-snappy: cubic-bezier(0.16, 1, 0.3, 1);
 
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
@@ -90,96 +71,122 @@
   }
 }
 
-/*
-  The default border color has changed to `currentcolor` in Tailwind CSS v4,
-  so we've added these compatibility styles to make sure everything still
-  looks the same as it did with Tailwind CSS v3.
+@theme inline {
+  /* Surfaces */
+  --color-surface: var(--cw-surface);
+  --color-surface-raised: var(--cw-surface-raised);
+  --color-surface-sunken: var(--cw-surface-sunken);
+  --color-surface-hover: var(--cw-surface-hover);
+  --color-brand: var(--cw-brand);
+  --color-brand-hover: var(--cw-brand-hover);
+  --color-brand-soft: var(--cw-brand-soft);
+  --color-brand-fg: var(--cw-brand-fg);
+  /* Warm accent — the single non-navy brand colour (P2). */
+  --color-accent: var(--cw-accent);
 
-  If we ever want to remove these styles, we need to add an explicit border
-  color utility to any element that depends on these defaults.
-*/
+  /* Text. fg-muted is the floor for readable text and only at ≥ 14px. */
+  --color-fg: var(--cw-fg);
+  --color-fg-secondary: var(--cw-fg-secondary);
+  --color-fg-muted: var(--cw-fg-muted);
+  --color-fg-inverted: var(--cw-fg-inverted);
+  --color-fg-link: var(--cw-fg-link);
+
+  /* Borders */
+  --color-line: var(--cw-line);
+  --color-line-subtle: var(--cw-line-subtle);
+  --color-line-strong: var(--cw-line-strong);
+
+  /* Status (fg on the matching soft bg is ≥ 4.5:1) */
+  --color-success: var(--cw-success);
+  --color-success-soft: var(--cw-success-soft);
+  --color-warning: var(--cw-warning);
+  --color-warning-soft: var(--cw-warning-soft);
+  --color-danger: var(--cw-danger);
+  --color-danger-soft: var(--cw-danger-soft);
+  --color-info: var(--cw-info);
+  --color-info-soft: var(--cw-info-soft);
+  /* Confidentiality — purple is reserved for this surface only (§2.1). */
+  --color-confidential: var(--cw-confidential);
+  --color-confidential-soft: var(--cw-confidential-soft);
+}
+
 @layer base {
+  :root {
+    --cw-surface: #f8fafc; /* slate-50  — app canvas */
+    --cw-surface-raised: #ffffff; /* cards, panes, popovers */
+    --cw-surface-sunken: #f1f5f9; /* slate-100 — inset wells */
+    --cw-surface-hover: #f1f5f9;
+    --cw-brand: #1e3a8a; /* navy-900 */
+    --cw-brand-hover: #1e40af; /* navy-800 */
+    --cw-brand-soft: #eff6ff; /* navy-50 */
+    --cw-brand-fg: #1e3a8a;
+    --cw-accent: #d97706; /* amber-600 */
+
+    --cw-fg: #0f172a; /* slate-900 18.7:1 */
+    --cw-fg-secondary: #334155; /* slate-700 9.3:1 */
+    --cw-fg-muted: #64748b; /* slate-500 4.6:1 */
+    --cw-fg-inverted: #ffffff;
+    --cw-fg-link: #0369a1; /* sky-700 */
+
+    --cw-line: #e2e8f0; /* slate-200 */
+    --cw-line-subtle: #f1f5f9; /* slate-100 */
+    --cw-line-strong: #cbd5e1; /* slate-300 */
+
+    --cw-success: #047857; /* emerald-700 */
+    --cw-success-soft: #ecfdf5;
+    --cw-warning: #b45309; /* amber-700 */
+    --cw-warning-soft: #fffbeb;
+    --cw-danger: #be123c; /* rose-700 */
+    --cw-danger-soft: #fff1f2;
+    --cw-info: #0369a1; /* sky-700 */
+    --cw-info-soft: #f0f9ff;
+    --cw-confidential: #7e22ce; /* purple-700 */
+    --cw-confidential-soft: #faf5ff;
+  }
+
+  .dark {
+    --cw-surface: #020617; /* slate-950 */
+    --cw-surface-raised: #0f172a; /* slate-900 */
+    --cw-surface-sunken: #0b1222;
+    --cw-surface-hover: #1e293b;
+    --cw-brand: #172554; /* navy-950 */
+    --cw-brand-hover: #1e3a8a;
+    --cw-brand-soft: rgba(30, 58, 138, 0.35);
+    --cw-brand-fg: #93c5fd; /* navy-300 */
+    --cw-accent: #f59e0b;
+
+    --cw-fg: #f8fafc;
+    --cw-fg-secondary: #cbd5e1;
+    --cw-fg-muted: #94a3b8;
+    --cw-fg-inverted: #0f172a;
+    --cw-fg-link: #38bdf8;
+
+    --cw-line: #334155;
+    --cw-line-subtle: #1e293b;
+    --cw-line-strong: #475569;
+
+    --cw-success: #6ee7b7;
+    --cw-success-soft: rgba(6, 78, 59, 0.35);
+    --cw-warning: #fcd34d;
+    --cw-warning-soft: rgba(120, 53, 15, 0.35);
+    --cw-danger: #fda4af;
+    --cw-danger-soft: rgba(136, 19, 55, 0.35);
+    --cw-info: #7dd3fc;
+    --cw-info-soft: rgba(12, 74, 110, 0.35);
+    --cw-confidential: #d8b4fe;
+    --cw-confidential-soft: rgba(88, 28, 135, 0.35);
+  }
+
+  /* Tailwind v4 defaults borders to currentColor; keep the v3 look. */
   *,
   ::after,
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-gray-200, currentcolor);
-  }
-}
-
-@layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-
-    --radius: 0.5rem;
+    border-color: var(--cw-line, currentcolor);
   }
 
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-  }
-}
-
-@layer base {
   body {
-    /*
-     * Day 9C — CHUNK-1 typography stack. Inter ships Latin glyphs only and
-     * delegates CJK to Noto Sans TC; the system-font tail is the fallback
-     * for slow networks before Google Fonts arrives (display=swap in
-     * index.html prevents invisible-text-flash).
-     */
     /* X1: system stack only — no web-font download (on-prem promise).
        Latin: SF Pro / Segoe UI / Roboto. zh-TW: PingFang TC (macOS),
        Microsoft JhengHei (Windows), Noto Sans TC/CJK (Linux, if installed). */
@@ -193,45 +200,64 @@
       'Noto Sans TC',
       'Noto Sans CJK TC',
       sans-serif;
-    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-    /* Slightly denser line-height than browser default — patent firms read
-       tables and case IDs more than prose. */
-    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+    /* CJK line-height floor (§3.4) and render-only CJK↔Latin spacing — the
+       underlying string stays byte-identical to what was audit-logged. */
+    line-height: 1.6;
+    text-autospace: ideograph-alpha ideograph-numeric;
+    background-color: var(--cw-surface);
+    color: var(--cw-fg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Case IDs, claim numbers, hashes and deadlines line up in columns. */
+  .font-mono,
+  table,
+  time {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Global keyboard focus ring — keyboard / programmatic focus only. */
+  :focus-visible {
+    outline: 2px solid #1d4ed8; /* navy-700 */
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+  .dark :focus-visible {
+    outline-color: #60a5fa; /* navy-400 */
+  }
+
+  /* WCAG 2.3.3: remove non-essential motion entirely, not "subtle" motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
 @layer utilities {
-  /* Q16 provenance highlights — preserved from the POC index.html inline styles
-   so DraftEditor.jsx continues to render line provenance correctly.
-   AI line uses navy-500 (rgb 59 130 246) per the ★10 indigo→navy convergence. */
+  /* Sentence provenance highlights (DraftEditor): AI = navy, attorney = emerald. */
   .ai-line {
-    background: linear-gradient(
-      180deg,
-      transparent 60%,
-      rgba(59, 130, 246, 0.18) 60%
-    );
+    background: linear-gradient(180deg, transparent 60%, rgba(59, 130, 246, 0.18) 60%);
   }
   .attorney-line {
-    background: linear-gradient(
-      180deg,
-      transparent 60%,
-      rgba(34, 197, 94, 0.22) 60%
-    );
+    background: linear-gradient(180deg, transparent 60%, rgba(34, 197, 94, 0.22) 60%);
   }
-
-  /*
- * Global keyboard focus ring (a11y). Mouse clicks don't trigger
- * :focus-visible, so this only shows for keyboard / programmatic focus —
- * inputs, textareas, buttons, links, and any tabbable element. navy 2px ring
- * + 2px offset matches the Button component's focus state for consistency.
- * Components that set their own focus-visible ring (e.g. inset rings) still
- * win via specificity / Tailwind ordering.
- */
 }
-@layer base {
-  :focus-visible {
-    outline: 2px solid hsl(217 91% 60%); /* navy-500 */
-    outline-offset: 2px;
-    border-radius: 2px;
+
+@media print {
+  /* P6: drafts print as formal letters — no dark mode, serif body. */
+  :root,
+  .dark {
+    color-scheme: light;
+  }
+  body {
+    background: #ffffff;
+    color: #0f172a;
+    font-family: var(--font-serif);
   }
 }
