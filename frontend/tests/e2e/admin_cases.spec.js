@@ -1,6 +1,6 @@
 // Q27 — case-registry admin page (it_admin only).
 import { test, expect } from '@playwright/test';
-import { mockLogin, mockQuota, mockAuditVerify, mockStackProbes } from './helpers/mock_backend.js';
+import { mockCases, mockLogin, mockQuota, mockAuditVerify, mockStackProbes } from './helpers/mock_backend.js';
 
 const LIST = {
   cases: [
@@ -22,11 +22,13 @@ async function loginAs(page, user) {
   await mockQuota(page);
   await mockAuditVerify(page);
   await mockStackProbes(page);
+  await mockCases(page);
   await page.goto('/');
   await page
     .getByRole('button', { name: new RegExp(user === 'carol' ? 'Carol' : 'Alice') })
     .click();
-  await page.waitForURL(/\/analyze/, { timeout: 5000 });
+  // Role-aware landing: IT admin → case registry, attorney → dashboard.
+  await page.waitForURL(user === 'carol' ? /\/admin\/cases/ : /\/home/, { timeout: 5000 });
 }
 
 test.describe('case registry admin', () => {
@@ -99,6 +101,6 @@ test.describe('case registry admin', () => {
     await expect(page.getByRole('button', { name: /^(案件登錄|Case registry)$/ })).toHaveCount(0);
     await page.evaluate(() => window.history.pushState({}, '', '/admin/cases'));
     await page.evaluate(() => window.dispatchEvent(new PopStateEvent('popstate')));
-    await expect(page).toHaveURL(/\/analyze/);
+    await expect(page).toHaveURL(/\/home/);
   });
 });

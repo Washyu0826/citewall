@@ -277,8 +277,10 @@ jobs:
         continue-on-error: true
         run: npx playwright test --grep "Visual regression"
 
-      - name: Upload Playwright traces + screenshots on failure
-        if: failure()
+      # Always upload: the visual step is non-blocking, so on a green run its
+      # actual screenshots (the Linux baselines to commit) would otherwise be lost.
+      - name: Upload Playwright traces + screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-artifacts

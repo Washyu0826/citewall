@@ -13,7 +13,7 @@
 //
 // Desktop-only: the three-pane layout (xl >= 1280) renders DraftsPane inline.
 import { test, expect } from '@playwright/test';
-import { loginAsAlice, mockAnalyze, mockExportDraft } from './helpers/mock_backend.js';
+import { loginAsAlice, mockAnalyze, mockExportDraft, mockExportResponse } from './helpers/mock_backend.js';
 
 test.describe('Sign-off export gate (Q16) — desktop', () => {
   test.skip(
@@ -123,5 +123,31 @@ test.describe('Sign-off export gate (Q16) — desktop', () => {
     const flags = body.segments.map((s) => s.accepted);
     expect(flags).toContain(false); // the excluded sentence travels with accepted=false
     expect(flags).toContain(true);
+  });
+
+  test('whole-response export: locked until every sentence is decided, then one DOCX', async ({ page }) => {
+    const main = await runAnalysis(page);
+    const route = mockExportResponse(page);
+    const card = main.getByTestId('response-export');
+    const confirm = card.getByTestId('response-export-confirm');
+    const submit = card.getByTestId('response-export-submit');
+
+    // Nothing decided yet → cannot confirm or export.
+    await expect(confirm).toBeDisabled();
+    await expect(submit).toBeDisabled();
+
+    await main.getByTestId('signoff-accept-all').first().click();
+    await confirm.check();
+    await expect(submit).toBeEnabled();
+
+    const [download] = await Promise.all([page.waitForEvent('download'), submit.click()]);
+    expect(download.suggestedFilename()).toBe('CASE-2025-001-response.docx');
+
+    const body = await route.capture;
+    expect(body.attorney_signoff).toBe(true);
+    expect(body.sections).toHaveLength(1);
+    expect(body.sections[0].heading).toContain('進步性');
+    expect(body.sections[0].segments.every((s) => s.accepted)).toBe(true);
+    await expect(card.getByTestId('response-export-result')).toBeVisible();
   });
 });

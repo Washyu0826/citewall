@@ -44,7 +44,9 @@ test.describe('Trust gates (T2 degraded / T3 stripped citation) — desktop', ()
     await main.getByTestId('signoff-accept-all').first().click();
     await main.getByTestId('signoff-checkbox').first().check();
     await expect(main.getByTestId('signoff-export').first()).toBeDisabled();
-    await expect(main.getByText(/DEGRADED/).nth(1)).toBeVisible(); // gate hint
+    await expect(main.getByText(/不可簽核匯出/).first()).toBeVisible(); // gate hint
+    // The whole-response export is locked for the same reason.
+    await expect(main.getByTestId('response-export-submit')).toBeDisabled();
   });
 
   test('T3: a stripped-citation sentence cannot be accepted as-is', async ({ page }) => {
@@ -66,7 +68,7 @@ test.describe('Trust gates (T2 degraded / T3 stripped citation) — desktop', ()
     // the accepted first sentence also still shows an exclude affordance).
     await main
       .getByTestId('draft-line')
-      .filter({ hasText: 'CITATION_REMOVED' })
+      .filter({ has: page.getByTestId('citation-removed') })
       .getByTestId('line-exclude')
       .click();
     await expect(main.getByTestId('signoff-export').first()).toBeEnabled();

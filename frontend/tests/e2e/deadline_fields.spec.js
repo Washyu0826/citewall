@@ -63,7 +63,8 @@ test.describe('Deadline inputs & explanation', () => {
     await loginAsAlice(page);
     mockAnalyze(page, withDeadline({ rules_reviewed: true }));
     await page.getByRole('button', { name: /^分析 OA/ }).click();
-    await expect(page.getByTestId('deadline-notice')).toBeAttached();
-    await expect(page.getByTestId('deadline-notice')).not.toContainText('未經專利師覆核');
+    await expect(page.getByRole('button', { name: /計算依據/ })).toBeVisible({ timeout: 10_000 });
+    // US case + reviewed rules → nothing to warn about, so no notice strip.
+    await expect(page.getByText(/未經專利師覆核/)).toHaveCount(0);
   });
 });

@@ -2,7 +2,7 @@
 // the gateway surfaces an alert on screen. All tests are hermetic via
 // page.route() mocks.
 import { test, expect } from '@playwright/test';
-import { mockLogin, mockQuota, DEMO_USERS } from './helpers/mock_backend.js';
+import { mockCases, mockLogin, mockQuota, DEMO_USERS } from './helpers/mock_backend.js';
 
 test.describe('Login flow', () => {
   test('landing renders with hero + role cards', async ({ page }) => {
@@ -18,28 +18,30 @@ test.describe('Login flow', () => {
     }
   });
 
-  test('clicking Alice navigates to /analyze', async ({ page }) => {
+  test('an attorney lands on the dashboard', async ({ page }) => {
     await mockLogin(page, 'alice');
     await mockQuota(page);
+    await mockCases(page);
 
     await page.goto('/');
     await page.getByRole('button', { name: /Alice/ }).click();
 
-    await page.waitForURL(/\/analyze/, { timeout: 5000 });
-    // The Analyze header carries the literal "CiteWall" brand line.
+    await page.waitForURL(/\/home/, { timeout: 5000 });
     await expect(page.locator('header').getByText('CiteWall')).toBeVisible();
+    // Dashboard: the case with a deadline is listed.
+    await expect(page.getByTestId('home-deadlines')).toContainText('CASE-2025-001');
   });
 
   test('Carol logs in as IT Admin with tenant_b', async ({ page, viewport }) => {
-    // The display_name + tenant + role badge group lives in a `hidden sm:flex`
-    // container in the TopBar. At Tailwind's `sm` breakpoint (640px) it
-    // collapses — so on the 375x812 mobile viewport these chips are not
-    // rendered. Skip on mobile; the role information is still verified
-    // through the audit chip / role-badge assertions in other tests.
-    test.skip(viewport && viewport.width < 640, 'TopBar user chip is sm: only');
+    // Name + role sit on the account-menu trigger, shown from `lg` (1024px);
+    // the tenant is in the trust band (from `sm`).
+    test.skip(viewport && viewport.width < 1024, 'account name/role label is lg: only');
 
     await mockLogin(page, 'carol');
     await mockQuota(page);
+    await page.route('**/api/v1/admin/cases**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [], patterns: {} }) })
+    );
     // AppShell calls auditVerify on mount for it_admin / auditor — mock so it
     // doesn't error out (would otherwise show a fail chip but not crash).
     await page.route('**/api/v1/audit/verify**', (route) =>
@@ -52,15 +54,14 @@ test.describe('Login flow', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: /Carol/ }).click();
-    await page.waitForURL(/\/analyze/, { timeout: 5000 });
+    // IT admins land on the case registry.
+    await page.waitForURL(/\/admin\/cases/, { timeout: 5000 });
 
-    // TopBar shows display_name in a div, tenant_id below, role badge to the
-    // right via the i18n key shell.role_badge.it_admin = "IT 管理".
     const header = page.locator('header');
     await expect(header.getByText(DEMO_USERS.carol.display_name)).toBeVisible();
-    await expect(header.getByText(/tenant_b/)).toBeVisible();
-    // Role badge: t('shell.role_badge.it_admin') = 'IT 管理'.
+    // Role label: t('shell.role_badge.it_admin') = 'IT 管理'.
     await expect(header.getByText(/IT 管理/)).toBeVisible();
+    await expect(page.getByTestId('trust-band')).toContainText('tenant_b');
   });
 
   test('error message appears when backend returns 401', async ({ page }) => {

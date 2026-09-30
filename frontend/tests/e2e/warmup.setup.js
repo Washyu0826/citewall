@@ -8,24 +8,17 @@
 // the module graph is fully transformed and cached before the real tests
 // fan out.
 import { test } from '@playwright/test';
-import {
-  loginAsAlice,
-  mockAuditRecent,
-  mockAuditVerify,
-  mockStackProbes,
-} from './helpers/mock_backend.js';
+import { gotoNav, loginAsAlice, mockStackProbes } from './helpers/mock_backend.js';
 
 test('warm the vite module graph', async ({ page }) => {
   test.setTimeout(180_000);
   page.setDefaultNavigationTimeout(150_000);
 
   await mockStackProbes(page);
-  await mockAuditRecent(page);
-  await mockAuditVerify(page);
-  await loginAsAlice(page); // goto('/') → login → /analyze (loads the heavy panes)
-
-  // Touch the audit surface too — AuditView + table modules.
-  await page.getByTestId('nav-rail').getByRole('button', { name: /Audit/ }).click();
-  await page.waitForURL(/\/audit/, { timeout: 30_000 });
-  await page.getByText('Audit Log').first().waitFor({ timeout: 30_000 });
+  // login → /home (dashboard) → /analyze (the heavy workspace modules)
+  await loginAsAlice(page);
+  await page.getByTestId('workspace-stepper').waitFor({ timeout: 30_000 });
+  // The case list too.
+  await gotoNav(page, '/cases');
+  await page.getByTestId('cases-table').waitFor({ timeout: 30_000 });
 });

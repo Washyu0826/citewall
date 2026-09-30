@@ -70,7 +70,7 @@ test.describe('Trust band (Day 9C CHUNK-8)', () => {
     }
   });
 
-  test('routing chip flips to confidential when case_id ends in -CONF', async ({ page }) => {
+  test('routing chip follows the SERVER security level of the chosen case', async ({ page }) => {
     await loginAsAlice(page);
     await mockAuditVerify(page);
     await mockRedactionPreview(page);
@@ -81,21 +81,17 @@ test.describe('Trust band (Day 9C CHUNK-8)', () => {
       })
     );
 
-    // Drop a -CONF case id into the Case ID input. The trust band's routing
-    // chip is driven by the live case id, not a backend response, so this
-    // exercises the SPA-side detection (Q15 mirroring). The SPA renders two
-    // inner <main> elements (mobile + desktop); filter to the visible one so
-    // we don't try to type into the hidden duplicate.
-    const caseInput = page
-      .locator('main')
-      .filter({ visible: true })
-      .last()
-      .locator('input')
-      .first();
-    await caseInput.fill('CASE-2025-001-CONF');
-
-    // Wait one tick for the trust context push to land.
+    // A public case routes normally…
+    await expect(page.getByTestId('trust-routing')).toContainText('一般案件');
+    // …a case the registry marks confidential flips to on-prem routing. The
+    // level comes from GET /v1/cases, never from how the case id is spelled.
+    await page.locator('#analyze-case-id').selectOption('CASE-2025-003-CONF');
     await expect(page.getByTestId('trust-routing')).toContainText(/本地處理|機密案件/);
+  });
+
+  test('with no case selected the routing chip does not claim a route', async ({ page }) => {
+    await loginAsAlice(page, '/home');
+    await expect(page.getByTestId('trust-routing')).toContainText('尚未選擇案件');
   });
 
   test('chain-verify chip is present in the top bar', async ({ page }) => {

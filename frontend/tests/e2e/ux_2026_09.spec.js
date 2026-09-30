@@ -6,6 +6,7 @@ import {
   defaultAnalysisResponse,
   loginAsAlice,
   mockAnalyze,
+  mockCases,
   mockQuota,
 } from './helpers/mock_backend.js';
 
@@ -21,9 +22,10 @@ test.describe('Magic link (emailed, Q23)', () => {
       });
     });
     await mockQuota(page);
+    await mockCases(page);
 
     await page.goto('/#token=emailed-token-123');
-    await page.waitForURL(/\/analyze/, { timeout: 5000 });
+    await page.waitForURL(/\/home/, { timeout: 5000 });
 
     expect(consumed).toEqual([{ token: 'emailed-token-123' }]); // single-use: exactly once
     expect(new URL(page.url()).hash).toBe(''); // token never left in the address bar
@@ -92,7 +94,9 @@ test.describe('Logout', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: '{"revoked":true}' });
     });
     await loginAsAlice(page);
-    await page.getByRole('button', { name: /登出|Logout|Sign out/i }).first().click();
+    // Logout lives in the account menu (reachable at every viewport).
+    await page.getByTestId('account-menu').click();
+    await page.getByTestId('logout').click();
     await expect(page.getByRole('button', { name: /Alice/ })).toBeVisible();
     await expect.poll(() => revokedWith).toBe(`Bearer ${DEMO_USERS.alice.token}`);
   });

@@ -489,6 +489,80 @@ export async function mockStackProbes(
 }
 
 /**
+ * Mock POST /api/v1/oa/export_response (whole-response DOCX). Mirrors the
+ * backend's 409 without attorney_signoff. Returns the install promise with a
+ * `.capture` promise for the first request body.
+ */
+export function mockExportResponse(page) {
+  let resolveCapture;
+  const capture = new Promise((r) => {
+    resolveCapture = r;
+  });
+  const installed = page.route('**/api/v1/oa/export_response', (route) => {
+    const body = route.request().postDataJSON();
+    resolveCapture(body);
+    if (body?.attorney_signoff !== true) {
+      route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ detail: 'sign-off required' }) });
+      return;
+    }
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        case_id: body.case_id,
+        document: 'doc',
+        content_sha256: 'f'.repeat(64),
+        provenance_summary: { total_segments: 2, accepted_segments: 2 },
+        section_count: body.sections.length,
+        signed_off_by: 'alice',
+        attorney_signoff: true,
+        filename: `${body.case_id}-response.docx`,
+        // Not a real DOCX — the SPA only saves the bytes.
+        docx_base64: 'UEsDBA==',
+      }),
+    });
+  });
+  installed.capture = capture;
+  return installed;
+}
+
+/** GET /api/v1/cases fixture: ACL-scoped cases with server security levels. */
+export function defaultCases() {
+  return {
+    read_only: false,
+    cases: [
+      {
+        case_id: 'CASE-2025-001',
+        security_level: 'public',
+        last_activity: '2026-09-29T08:00:00Z',
+        last_analysis: {
+          target_patent_no: 'US17123456',
+          jurisdiction: 'US',
+          analyzed_at: '2026-09-29T08:00:00Z',
+          analyzed_by: 'alice',
+          statutory_deadline: '2099-01-15T23:59:00+08:00',
+          recommended_deadline: '2099-01-08T23:59:00+08:00',
+          rejection_types: ['103_obviousness', '102_novelty'],
+          affected_claims: [1, 2, 3, 4, 5],
+          rejection_count: 2,
+          draft_count: 2,
+          model_used: 'mock',
+          degraded: false,
+        },
+      },
+      { case_id: 'CASE-2025-002', security_level: 'public', last_activity: null, last_analysis: null },
+      { case_id: 'CASE-2025-003-CONF', security_level: 'confidential', last_activity: null, last_analysis: null },
+    ],
+  };
+}
+
+export async function mockCases(page, payload = defaultCases()) {
+  await page.route('**/api/v1/cases', (route) => {
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) });
+  });
+}
+
+/**
  * One-shot helper: install login + quota + analyze + audit mocks at once with
  * the default Alice session. Tests that don't need to assert on a specific
  * payload can call this and move on.
@@ -496,6 +570,7 @@ export async function mockStackProbes(
 export async function mockHappyPath(page, user = 'alice') {
   await mockLogin(page, user);
   await mockQuota(page);
+  await mockCases(page);
   await mockRedactionPreview(page);
   await mockAnalyze(page);
   await mockAuditRecent(page);
@@ -534,19 +609,27 @@ export async function interceptApiCalls(page) {
 }
 
 /**
- * Pre-seed React state so tests can skip the login UI: visit the SPA root,
- * mock login, click Alice's card, wait for /analyze. Returns when the
- * three-pane layout (or mobile tab strip) has rendered.
+ * Log in as Alice through the UI and land on `path` (default: the workspace).
  *
- * Pass `path` to land somewhere other than /analyze afterwards.
+ * The session lives in React state only, so moving on after login must be a
+ * client-side navigation (nav rail click) — a page.goto() would reload the
+ * SPA and drop the session. Attorneys land on /home first.
  */
 export async function loginAsAlice(page, path = '/analyze') {
   await mockLogin(page, 'alice');
   await mockQuota(page);
+  await mockCases(page);
   await page.goto('/');
   await page.getByRole('button', { name: /Alice/ }).click();
-  await page.waitForURL(/\/analyze/, { timeout: 5000 });
-  if (path !== '/analyze') {
-    await page.goto(path);
-  }
+  await page.waitForURL(/\/home/, { timeout: 5000 });
+  await gotoNav(page, path);
+}
+
+/** Client-side navigation via the nav rail (keeps the in-memory session). */
+export async function gotoNav(page, path) {
+  const id = { '/home': 'home', '/cases': 'cases', '/analyze': 'analyze', '/audit': 'audit', '/admin/cases': 'admin-cases' }[path];
+  if (!id) throw new Error(`gotoNav: unknown path ${path}`);
+  if (new URL(page.url()).pathname === path) return;
+  await page.getByTestId(`nav-${id}`).click();
+  await page.waitForURL(new RegExp(path.replace('/', '\\/') + '$'), { timeout: 5000 });
 }

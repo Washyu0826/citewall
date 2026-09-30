@@ -8,27 +8,20 @@ import {
   mockUpload,
 } from './helpers/mock_backend.js';
 
-// Analyze.jsx renders BOTH a mobile <main xl:hidden> and a desktop
-// <main hidden xl:grid>. Each mounts its own InputPane → OAUpload → file
-// input. At desktop the mobile main is display:none and vice versa. We grab
-// the file input whose ancestor <main> is the visible one — file inputs are
-// `display:none` regardless, so we can't use `:visible` on them directly;
-// instead, scope to the visible main first.
+// The workspace renders ONE layout; OAUpload lives in the "上傳檔案" tab of
+// the OA card (the paste tab is the default, pre-filled with a sample OA).
+// The file input is display:none by design — setInputFiles works on it.
 function fileInput(page) {
-  // Filter mains by Playwright's visible engine, then drill down. Note that
-  // the file input itself is `className="hidden"` (display:none) — that's
-  // expected for file inputs and setInputFiles works on hidden inputs.
-  return page
-    .locator('main')
-    .filter({ visible: true })
-    .last()
-    .locator('input[type="file"]');
+  return page.locator('main input[type="file"]');
 }
 
-// The visible-main scoper for assertions on text that may also live in the
-// hidden duplicate. Use this everywhere a string like "已選擇" appears.
 function visibleMain(page) {
-  return page.locator('main').filter({ visible: true }).last();
+  return page.locator('main');
+}
+
+async function openUpload(page) {
+  await loginAsAlice(page);
+  await page.getByRole('tab', { name: /上傳檔案/ }).click();
 }
 
 test.describe('Upload flow', () => {
@@ -36,7 +29,7 @@ test.describe('Upload flow', () => {
   // which renders on the default mobile tab), so these tests work on both.
 
   test('successful upload populates the textarea via onExtractSuccess', async ({ page }) => {
-    await loginAsAlice(page);
+    await openUpload(page);
     await mockUpload(page, {
       extracted_text: 'EXTRACTED OA TEXT for test — Claim 1 rejected under §103.',
       page_count: 3,
@@ -68,13 +61,12 @@ test.describe('Upload flow', () => {
     await expect(useBtn).toBeVisible({ timeout: 5000 });
     await useBtn.click();
 
-    // The textarea labelled "OA 全文" should now contain the extracted text.
-    const textarea = main.locator('textarea').first();
-    await expect(textarea).toHaveValue(/EXTRACTED OA TEXT/);
+    // Using the text switches to the paste tab with the extracted OA loaded.
+    await expect(page.locator('#analyze-oa-text')).toHaveValue(/EXTRACTED OA TEXT/);
   });
 
   test('a >30MB file shows a size error', async ({ page }) => {
-    await loginAsAlice(page);
+    await openUpload(page);
     await mockUpload(page); // mocked, but the size guard fires client-side first.
 
     // 31 MB of zeroes — over the 30 MB hard ceiling.
@@ -90,7 +82,7 @@ test.describe('Upload flow', () => {
   });
 
   test('a .txt file is rejected with a type error', async ({ page }) => {
-    await loginAsAlice(page);
+    await openUpload(page);
     await mockUpload(page);
 
     await fileInput(page).setInputFiles({
@@ -104,7 +96,7 @@ test.describe('Upload flow', () => {
   });
 
   test('drop zone is keyboard-accessible (role=button)', async ({ page }) => {
-    await loginAsAlice(page);
+    await openUpload(page);
 
     // The DropZone is role=button and accepts space/enter.
     const dz = visibleMain(page)
@@ -116,7 +108,7 @@ test.describe('Upload flow', () => {
   });
 
   test('dragover highlights the drop zone (navy state)', async ({ page }) => {
-    await loginAsAlice(page);
+    await openUpload(page);
 
     const dz = visibleMain(page)
       .getByRole('button', { name: /拖放.*PDF|browse files|瀏覽檔案/ })
@@ -146,7 +138,7 @@ test.describe('Upload flow', () => {
   test('upload renders preview: per-page text, OCR badge, element table, PDF frame', async ({
     page,
   }) => {
-    await loginAsAlice(page);
+    await openUpload(page);
     await mockUpload(page, {
       // Two pages joined with the backend separator. The component splits on it.
       extracted_text:
