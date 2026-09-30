@@ -18,7 +18,7 @@
 | 0 設計基礎 | token 整理、基礎元件統一、可及性（對比、focus、reduced-motion） | 程式完成，待看畫面 |
 | 1 資訊架構 | 角色化導覽、首頁儀表板、案件列表、`GET /v1/cases` | 程式完成，待看畫面、待改 e2e |
 | 2 分析工作台 | 步驟式流程、1366×768 佈局、引用彈出視窗、移除內部編號 | 程式完成，待看畫面、待改 e2e |
-| 3 審閱與匯出 | 全案簽核進度、合併匯出 DOCX | 待做 |
+| 3 審閱與匯出 | 全案簽核進度、合併匯出 DOCX | 程式完成，待看畫面、待改 e2e |
 | 4 其他頁面 | 登入、稽核、案件登錄、手機版 | 待做 |
 | 5 部署 | `docker compose up`（mock 模式）驗證；公開 demo（平台待定，建議 Cloud Run）；**MinIO 映像檔已從 Docker Hub 移除，需改用支援 S3 Object Lock 的替代方案**（見 FAILURE_LOG E-4） | 待做 |
 | 6 說明書 | 自動截圖 → `docs/USER_GUIDE.md`、README 更新 | 待做 |
@@ -61,3 +61,13 @@
   - 驗證：eslint 0 錯誤 0 警告、build 成功、vitest 86 passed。
   - e2e 待改：「計算依據 / Why」→「計算依據」、手機版三個分頁已移除、DraftsPane／ReferencesPane 相關註解與斷言、
     `/v1/cases` 需加入 mock_backend。
+- 2026-09-30：**建立公開 repo** https://github.com/Washyu0826/citewall（描述 B 版、7 個 topics）；舊 repo
+  `shin-lee-patent-rag` README 加上後續專案連結。CI：MinIO 映像檔已從 Docker Hub 移除，MinIO 步驟改為
+  continue-on-error（FAILURE_LOG E-4）。
+- 2026-09-30：**階段 3**
+  - 後端 `POST /v1/oa/export_response`：整份申復書一次匯出 DOCX（沿用 export 的所有閘門；角色檢查在稽核框內；
+    雜湊取自純文字，稽核只存統計與雜湊）；`signoff.assemble_response` / `build_response_docx`；測試 +5。
+  - 前端 `ResponseExportCard`：每條核駁都決定完、至少接受一句、勾選確認、律師身分、非降級結果才能匯出；
+    `DraftEditor.onProgress` 附帶逐句決定；`lib/responseExport.js`（+3 測試）。
+  - 修正：進度必須在送出分析時清空，不能在 effect 裡清（子元件 effect 先執行，會把掛載時的回報蓋掉）。
+  - vitest 89 passed。

@@ -17,6 +17,7 @@ import { Page, PageHeader } from './ui/page.jsx';
 import ReferencesPanel from './analyze/ReferencesPanel.jsx';
 import RejectionRail from './analyze/RejectionRail.jsx';
 import RejectionReview from './analyze/RejectionReview.jsx';
+import ResponseExportCard from './analyze/ResponseExportCard.jsx';
 import ResultHeader from './analyze/ResultHeader.jsx';
 import RunningPanel from './analyze/RunningPanel.jsx';
 import SetupPanel from './analyze/SetupPanel.jsx';
@@ -76,6 +77,7 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   const [selectedCitation, setSelectedCitation] = useState(null);
   const [refsOpen, setRefsOpen] = useState(false);
   const [progress, setProgress] = useState({});
+  const [responseExported, setResponseExported] = useState(false);
   const isWide = useMediaQuery(WIDE_QUERY);
 
   const quotaCaseId = useDebouncedValue(caseId, 400);
@@ -102,8 +104,10 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
 
   const rejections = useMemo(() => result?.oa?.rejections || [], [result]);
 
+  // NB: progress is reset in runAnalyze, BEFORE the new result renders — a
+  // reset here would run after the DraftEditors' mount-time reports (child
+  // effects fire first) and wipe them.
   useEffect(() => {
-    setProgress({});
     setActiveRejectionId(rejections[0]?.rejection_id ?? null);
   }, [rejections]);
 
@@ -153,6 +157,8 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   async function runAnalyze() {
     setError(null);
     setResult(null);
+    setProgress({});
+    setResponseExported(false);
     setEditing(false);
     try {
       const r = await analyzeMut.mutateAsync({
@@ -170,7 +176,8 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   }
 
   const showSetup = !running && (!result || editing);
-  const allExported = rejections.length > 0 && rejections.every((r) => progress[r.rejection_id]?.exported);
+  const allExported =
+    responseExported || (rejections.length > 0 && rejections.every((r) => progress[r.rejection_id]?.exported));
   const step = running ? 'analyze' : !showSetup ? (allExported ? 'export' : 'review') : redactPreview ? 'redact' : 'input';
   const isDegraded = (result?.cost_meta?.model || '').includes('-DEGRADED-');
 
@@ -285,6 +292,14 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
                   />
                 </div>
               ))}
+              <ResponseExportCard
+                session={session}
+                caseId={caseId}
+                rejections={rejections}
+                progress={progress}
+                degraded={isDegraded}
+                onExported={() => setResponseExported(true)}
+              />
             </div>
 
             {isWide && (
