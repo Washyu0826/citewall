@@ -10,6 +10,11 @@ Backends (env ``REVOCATION_BACKEND``):
   - ``redis``: durable + fleet-wide; each jti is a key with native EX expiry.
 
 The selection mirrors the cache backend pattern (``backend/gateway/cache.py``).
+
+Failure policy (ADR-02): the OPPOSITE of the cache. A cache outage is a miss;
+a revocation outage must never let a revoked token through, so store errors
+surface as :class:`RevocationUnavailable` and the caller answers 503 +
+Retry-After — fail closed, but as a clear "try again" rather than a 500.
 """
 
 from __future__ import annotations
@@ -19,6 +24,10 @@ import time
 from backend.shared.config import settings
 
 _PREFIX = "revoked_jti:"
+
+
+class RevocationUnavailable(RuntimeError):
+    """The revocation store could not be consulted or updated."""
 
 
 class InMemoryRevocationStore:
@@ -54,10 +63,16 @@ class RedisRevocationStore:
         )
 
     def revoke(self, jti: str, ttl_seconds: int) -> None:
-        self._r.setex(_PREFIX + jti, max(1, int(ttl_seconds)), "1")
+        try:
+            self._r.setex(_PREFIX + jti, max(1, int(ttl_seconds)), "1")
+        except Exception as exc:  # noqa: BLE001 — any redis/socket error
+            raise RevocationUnavailable(exc.__class__.__name__) from exc
 
     def is_revoked(self, jti: str) -> bool:
-        return bool(self._r.exists(_PREFIX + jti))
+        try:
+            return bool(self._r.exists(_PREFIX + jti))
+        except Exception as exc:  # noqa: BLE001 — any redis/socket error
+            raise RevocationUnavailable(exc.__class__.__name__) from exc
 
     def clear(self) -> None:
         # Test-only convenience; never called on the hot path.

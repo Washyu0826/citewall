@@ -348,6 +348,51 @@ class ExportResponse(BaseModel):
     attorney_signoff: bool
 
 
+class ResponseSection(BaseModel):
+    """One rejection's reviewed draft inside a whole-response export."""
+
+    model_config = {"extra": "forbid"}
+
+    rejection_id: str = Field(..., max_length=128)
+    # Human heading for the section, e.g. "進步性（請求項 1–3）" — supplied by
+    # the SPA in the attorney's language.
+    heading: str = Field(..., max_length=256)
+    segments: list[ProvenanceSegment] = Field(..., max_length=10_000)
+
+
+class ResponseExportRequest(BaseModel):
+    """Body for POST /v1/oa/export_response — the whole OA response in one
+    document (UX_REVIEW W1/W2), under the same sign-off gate as /v1/oa/export."""
+
+    model_config = {"extra": "forbid"}
+
+    case_id: str = Field(..., max_length=256)
+    title: str = Field(default="", max_length=256)
+    sections: list[ResponseSection] = Field(..., min_length=1, max_length=50)
+    attorney_signoff: bool = False
+
+
+class ResponseExportResponse(BaseModel):
+    """Result of a successful whole-response export.
+
+    `content_sha256` hashes the assembled PLAIN TEXT (deterministic); the DOCX
+    bytes embed timestamps, so hashing them would never reproduce. Only the
+    hash and the provenance counts reach the audit row.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    case_id: str = Field(..., max_length=256)
+    document: str
+    content_sha256: str = Field(..., max_length=64)
+    provenance_summary: ProvenanceSummary
+    section_count: int
+    signed_off_by: str = Field(..., max_length=64)
+    attorney_signoff: bool
+    filename: str = Field(..., max_length=256)
+    docx_base64: str
+
+
 class ClaimNode(BaseModel):
     """One node in the claim dependency tree (UX_RESEARCH §4.1 / §5 #2).
 

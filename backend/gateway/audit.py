@@ -36,6 +36,7 @@ import re
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -280,6 +281,16 @@ _LIST_COLS = (
 )
 
 
+_INSERT_SQL = """
+    INSERT INTO audit (
+        audit_id, timestamp_utc, timestamp_local, user_id, tenant_id, case_id,
+        endpoint, request_hash, response_hash, masked_field_rules,
+        model_used, prompt_tokens, completion_tokens, latency_ms,
+        policy_decisions, prev_row_hash, row_hash, hash_version, hash_key_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+
 # Marker for a payload that is already reduced to its sha256 digest (outbox).
 PREHASHED_KEY = "__sha256__"
 
@@ -292,7 +303,10 @@ class _BaseAuditWriter:
                                (SQLite: implicit ``rowid``; Postgres: ``row_seq``).
       * ``_fetchall(sql, params)`` — run a read query (``?`` placeholders,
                                translated by the subclass) and return tuples.
-      * ``_insert_row(values)``    — insert one audit row durably (commit).
+      * ``_append_chained(build)`` — in ONE transaction holding a lock that
+                               excludes other processes: read the chain tail's
+                               ``row_hash``, call ``build(prev_hash)`` for the
+                               row values, insert them, commit.
 
     Everything else — the write flow, the hash-chain format, and ALL THREE
     verify functions — lives here, shared verbatim by both backends.
@@ -304,7 +318,7 @@ class _BaseAuditWriter:
     def _fetchall(self, sql: str, params: tuple = ()) -> list[tuple]:
         raise NotImplementedError
 
-    def _insert_row(self, values: tuple) -> None:
+    def _append_chained(self, build: Callable[[str], tuple]) -> None:
         raise NotImplementedError
 
     # -- shared hash / chain primitives -----------------------------------
@@ -320,11 +334,8 @@ class _BaseAuditWriter:
         s = json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str)
         return hashlib.sha256(s.encode()).hexdigest()
 
-    def _last_row_hash(self) -> str | None:
-        rows = self._fetchall(
-            f"SELECT row_hash FROM audit ORDER BY {self._ORDER_COL} DESC LIMIT 1"  # noqa: S608
-        )
-        return rows[0][0] if rows else None
+    def _tail_sql(self) -> str:
+        return f"SELECT row_hash FROM audit ORDER BY {self._ORDER_COL} DESC LIMIT 1"  # noqa: S608
 
     def _fetch_chain_rows(self, tenant_id: str | None = None) -> list[tuple]:
         """All chain-relevant rows in insertion order (optionally one tenant)."""
@@ -426,13 +437,12 @@ class _BaseAuditWriter:
         request_hash = self._hash_payload(request_payload)
         response_hash = self._hash_payload(response_payload)
 
-        # The read-prev → compute → insert sequence runs under the writer
-        # lock so two concurrent writes can't both chain off the same prev
-        # (which would fork the chain). The lock is an RLock because
-        # _last_row_hash → _fetchall re-enters it on some backends.
-        with self._lock:
-            prev_hash = self._last_row_hash() or ""
-
+        # The read-tail → compute → insert sequence must be atomic ACROSS
+        # PROCESSES, not just threads: two gateway replicas that both chain
+        # off the same tail fork the chain, and verify then reports it as
+        # tampering (H-10). _append_chained runs `build` inside one database
+        # transaction that holds a cross-process write lock.
+        def build(prev_hash: str) -> tuple:
             # Tamper-evident chain (v2, Q26): HMAC over EVERY persisted field
             # plus prev_row_hash, so policy_decisions / model / tokens are
             # covered and the tail cannot be recomputed without the key.
@@ -456,30 +466,29 @@ class _BaseAuditWriter:
             }
             ring, active_kid = _keyring()
             row_hash = _hmac_hex(_v2_payload(row), ring[active_kid])
-
-            self._insert_row(
-                (
-                    row["audit_id"],
-                    row["timestamp_utc"],
-                    row["timestamp_local"],
-                    row["user_id"],
-                    row["tenant_id"],
-                    row["case_id"],
-                    row["endpoint"],
-                    row["request_hash"],
-                    row["response_hash"],
-                    row["masked_field_rules"],
-                    row["model_used"],
-                    row["prompt_tokens"],
-                    row["completion_tokens"],
-                    row["latency_ms"],
-                    row["policy_decisions"],
-                    row["prev_row_hash"],
-                    row_hash,
-                    HASH_V2,
-                    active_kid,
-                )
+            return (
+                row["audit_id"],
+                row["timestamp_utc"],
+                row["timestamp_local"],
+                row["user_id"],
+                row["tenant_id"],
+                row["case_id"],
+                row["endpoint"],
+                row["request_hash"],
+                row["response_hash"],
+                row["masked_field_rules"],
+                row["model_used"],
+                row["prompt_tokens"],
+                row["completion_tokens"],
+                row["latency_ms"],
+                row["policy_decisions"],
+                row["prev_row_hash"],
+                row_hash,
+                HASH_V2,
+                active_kid,
             )
+
+        self._append_chained(build)
         return audit_id
 
     # -- reads -------------------------------------------------------------
@@ -545,8 +554,8 @@ class _BaseAuditWriter:
         pitfall #4).
 
         Important wrinkle the per-tenant ``verify_chain`` does NOT handle:
-        the hash chain is GLOBAL (the writer's ``_last_row_hash`` lookup
-        is not tenant-scoped), so ``prev_row_hash`` on a tenant_b row may
+        the hash chain is GLOBAL (the writer's tail lookup in
+        ``_append_chained`` is not tenant-scoped), so ``prev_row_hash`` on a tenant_b row may
         legitimately point to a tenant_a row_hash. Walking only
         ``WHERE tenant_id = 'tenant_b'`` and expecting tenant_b's first
         row to have ``prev=''`` is therefore wrong in the multi-tenant
@@ -800,7 +809,9 @@ class AuditWriter(_BaseAuditWriter):
     def __init__(self, path: Path = AUDIT_DB_PATH):
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        # timeout = how long a writer waits for another process's write lock
+        # (BEGIN IMMEDIATE below) before raising "database is locked".
+        self._conn = sqlite3.connect(path, check_same_thread=False, timeout=30.0)
         self._conn.executescript(_DDL)
         _sqlite_migrate(self._conn)
         self._conn.commit()
@@ -809,19 +820,23 @@ class AuditWriter(_BaseAuditWriter):
         cur = self._conn.execute(sql, params)
         return cur.fetchall()
 
-    def _insert_row(self, values: tuple) -> None:
-        self._conn.execute(
-            """
-            INSERT INTO audit (
-                audit_id, timestamp_utc, timestamp_local, user_id, tenant_id, case_id,
-                endpoint, request_hash, response_hash, masked_field_rules,
-                model_used, prompt_tokens, completion_tokens, latency_ms,
-                policy_decisions, prev_row_hash, row_hash, hash_version, hash_key_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            values,
-        )
-        self._conn.commit()
+    def _append_chained(self, build: Callable[[str], tuple]) -> None:
+        # RLock serialises this process's threads (one shared connection);
+        # BEGIN IMMEDIATE takes SQLite's RESERVED lock up front, so a writer
+        # in ANOTHER process blocks until we commit and then reads our row
+        # as its tail. A plain (deferred) transaction would let both read
+        # the same tail before either writes.
+        with self._lock:
+            if self._conn.in_transaction:
+                self._conn.commit()
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = self._conn.execute(self._tail_sql()).fetchall()
+                self._conn.execute(_INSERT_SQL, build(rows[0][0] if rows else ""))
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
 
     def close(self) -> None:
         self._conn.close()
@@ -910,23 +925,24 @@ class PostgresAuditWriter(_BaseAuditWriter):
                 self._conn.rollback()
                 raise
 
-    def _insert_row(self, values: tuple) -> None:
-        sql = self._translate(
-            """
-            INSERT INTO audit (
-                audit_id, timestamp_utc, timestamp_local, user_id, tenant_id, case_id,
-                endpoint, request_hash, response_hash, masked_field_rules,
-                model_used, prompt_tokens, completion_tokens, latency_ms,
-                policy_decisions, prev_row_hash, row_hash, hash_version, hash_key_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-        )
+    def _append_chained(self, build: Callable[[str], tuple]) -> None:
+        # A transaction-scoped advisory lock serialises every writer on this
+        # schema's chain — across connections, processes and hosts — and is
+        # released by COMMIT/ROLLBACK. Under READ COMMITTED each statement
+        # takes a fresh snapshot, so the tail SELECT after the lock sees the
+        # previous holder's committed row.
         with self._lock:
             try:
                 with self._conn.cursor() as cur:
-                    cur.execute(sql, values)
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                        (f"patentmind.audit_chain:{self._schema}",),
+                    )
+                    cur.execute(self._tail_sql())
+                    tail = cur.fetchone()
+                    cur.execute(self._translate(_INSERT_SQL), build(tail[0] if tail else ""))
                 self._conn.commit()
-            except Exception:
+            except BaseException:
                 self._conn.rollback()
                 raise
 

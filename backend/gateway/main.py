@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hmac
 import logging
+import re
 import time
 from typing import Any
 
@@ -33,7 +34,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from backend.gateway import audit, audit_outbox, cache, mailer, masking, rate_limit, signoff
+from backend.gateway import (
+    audit,
+    audit_outbox,
+    cache,
+    case_summary,
+    mailer,
+    masking,
+    rate_limit,
+    signoff,
+)
 from backend.gateway.auth import (
     _DUMMY_HASH_FOR_TIMING,
     IdpError,
@@ -47,6 +57,7 @@ from backend.gateway.auth import (
     authenticate_saml_acs,
     authorize_case_access,
     begin_oidc_login,
+    case_scope,
     consume_magic_token,
     demo_passwords_enabled,
     get_user_email,
@@ -56,7 +67,7 @@ from backend.gateway.auth import (
     require_roles,
     revoke_token,
 )
-from backend.gateway.orchestrator import orchestrate_analysis
+from backend.gateway.orchestrator import _jurisdiction_for_patent, orchestrate_analysis
 from backend.shared import metrics
 from backend.shared.case_registry import is_confidential, security_level_for_case
 from backend.shared.config import settings
@@ -65,6 +76,8 @@ from backend.shared.models import (
     AnalysisResponse,
     ExportRequest,
     ExportResponse,
+    ResponseExportRequest,
+    ResponseExportResponse,
     User,
     UserRole,
 )
@@ -899,22 +912,30 @@ async def logout(request: Request, user: User = Depends(auth_dependency)):
     kill switch survives restart and spans replicas.
     """
     auth_header = request.headers.get("Authorization", "")
-    revoked = revoke_token(auth_header[7:]) if auth_header.startswith("Bearer ") else False
+    revoked = False
+    error: HTTPException | None = None
+    try:
+        revoked = revoke_token(auth_header[7:]) if auth_header.startswith("Bearer ") else False
+    except HTTPException as exc:  # revocation store down → 503, token still live
+        error = exc
     # Logout is an authenticated, state-changing security event — audit it, the
     # same way /v1/auth/magic/consume is audited (login, being pre-auth, is not).
+    # A failed logout is audited too: the token was NOT revoked.
     _safe_audit_write(
         user=user,
         case_id=None,
         endpoint="/v1/auth/logout",
         request_payload={},
-        response_payload={"revoked": revoked},
+        response_payload={"revoked": revoked, "error": error.status_code if error else None},
         masked_rules=[],
         model_used=None,
         prompt_tokens=0,
         completion_tokens=0,
         latency_ms=0,
-        policy_decisions={"revoked": revoked},
+        policy_decisions={"revoked": revoked, "error": error is not None},
     )
+    if error is not None:
+        raise error
     return {"ok": True, "revoked": revoked}
 
 
@@ -962,6 +983,69 @@ def metrics_endpoint(request: Request):
 @app.get("/v1/quota")
 def quota(user: User = Depends(auth_dependency)):
     return rate_limit.get_quota_snapshot(user)
+
+
+_CASE_LIST_ROLES = {UserRole.ATTORNEY, UserRole.PARALEGAL, UserRole.AUDITOR}
+
+
+@app.get("/v1/cases")
+def list_cases(user: User = Depends(auth_dependency)):
+    """Cases the caller may open, for the dashboard and case list.
+
+    Per case: the SERVER-resolved security level (the SPA must not infer it
+    from the case_id), the metadata of the last analysis (case_summary — no
+    OA text) and the last audit activity. Visibility comes from the same ACL
+    ``authorize_case_access`` enforces (``case_scope``). No case_id travels in
+    the URL. The role check runs inside the audited try/finally, so a denied
+    call is audited too (invariant #4).
+    """
+    started = time.monotonic()
+    error: BaseException | None = None
+    listed: list[str] = []
+    try:
+        if user.role not in _CASE_LIST_ROLES:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "case list not available for this role")
+        all_in_tenant, explicit = case_scope(user)
+        summaries = case_summary.summaries_for_tenant(user.tenant_id)
+        last_activity: dict[str, str] = {}
+        for row in audit.writer.list_for_tenant(user.tenant_id, limit=1000):
+            cid = row.get("case_id")
+            if cid and cid not in last_activity:  # rows are newest-first
+                last_activity[cid] = row["timestamp_utc"]
+        visible = set(explicit)
+        if all_in_tenant:
+            visible |= set(summaries) | set(last_activity)
+        cases = []
+        for cid in sorted(visible):
+            cases.append(
+                {
+                    "case_id": cid,
+                    "security_level": security_level_for_case(cid),
+                    "last_activity": last_activity.get(cid),
+                    "last_analysis": summaries.get(cid),
+                }
+            )
+        listed = [c["case_id"] for c in cases]
+        return {"cases": cases, "read_only": user.role == UserRole.AUDITOR}
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        raise
+    finally:
+        _safe_audit_write(
+            user=user,
+            case_id=None,
+            endpoint="/v1/cases",
+            request_payload={},
+            response_payload={"count": len(listed)}
+            if error is None
+            else _error_response_payload(error),
+            masked_rules=[],
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            policy_decisions={"authz_passed": error is None, "error": error is not None},
+        )
 
 
 # ---------- Main analysis endpoint ----------
@@ -1113,7 +1197,8 @@ async def analyze_oa(
             return response
 
         # 5. Circuit breaker
-        if rate_limit.cost_circuit_state()["tripped"]:
+        # Per-tenant (M-12): another tenant's spend must not degrade this one.
+        if rate_limit.tenant_cost_circuit_state(user.tenant_id)["tripped"]:
             policy_decisions["circuit_open"] = True
             # POC behavior: still serve, but the LLM router will degrade to cheap model.
             # In production: optionally 503 here for graceful shedding.
@@ -1138,6 +1223,19 @@ async def analyze_oa(
             reserved_tokens=reserved_quota_tokens,
         )
         quota_reservation_settled = True
+
+        # 7b. Case summary (dashboard / case list) — metadata only, no OA
+        # text. A failure here must never fail the analysis the user waited for.
+        try:
+            case_summary.record_analysis(
+                user,
+                body.case_id,
+                body.target_patent_no,
+                _jurisdiction_for_patent(body.target_patent_no),
+                response,
+            )
+        except Exception:  # noqa: BLE001 — convenience data, never fatal
+            logger.exception("case summary write failed for case=%s", body.case_id)
 
         # 8. Cache write
         cache.set_response(
@@ -2089,6 +2187,125 @@ def export_draft(
             prompt_tokens=0,
             completion_tokens=0,
             latency_ms=latency_ms,
+            policy_decisions=pd,
+        )
+
+
+def _safe_filename_part(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", value)[:80] or "response"
+
+
+@app.post("/v1/oa/export_response", response_model=ResponseExportResponse)
+def export_response(
+    body: ResponseExportRequest,
+    request: Request,
+    user: User = Depends(auth_dependency),
+):
+    """The whole OA response as ONE signed-off document (DOCX + canonical text).
+
+    Same gates as /v1/oa/export — attorney sign-off authority, case ACL on the
+    body case_id, header/body case_id agreement, the exactly-True sign-off
+    409 — but the role check runs INSIDE the audited try/finally (not as a
+    route dependency), so a refused attempt by a paralegal is audited too.
+    The audit row stores counts and the SHA-256 of the canonical text, never
+    the text itself.
+    """
+    started = time.monotonic()
+    policy_decisions: dict[str, Any] = {
+        "authn_passed": True,
+        "authz_passed": False,
+        "signoff_passed": False,
+    }
+    response: ResponseExportResponse | None = None
+    summary = None
+    doc_hash: str | None = None
+    error: BaseException | None = None
+    all_segments = [s for sec in body.sections for s in sec.segments]
+    try:
+        header_case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+        if header_case_id and header_case_id != body.case_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "case_id mismatch: X-Case-Id and body case_id must agree.",
+            )
+        signoff.assert_signoff_authority(user)
+        authorize_case_access(user, body.case_id)
+        policy_decisions["authz_passed"] = True
+        policy_decisions.update(signoff.signoff_audit_fields(user, signed_off=False))
+
+        summary = signoff.summarise_provenance(all_segments)
+        if body.attorney_signoff is not True:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "attorney sign-off required before export. No document was produced.",
+            )
+        if summary.accepted_segments == 0:
+            raise HTTPException(
+                422,  # literal: the constant's name differs across Starlette versions
+                "no accepted sentence in any section — nothing to export.",
+            )
+        policy_decisions["signoff_passed"] = True
+
+        sections = [(sec.heading, sec.segments) for sec in body.sections]
+        document = signoff.assemble_response(body.title, sections)
+        doc_hash = signoff.content_hash(document)
+        docx_bytes = signoff.build_response_docx(body.title, sections, user.user_id, doc_hash)
+        response = ResponseExportResponse(
+            case_id=body.case_id,
+            document=document,
+            content_sha256=doc_hash,
+            provenance_summary=summary,
+            section_count=len(body.sections),
+            signed_off_by=user.user_id,
+            attorney_signoff=True,
+            filename=f"{_safe_filename_part(body.case_id)}-response.docx",
+            docx_base64=base64.b64encode(docx_bytes).decode("ascii"),
+        )
+        return response
+    except BaseException as exc:  # noqa: BLE001 — must reach the finally
+        error = exc
+        policy_decisions["error"] = True
+        raise
+    finally:
+        elapsed = time.monotonic() - started
+        signed_off = response is not None
+        metrics.HTTP_REQUEST_DURATION.observe(
+            elapsed,
+            {
+                "endpoint": "/v1/oa/export_response",
+                "method": "POST",
+                "status": str(200 if error is None else getattr(error, "status_code", 500)),
+            },
+        )
+        metrics.EXPORTS.inc(
+            {"tenant": user.tenant_id, "signed_off": "true" if signed_off else "false"}
+        )
+        pd: dict[str, Any] = {**policy_decisions, "attorney_signoff": signed_off}
+        if summary is not None:
+            pd["prov_total_segments"] = summary.total_segments
+            pd["prov_accepted_segments"] = summary.accepted_segments
+            pd["prov_ai_generated"] = summary.ai_generated
+            pd["prov_attorney_edited"] = summary.attorney_edited
+            pd["prov_attorney_added"] = summary.attorney_added
+            pd["prov_paralegal_edited"] = summary.paralegal_edited
+            pd["prov_paralegal_added"] = summary.paralegal_added
+        _safe_audit_write(
+            user=user,
+            case_id=body.case_id,
+            endpoint="/v1/oa/export_response",
+            request_payload={
+                "section_count": len(body.sections),
+                "segment_count": len(all_segments),
+                "rejection_ids": [sec.rejection_id for sec in body.sections],
+            },
+            response_payload=_error_response_payload(error)
+            if error is not None
+            else {"content_sha256": doc_hash, "signed_off_by": user.user_id},
+            masked_rules=[],
+            model_used=None,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=int(elapsed * 1000),
             policy_decisions=pd,
         )
 

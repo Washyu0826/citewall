@@ -207,3 +207,31 @@ def test_quota_reservation_independent_of_cost_breaker():
 def test_cost_circuit_state_shape_unchanged():
     state = rl.cost_circuit_state()
     assert set(state) == {"tripped", "current_usd", "threshold_usd"}
+
+
+# ---------------------------------------------------------------------------
+# 5. M-12 — the breaker is per tenant; the fleet figure is only a backstop
+# ---------------------------------------------------------------------------
+def test_one_tenants_spend_does_not_degrade_another(monkeypatch):
+    monkeypatch.setattr(settings, "COST_CIRCUIT_TENANT_DAILY_USD", 10.0)
+    monkeypatch.setattr(settings, "COST_CIRCUIT_DAILY_USD", 1_000.0)
+    rl.record_usage(_user(tenant_id="tenant_a"), 0, 0, cost_usd=11.0)
+
+    a = rl.tenant_cost_circuit_state("tenant_a")
+    b = rl.tenant_cost_circuit_state("tenant_b")
+    assert a["tripped"] is True and a["tenant_tripped"] is True
+    assert b["tripped"] is False
+    assert b["current_usd"] == 0.0
+
+
+def test_fleet_backstop_trips_every_tenant(monkeypatch):
+    monkeypatch.setattr(settings, "COST_CIRCUIT_TENANT_DAILY_USD", 100.0)
+    monkeypatch.setattr(settings, "COST_CIRCUIT_DAILY_USD", 15.0)
+    rl.record_usage(_user(user_id="a1", tenant_id="tenant_a"), 0, 0, cost_usd=8.0)
+    rl.record_usage(_user(user_id="b1", tenant_id="tenant_b"), 0, 0, cost_usd=8.0)
+
+    for tenant in ("tenant_a", "tenant_b"):
+        state = rl.tenant_cost_circuit_state(tenant)
+        assert state["tenant_tripped"] is False
+        assert state["fleet_tripped"] is True
+        assert state["tripped"] is True

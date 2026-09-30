@@ -117,6 +117,53 @@ def summarise_provenance(segments: list[ProvenanceSegment]) -> ProvenanceSummary
     return summary
 
 
+def assemble_response(title: str, sections: list[tuple[str, list[ProvenanceSegment]]]) -> str:
+    """Whole-response plain text: title, then each section's heading followed by
+    its ACCEPTED segments. This canonical text is what gets hashed."""
+    parts = [title] if title else []
+    for heading, segments in sections:
+        body = assemble_document(segments)
+        parts.append(f"{heading}\n\n{body}" if body else heading)
+    return _SEGMENT_JOINER.join(parts)
+
+
+def build_response_docx(
+    title: str,
+    sections: list[tuple[str, list[ProvenanceSegment]]],
+    signed_off_by: str,
+    doc_hash: str,
+) -> bytes:
+    """Render the signed-off response as a DOCX: title, one heading per
+    rejection, accepted segments as paragraphs, and a sign-off block carrying
+    the content hash so a filed copy can be matched to its audit row."""
+    import io
+
+    from docx import Document  # python-docx, already a dependency for uploads
+    from docx.shared import Pt
+
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.size = Pt(12)
+    if title:
+        doc.add_heading(title, level=1)
+    for heading, segments in sections:
+        doc.add_heading(heading, level=2)
+        accepted = [s.text for s in segments if s.accepted]
+        for text in accepted:
+            doc.add_paragraph(text)
+    doc.add_paragraph("")
+    footer = doc.add_paragraph()
+    run = footer.add_run(
+        f"簽核律師 / Signed off by: {signed_off_by}\n"
+        f"內容 SHA-256 / Content SHA-256: {doc_hash}\n"
+        "本文件為 CiteWall 產生、經律師逐句審閱之草稿；送件前請再次確認。"
+    )
+    run.font.size = Pt(9)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 def content_hash(document: str) -> str:
     """SHA-256 hex digest of the assembled document.
 

@@ -23,6 +23,9 @@ MAPPING_DB_PATH = DATA_DIR / "redaction_mapping.db"  # Q10: 不上雲的 mapping
 # replay_outbox() drains it back into the audit DB once the DB recovers.
 # Kept beside the audit DB so an on-prem operator can back both up together.
 AUDIT_OUTBOX_PATH = DATA_DIR / "audit_outbox.jsonl"
+# Dashboard / case list: metadata of each case's last analysis (types, claim
+# numbers, deadlines — never OA text or drafts). See backend/gateway/case_summary.py.
+CASE_SUMMARY_DB_PATH = DATA_DIR / "case_summaries.db"
 # Q13 WORM archive: sealed, immutable audit segments (POC of S3 Object Lock).
 AUDIT_ARCHIVE_DIR = DATA_DIR / "audit_archive"
 # Q20 DR/backup: snapshot+restore+drill target (per-timestamp backup sets).
@@ -124,7 +127,12 @@ class Settings:
     DEFAULT_DAILY_TOKENS: int = 100_000  # per-user daily token quota
     TENANT_MONTHLY_TOKENS: int = 50_000_000  # per-tenant monthly cap
     REQUEST_HARD_LIMIT_TOKENS: int = 32_000  # single prompt hard cap
-    COST_CIRCUIT_DAILY_USD: float = 100.0  # 日成本斷路器閾值（POC 用低值方便測）
+    # Cost circuit breaker (Q18 layer 5). Each tenant trips on ITS OWN daily
+    # spend, so one tenant's burst no longer degrades every tenant (M-12). The
+    # fleet-wide figure is only a backstop — keep it above the sum of normal
+    # tenant spend.
+    COST_CIRCUIT_TENANT_DAILY_USD: float = float(os.getenv("COST_CIRCUIT_TENANT_DAILY_USD", "100"))
+    COST_CIRCUIT_DAILY_USD: float = float(os.getenv("COST_CIRCUIT_DAILY_USD", "1000"))
 
     # LLM router (Q15 多模型 + 機密走地端)
     # Defaults below assume cloud Anthropic SDK (LLM_MODE=anthropic). They are
@@ -179,6 +187,8 @@ class Settings:
     # `redis` makes the logout kill switch durable + fleet-wide, with each jti
     # auto-expiring at the token's own TTL so the set stays bounded.
     REVOCATION_BACKEND: str = os.getenv("REVOCATION_BACKEND", "memory")  # memory | redis
+    # Store unreachable → 503 with this Retry-After (fail closed, ADR-02).
+    REVOCATION_RETRY_AFTER_SEC: int = int(os.getenv("REVOCATION_RETRY_AFTER_SEC", "5"))
     CACHE_TTL_RESPONSE_SEC: int = 3600  # LLM response cache 1hr
     CACHE_TTL_RETRIEVAL_SEC: int = 86400  # retrieval result 24hr
     CACHE_EMBEDDING_PERMANENT: bool = True  # patent embedding 永久

@@ -174,7 +174,7 @@ def quota(case_id: str = "", user: User = Depends(auth_dependency)) -> dict:
         "rpm_limit": settings.DEFAULT_RPM,
         "circuit_breaker": {
             "current_usd": 0.0,
-            "threshold_usd": settings.COST_CIRCUIT_DAILY_USD,
+            "threshold_usd": settings.COST_CIRCUIT_TENANT_DAILY_USD,
             "tripped": False,
         },
     }

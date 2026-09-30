@@ -487,10 +487,16 @@ def verify_token(token: str) -> User:
     if payload.get("typ") == _MAGIC_TOKEN_TYP:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token: wrong type")
 
-    # H-5: revocation (logout / leaked-token kill switch).
+    # H-5: revocation (logout / leaked-token kill switch). Store down = fail
+    # closed with 503 + Retry-After (ADR-02): never accept an unchecked token.
     jti = payload.get("jti")
-    if jti is not None and revocation.is_revoked(jti):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token revoked")
+    if jti is not None:
+        try:
+            revoked = revocation.is_revoked(jti)
+        except revocation.RevocationUnavailable as exc:
+            raise _revocation_unavailable() from exc
+        if revoked:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token revoked")
 
     user_id = payload.get("sub")
     user = _lookup_user(user_id)
@@ -527,8 +533,21 @@ def revoke_token(token: str) -> bool:
     ttl = int(exp - time.time()) if exp else settings.JWT_EXPIRES_MIN * 60
     if ttl <= 0:
         return False  # already expired — nothing to revoke
-    revocation.revoke(jti, ttl)
+    try:
+        revocation.revoke(jti, ttl)
+    except revocation.RevocationUnavailable as exc:
+        # Never report a logout as done when the token is still live.
+        raise _revocation_unavailable() from exc
     return True
+
+
+def _revocation_unavailable() -> HTTPException:
+    logger.warning("revocation store unavailable — refusing with 503 (fail closed)")
+    return HTTPException(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "session check temporarily unavailable, retry shortly",
+        headers={"Retry-After": str(settings.REVOCATION_RETRY_AFTER_SEC)},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1150,6 +1169,16 @@ def authenticate_saml_acs(
     user = _resolve_idp_user(identity)
     _register_federated_user(user)
     return user
+
+
+def case_scope(user: User) -> tuple[bool, set[str]]:
+    """The cases ``user`` may see: ``(all_in_tenant, explicit_case_ids)``.
+
+    Same ACL table ``authorize_case_access`` enforces, exposed for listing so
+    the case list and the per-request check can never disagree.
+    """
+    allowed = _CASE_ACL.get(user.user_id, set())
+    return "*" in allowed, {c for c in allowed if c != "*"}
 
 
 def authorize_case_access(user: User, case_id: str | None) -> None:

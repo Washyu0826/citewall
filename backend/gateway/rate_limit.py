@@ -582,9 +582,10 @@ def record_usage(
             if cost_usd:
                 # Cost stored as integer micro-dollars so INCRBY stays exact
                 # (redis counters are integers; floats would drift).
-                cost_key = f"cost:daily:{day}"
-                client.incrby(cost_key, int(round(cost_usd * 1_000_000)))
-                client.expire(cost_key, _DAILY_TTL_SEC)
+                micro = int(round(cost_usd * 1_000_000))
+                for cost_key in (f"cost:daily:{day}", _tenant_cost_key(user.tenant_id, day)):
+                    client.incrby(cost_key, micro)
+                    client.expire(cost_key, _DAILY_TTL_SEC)
         except Exception as exc:  # noqa: BLE001 — reconciliation is best-effort
             logger.warning("rate_limit: redis usage reconcile failed (%s)", exc)
 
@@ -696,6 +697,38 @@ def cost_circuit_state() -> dict:
         "tripped": today_cost >= settings.COST_CIRCUIT_DAILY_USD,
         "current_usd": round(today_cost, 4),
         "threshold_usd": settings.COST_CIRCUIT_DAILY_USD,
+    }
+
+
+def _tenant_cost_key(tenant_id: str, day: str) -> str:
+    return f"cost:tenant:{tenant_id}:daily:{day}"
+
+
+def tenant_cost_circuit_state(tenant_id: str) -> dict:
+    """Breaker decision for ONE tenant's request (M-12).
+
+    Trips on that tenant's own daily spend, or on the fleet-wide backstop
+    (:func:`cost_circuit_state`). Same redis-first / local-fallback read as
+    the fleet breaker.
+    """
+    day = _today()
+    tenant_cost = _tenant_daily_cost[(tenant_id, day)]
+    client = _quota_redis()
+    if client is not None:
+        try:
+            raw = client.get(_tenant_cost_key(tenant_id, day))
+            if raw is not None:
+                tenant_cost = int(raw) / 1_000_000.0
+        except Exception as exc:  # noqa: BLE001 — fall back to local tally
+            logger.warning("rate_limit: redis tenant cost read failed (%s); using local tally", exc)
+    fleet = cost_circuit_state()
+    tenant_tripped = tenant_cost >= settings.COST_CIRCUIT_TENANT_DAILY_USD
+    return {
+        "tripped": tenant_tripped or fleet["tripped"],
+        "tenant_tripped": tenant_tripped,
+        "fleet_tripped": fleet["tripped"],
+        "current_usd": round(tenant_cost, 4),
+        "threshold_usd": settings.COST_CIRCUIT_TENANT_DAILY_USD,
     }
 
 

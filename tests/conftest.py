@@ -60,6 +60,7 @@ _TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="patentmind-tests-"))
 _TEST_ENV_DEFAULTS.setdefault("AUDIT_DB_PATH", str(_TEST_DATA_DIR / "audit.db"))
 _TEST_ENV_DEFAULTS.setdefault("MAPPING_DB_PATH", str(_TEST_DATA_DIR / "mapping.db"))
 _TEST_ENV_DEFAULTS.setdefault("AUDIT_OUTBOX_PATH", str(_TEST_DATA_DIR / "audit_outbox.jsonl"))
+_TEST_ENV_DEFAULTS.setdefault("CASE_SUMMARY_DB_PATH", str(_TEST_DATA_DIR / "case_summaries.db"))
 for _k, _v in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(_k, _v)
 
@@ -93,6 +94,7 @@ _config_mod.MAPPING_DB_PATH = Path(os.environ["MAPPING_DB_PATH"])
 # into the per-session scratch dir too, so a forced audit-writer failure in
 # any test enqueues there instead of polluting the developer's data/ tree.
 _config_mod.AUDIT_OUTBOX_PATH = Path(os.environ["AUDIT_OUTBOX_PATH"])
+_config_mod.CASE_SUMMARY_DB_PATH = Path(os.environ["CASE_SUMMARY_DB_PATH"])
 
 import pytest  # noqa: E402  (must come after sys.path + env setup)
 from fastapi.testclient import TestClient  # noqa: E402

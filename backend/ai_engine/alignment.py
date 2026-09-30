@@ -54,7 +54,7 @@ from backend.ai_engine.claim_support import (
 from backend.ai_engine.element_table import _EN_STOPWORDS
 
 # A sentence is "supported" by a passage when at least this share of its
-# content units appear in the passage. 0.20: a real grounded sentence in the
+# content units appear in the passage. 0.25: a real grounded sentence in the
 # mock + seed corpus scores 0.35-0.8; an unrelated sentence scores < 0.1.
 SUPPORT_THRESHOLD = 0.25
 # Multilingual embedder cosine that also counts as support (bge-m3 / Qwen3:

@@ -271,10 +271,20 @@ def init_sentry(service_name: str) -> bool:
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
         release=os.getenv("SENTRY_RELEASE") or None,
         integrations=[StarletteIntegration(), FastApiIntegration()],
-        # Don't send PII — OA content goes through redaction; the rest is benign.
+        # send_default_pii=False only covers cookies / headers / user IP. The
+        # SDK ALSO ships, by default, every stack frame's local variables and
+        # the HTTP request body — an exception raised before masking.redact()
+        # would send the raw OA to a (possibly cloud) Sentry, bypassing
+        # redaction, the egress guard and confidential routing (invariants
+        # #3 / #7). Both are switched off here, and scrub_sentry_event() strips
+        # anything content-bearing that remains (defence in depth).
         send_default_pii=False,
-        # Tag every event with the service so we can split alerts.
-        before_send=lambda event, hint: _tag_service(event, service_name),
+        include_local_variables=False,
+        max_request_body_size="never",
+        before_send=lambda event, hint: _tag_service(scrub_sentry_event(event), service_name),
+        before_send_transaction=lambda event, hint: _tag_service(
+            scrub_sentry_event(event), service_name
+        ),
     )
     logger.info(
         "Sentry initialised for service=%s environment=%s",
@@ -287,6 +297,64 @@ def init_sentry(service_name: str) -> bool:
 def _tag_service(event: dict, service_name: str) -> dict:
     tags = event.setdefault("tags", {})
     tags["service"] = service_name
+    return event
+
+
+SCRUBBED = "[scrubbed]"
+
+
+def _scrub_stacktrace(stacktrace: dict | None) -> None:
+    # Keep only code location; `vars` would carry request data (OA text).
+    for frame in (stacktrace or {}).get("frames") or []:
+        frame.pop("vars", None)
+
+
+def scrub_sentry_event(event: dict) -> dict:
+    """Strip every content-bearing field from a Sentry event before it leaves.
+
+    What survives is enough to debug from the codebase: exception TYPE, stack
+    frames (file / function / line / our own source lines), tags, level,
+    transaction name and span ops. What goes: request body / query / headers /
+    cookies, frame locals, exception messages (they can quote input text),
+    log-message parameters, breadcrumb messages + data, extra, user.
+    Transaction names are route templates (case_id never goes in a URL path —
+    CLAUDE.md §9), so they stay.
+    """
+    request = event.get("request")
+    if isinstance(request, dict):
+        kept: dict[str, str] = {}
+        if request.get("method"):
+            kept["method"] = request["method"]
+        if isinstance(request.get("url"), str):
+            kept["url"] = request["url"].split("?", 1)[0]
+        event["request"] = kept
+
+    for exc in (event.get("exception") or {}).get("values") or []:
+        if exc.get("value"):
+            exc["value"] = SCRUBBED
+        _scrub_stacktrace(exc.get("stacktrace"))
+    for thread in (event.get("threads") or {}).get("values") or []:
+        _scrub_stacktrace(thread.get("stacktrace"))
+
+    logentry = event.get("logentry")
+    if isinstance(logentry, dict):
+        # Keep the format template, drop the substituted values.
+        logentry.pop("params", None)
+        logentry.pop("formatted", None)
+    if isinstance(event.get("message"), str):
+        event["message"] = SCRUBBED
+
+    crumbs = event.get("breadcrumbs")
+    crumb_list = crumbs.get("values") if isinstance(crumbs, dict) else crumbs
+    for crumb in crumb_list or []:
+        crumb.pop("message", None)
+        crumb.pop("data", None)
+
+    for span in event.get("spans") or []:
+        span.pop("data", None)
+
+    event.pop("extra", None)
+    event.pop("user", None)
     return event
 
 
