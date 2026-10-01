@@ -143,14 +143,12 @@ test.describe('Analyze flow', () => {
   });
 
   test('language switch to EN translates the workspace', async ({ page, viewport }) => {
-    test.skip(viewport && viewport.width < 640, 'the header language toggle is sm+ (phones use the account menu)');
+    test.skip(viewport && viewport.width < 640, 'the header language link is sm+ (phones use the account menu)');
     await loginAsAlice(page);
     await mockAnalyze(page);
 
-    await page
-      .getByRole('group', { name: /^(Language|語言)$/ })
-      .getByRole('button', { name: 'EN' })
-      .click();
+    // The header offers the other language as a text link, named in that language.
+    await page.locator('header').getByRole('button', { name: 'English', exact: true }).click();
 
     await expect(analyzeButton(page)).toHaveText(/Analyze OA/);
     await analyzeButton(page).click();
