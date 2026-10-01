@@ -91,3 +91,6 @@
     點擊被其他元素擋住。改為：案件登錄與案件列表在 <768px 用卡片清單（`useMediaQuery` 只渲染一種版面，
     避免重複的列與 test id）；新增 `cases_list.spec.js`（開啟案件後工作台、信任帶、切換器一致；B-6 回歸測試）。
   - CI 設定：三個 Playwright 步驟各用自己的 `--output`，失敗截圖不再被後面的步驟清掉（FAILURE_LOG B-8）。
+  - CI（846ada6）：**全綠**——桌面 63 passed、手機 44 passed，後端四個 job 全過。
+  - 視覺基準圖：從這次 CI（Linux）的截圖取 12 張存入 `tests/e2e/__screenshots__/`（逐張看過）；稽核頁表頭改為不換行後，
+    `audit-table-dark` 等下一次 CI 再補。

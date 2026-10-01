@@ -150,7 +150,7 @@ export default function AuditView({ session, onLogout }) {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm" aria-label={t('audit_page.title')}>
-              <thead className="border-b border-line bg-surface-sunken text-xs font-medium text-fg-muted">
+              <thead className="whitespace-nowrap border-b border-line bg-surface-sunken text-xs font-medium text-fg-muted">
                 <tr>
                   <th scope="col" className="px-4 py-2.5">{t('audit_page.col.time')}</th>
                   <th scope="col" className="px-4 py-2.5">{t('audit_page.col.user')}</th>
