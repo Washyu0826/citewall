@@ -152,32 +152,32 @@ export default function AuditView({ session, onLogout }) {
             <table className="w-full text-left text-sm" aria-label={t('audit_page.title')}>
               <thead className="whitespace-nowrap border-b border-line bg-surface-sunken text-xs font-medium text-fg-muted">
                 <tr>
-                  <th scope="col" className="px-4 py-2.5">{t('audit_page.col.time')}</th>
-                  <th scope="col" className="px-4 py-2.5">{t('audit_page.col.user')}</th>
-                  <th scope="col" className="px-4 py-2.5">{t('audit_page.col.case')}</th>
-                  <th scope="col" className="px-4 py-2.5">{t('audit_page.col.endpoint')}</th>
-                  <th scope="col" className="px-4 py-2.5">{t('audit_page.col.model')}</th>
-                  <th scope="col" className="px-4 py-2.5 text-right">{t('audit_page.col.tokens')}</th>
-                  <th scope="col" className="px-4 py-2.5 text-right">{t('audit_page.col.latency')}</th>
-                  <th scope="col" className="px-4 py-2.5">{t('audit_page.col.masking')}</th>
-                  <th scope="col" className="px-4 py-2.5">{t('audit_page.col.gates')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.time')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.user')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.case')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.endpoint')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.model')}</th>
+                  <th scope="col" className="px-3 py-2.5 text-right">{t('audit_page.col.tokens')}</th>
+                  <th scope="col" className="px-3 py-2.5 text-right">{t('audit_page.col.latency')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.masking')}</th>
+                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.gates')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line-subtle">
                 {rows.map((r) => (
                   <tr key={r.audit_id} className="align-top hover:bg-surface-hover">
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-fg-secondary">
+                    <td className="whitespace-nowrap px-3 py-3 font-mono text-fg-secondary">
                       <time dateTime={r.timestamp_utc}>{formatUtc(r.timestamp_utc)}</time>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-fg">{r.user_id}</td>
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-fg">{r.case_id || '—'}</td>
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-fg">{r.endpoint}</td>
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-fg-secondary">{r.model_used || '—'}</td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums text-fg-secondary">
+                    <td className="whitespace-nowrap px-3 py-3 text-fg">{r.user_id}</td>
+                    <td className="whitespace-nowrap px-3 py-3 font-mono text-fg">{r.case_id || '—'}</td>
+                    <td className="whitespace-nowrap px-3 py-3 font-mono text-fg">{r.endpoint}</td>
+                    <td className="whitespace-nowrap px-3 py-3 font-mono text-fg-secondary">{r.model_used || '—'}</td>
+                    <td className="px-3 py-3 text-right font-mono tabular-nums text-fg-secondary">
                       {((r.prompt_tokens || 0) + (r.completion_tokens || 0)).toLocaleString()}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums text-fg-secondary">{r.latency_ms}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 text-right font-mono tabular-nums text-fg-secondary">{r.latency_ms}</td>
+                    <td className="px-3 py-3">
                       {(r.masked_field_rules || []).length === 0 ? (
                         <span className="text-fg-muted">—</span>
                       ) : (
@@ -190,7 +190,7 @@ export default function AuditView({ session, onLogout }) {
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       <PolicyChips decisions={r.policy_decisions} t={t} />
                     </td>
                   </tr>
@@ -211,7 +211,7 @@ function PolicyChips({ decisions, t }) {
   );
   if (entries.length === 0) return <span className="text-fg-muted">—</span>;
   return (
-    <div className="flex min-w-56 max-w-72 flex-wrap gap-1">
+    <div className="flex max-w-64 flex-wrap gap-1">
       {entries.map(([k, v]) => {
         const info = INFORMATIONAL.has(k);
         const tone = info ? (v ? 'warning' : 'neutral') : v ? 'success' : 'error';
