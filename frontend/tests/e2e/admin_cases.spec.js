@@ -60,7 +60,8 @@ test.describe('case registry admin', () => {
     });
 
     await loginAs(page, 'carol');
-    await page.getByRole('button', { name: /^(案件登錄|Case registry)$/ }).click();
+    // Navigation entries are links (horizontal service nav).
+    await page.getByRole('link', { name: /^(案件登錄|Case registry)$/ }).click();
     await expect(page).toHaveURL(/\/admin\/cases/);
     await expect(page.getByTestId('admin-row-CASE-2025-001')).toBeVisible();
     await expect(page.getByText('CASE-DEMO-*')).toBeVisible();
@@ -104,7 +105,7 @@ test.describe('case registry admin', () => {
 
   test('non-admin sees no admin nav and is redirected away', async ({ page }) => {
     await loginAs(page, 'alice');
-    await expect(page.getByRole('button', { name: /^(案件登錄|Case registry)$/ })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /^(案件登錄|Case registry)$/ })).toHaveCount(0);
     await page.evaluate(() => window.history.pushState({}, '', '/admin/cases'));
     await page.evaluate(() => window.dispatchEvent(new PopStateEvent('popstate')));
     await expect(page).toHaveURL(/\/home/);

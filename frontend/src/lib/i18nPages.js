@@ -121,6 +121,8 @@ export const pagesZhTW = {
     request: '請求',
     deadline_statutory: '法定期限',
     deadline_internal: '建議內部完成日',
+    gates_ok: '閘道檢查全部通過',
+    gates: '閘道檢查',
   },
   response_export: {
     title: '整份申復書',
@@ -197,8 +199,10 @@ export const pagesZhTW = {
     none: '尚無期限',
   },
   home: {
-    greeting: '{{name}}，您好',
-    subtitle: '這裡是您負責案件的期限與進度總覽。',
+    title: '案件總覽',
+    subtitle: '您負責的案件、法定期限與分析進度。',
+    figures_label: '案件統計',
+    remaining: '剩餘',
     new_analysis: '開始新的分析',
     stats: {
       total: '我的案件',
@@ -213,14 +217,7 @@ export const pagesZhTW = {
     pending_title: '尚未分析的案件',
     pending_empty: '所有案件都已分析過。',
     open: '開啟',
-    analyze: '分析',
-    protection_title: '這個工作區如何保護您的資料',
-    protection: {
-      redaction: '個資與客戶識別碼在送出前遮罩，對照表只存在事務所內。',
-      routing: '機密案件只使用地端模型；未登錄的案件一律視為機密。',
-      citations: '草稿中的每個引用都必須對應到檢索到的來源，否則會被移除。',
-      audit: '每個操作都寫入防竄改的稽核鏈。',
-    },
+    analyze: '開始分析',
     load_error: '無法載入案件清單',
   },
   cases_page: {
@@ -228,6 +225,7 @@ export const pagesZhTW = {
     subtitle: '您有權限存取的案件。機密等級由伺服器端登錄決定。',
     subtitle_readonly: '稽核檢視（唯讀）：本事務所有活動紀錄的案件。',
     search: '搜尋案號',
+    filter_label: '篩選案件',
     filters: {
       all: '全部',
       due_soon: '即將到期',
@@ -267,6 +265,7 @@ export const pagesZhTW = {
   },
   audit_page: {
     title: '稽核紀錄',
+    records: '逐筆紀錄',
     desc: '每個請求一筆紀錄，只能新增、不能修改或刪除。紀錄以 HMAC 雜湊鏈串接，隨時可以驗證是否遭竄改。',
     summary: '驗證摘要',
     scope_global: '驗證範圍：所有事務所',
@@ -417,6 +416,8 @@ export const pagesEn = {
     request: 'Request',
     deadline_statutory: 'Statutory deadline',
     deadline_internal: 'Recommended internal date',
+    gates_ok: 'All gateway checks passed',
+    gates: 'Gateway checks',
   },
   response_export: {
     title: 'Whole response',
@@ -496,8 +497,10 @@ export const pagesEn = {
     none: 'No deadline yet',
   },
   home: {
-    greeting: 'Hello, {{name}}',
-    subtitle: 'Deadlines and progress for the cases you handle.',
+    title: 'Case overview',
+    subtitle: 'The cases you handle, their statutory deadlines and analysis status.',
+    figures_label: 'Case figures',
+    remaining: 'Time left',
     new_analysis: 'New analysis',
     stats: {
       total: 'My cases',
@@ -513,14 +516,7 @@ export const pagesEn = {
     pending_title: 'Not analyzed yet',
     pending_empty: 'Every case has been analyzed.',
     open: 'Open',
-    analyze: 'Analyze',
-    protection_title: 'How this workspace protects your data',
-    protection: {
-      redaction: 'Personal data and client identifiers are masked before anything leaves; the mapping stays inside the firm.',
-      routing: 'Confidential cases use on-prem models only; unregistered cases count as confidential.',
-      citations: 'Every citation in a draft must match a retrieved source, or it is removed.',
-      audit: 'Every action is written to a tamper-evident audit chain.',
-    },
+    analyze: 'Start analysis',
     load_error: 'Could not load the case list',
   },
   cases_page: {
@@ -528,6 +524,7 @@ export const pagesEn = {
     subtitle: 'Cases you are allowed to open. Confidentiality is set by the server-side registry.',
     subtitle_readonly: 'Audit view (read-only): cases with activity in this firm.',
     search: 'Search case number',
+    filter_label: 'Filter cases',
     filters: {
       all: 'All',
       due_soon: 'Due soon',
@@ -567,6 +564,7 @@ export const pagesEn = {
   },
   audit_page: {
     title: 'Audit log',
+    records: 'Records',
     desc: 'One record per request — append-only, never updated or deleted. Records are linked by an HMAC hash chain that can be verified at any time.',
     summary: 'Verification summary',
     scope_global: 'Scope: all firms',

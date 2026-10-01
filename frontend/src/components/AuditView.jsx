@@ -1,19 +1,17 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Loader2, RefreshCw, ScrollText, ShieldAlert, ShieldCheck, X } from 'lucide-react';
+import { Check, Loader2, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react';
 
 import { useAuditRecent, useAuditVerify } from '../api/queries.js';
 import { cn } from '../lib/utils';
-import { Badge } from './ui/badge.jsx';
 import { Button } from './ui/button.jsx';
-import { Card } from './ui/card.jsx';
-import { Page, PageHeader, Stat } from './ui/page.jsx';
-import EmptyState from './EmptyState.jsx';
+import { KeyFigures, Page, PageHeader, Section } from './ui/page.jsx';
 import ErrorBanner from './ErrorBanner.jsx';
 import { Skeleton } from './Skeleton.jsx';
 
 // Gate outcomes recorded per request. For *_passed a true value is the good
-// outcome; cache_hit / circuit_open are informational (true = notable).
+// outcome; cache_hit / circuit_open are informational and only worth a word
+// when they happened.
 const POLICY_KEYS = ['authz_passed', 'rate_limit_passed', 'quota_passed', 'cache_hit', 'circuit_open'];
 const INFORMATIONAL = new Set(['cache_hit', 'circuit_open']);
 
@@ -83,41 +81,43 @@ export default function AuditView({ session, onLogout }) {
         }
       />
 
-      <section aria-label={t('audit_page.summary')} className="mb-4 grid gap-3 sm:grid-cols-3">
-        <Stat
-          label={t('audit.hero.rows_label')}
-          value={summary.totalRows.toLocaleString()}
-          hint={t(scope === 'global' ? 'audit_page.scope_global' : 'audit_page.scope_tenant')}
-        />
-        <Stat
-          label={t('audit.hero.mismatches_label')}
-          value={summary.mismatches.toLocaleString()}
-          tone={verify ? (summary.allPass ? 'success' : 'danger') : 'neutral'}
-        />
-        <Stat
-          label={t('audit.hero.last_verified_label')}
-          value={
-            <span className="font-mono text-lg">
-              {summary.lastVerified ? formatUtc(summary.lastVerified.toISOString()) : t('audit.hero.never_verified')}
-            </span>
-          }
-          hint={summary.lastVerified ? 'UTC' : undefined}
-        />
-      </section>
+      <KeyFigures
+        label={t('audit_page.summary')}
+        className="mb-6"
+        items={[
+          {
+            label: t('audit.hero.rows_label'),
+            value: summary.totalRows.toLocaleString(),
+            hint: t(scope === 'global' ? 'audit_page.scope_global' : 'audit_page.scope_tenant'),
+          },
+          {
+            label: t('audit.hero.mismatches_label'),
+            value: summary.mismatches.toLocaleString(),
+            tone: verify ? (summary.allPass ? 'success' : 'danger') : undefined,
+          },
+          {
+            label: t('audit.hero.last_verified_label'),
+            value: (
+              <span className="font-mono text-xl">
+                {summary.lastVerified ? formatUtc(summary.lastVerified.toISOString()) : t('audit.hero.never_verified')}
+              </span>
+            ),
+            hint: summary.lastVerified ? 'UTC' : undefined,
+          },
+        ]}
+      />
 
       {verify && (
         <div
           className={cn(
-            'mb-4 flex items-start gap-2 rounded-brand border px-4 py-3 text-sm',
-            summary.allPass
-              ? 'border-success/40 bg-success-soft text-success'
-              : 'border-danger/40 bg-danger-soft text-danger'
+            'mb-8 flex items-start gap-2 border-l-4 py-2 pl-4 text-base',
+            summary.allPass ? 'border-success text-success' : 'border-danger font-semibold text-danger'
           )}
         >
           {summary.allPass ? (
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+            <ShieldCheck className="mt-1 h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
           ) : (
-            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+            <ShieldAlert className="mt-1 h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
           )}
           <span>
             {summary.allPass
@@ -128,70 +128,58 @@ export default function AuditView({ session, onLogout }) {
       )}
 
       {error && (
-        <div className="mb-4">
+        <div className="mb-6">
           <ErrorBanner error={error} onRetry={refresh} onDismiss={() => setDismissed(true)} onLogin={onLogout} />
         </div>
       )}
 
-      <Card className="overflow-hidden">
+      <Section id="audit-records" title={t('audit_page.records')}>
         {recentQ.isPending ? (
-          <div className="space-y-3 p-4">
+          <div className="space-y-3 border-t-2 border-fg pt-4">
             {[0, 1, 2].map((i) => (
-              <Skeleton key={i} className="h-10 w-full" />
+              <Skeleton key={i} className="h-8 w-full" />
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <EmptyState
-            bare
-            icon={<ScrollText className="mx-auto h-9 w-9 text-fg-muted" strokeWidth={1.5} aria-hidden="true" />}
-            title={t('empty.no_audit_title')}
-            description={t('empty.no_audit_desc')}
-          />
+          <div className="border-t-2 border-fg py-6">
+            <p className="font-medium text-fg">{t('empty.no_audit_title')}</p>
+            <p className="mt-1 text-sm text-fg-muted">{t('empty.no_audit_desc')}</p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm" aria-label={t('audit_page.title')}>
-              <thead className="whitespace-nowrap border-b border-line bg-surface-sunken text-xs font-medium text-fg-muted">
+            <table className="doc-table" aria-label={t('audit_page.title')}>
+              <thead>
                 <tr>
-                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.time')}</th>
-                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.user')}</th>
-                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.case')}</th>
-                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.endpoint')}</th>
-                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.model')}</th>
-                  <th scope="col" className="px-3 py-2.5 text-right">{t('audit_page.col.tokens')}</th>
-                  <th scope="col" className="px-3 py-2.5 text-right">{t('audit_page.col.latency')}</th>
-                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.masking')}</th>
-                  <th scope="col" className="px-3 py-2.5">{t('audit_page.col.gates')}</th>
+                  <th scope="col">{t('audit_page.col.time')}</th>
+                  <th scope="col">{t('audit_page.col.user')}</th>
+                  <th scope="col">{t('audit_page.col.case')}</th>
+                  <th scope="col">{t('audit_page.col.endpoint')}</th>
+                  <th scope="col">{t('audit_page.col.model')}</th>
+                  <th scope="col" className="text-right">{t('audit_page.col.tokens')}</th>
+                  <th scope="col" className="text-right">{t('audit_page.col.latency')}</th>
+                  <th scope="col">{t('audit_page.col.masking')}</th>
+                  <th scope="col">{t('audit_page.col.gates')}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-line-subtle">
+              <tbody>
                 {rows.map((r) => (
-                  <tr key={r.audit_id} className="align-top hover:bg-surface-hover">
-                    <td className="whitespace-nowrap px-3 py-3 font-mono text-fg-secondary">
+                  <tr key={r.audit_id}>
+                    <td className="whitespace-nowrap font-mono text-fg-secondary">
                       <time dateTime={r.timestamp_utc}>{formatUtc(r.timestamp_utc)}</time>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-fg">{r.user_id}</td>
-                    <td className="whitespace-nowrap px-3 py-3 font-mono text-fg">{r.case_id || '—'}</td>
-                    <td className="whitespace-nowrap px-3 py-3 font-mono text-fg">{r.endpoint}</td>
-                    <td className="whitespace-nowrap px-3 py-3 font-mono text-fg-secondary">{r.model_used || '—'}</td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums text-fg-secondary">
+                    <td className="whitespace-nowrap">{r.user_id}</td>
+                    <td className="whitespace-nowrap font-mono">{r.case_id || '—'}</td>
+                    <td className="whitespace-nowrap font-mono">{r.endpoint}</td>
+                    <td className="whitespace-nowrap font-mono text-fg-secondary">{r.model_used || '—'}</td>
+                    <td className="text-right font-mono tabular-nums text-fg-secondary">
                       {((r.prompt_tokens || 0) + (r.completion_tokens || 0)).toLocaleString()}
                     </td>
-                    <td className="px-3 py-3 text-right font-mono tabular-nums text-fg-secondary">{r.latency_ms}</td>
-                    <td className="px-3 py-3">
-                      {(r.masked_field_rules || []).length === 0 ? (
-                        <span className="text-fg-muted">—</span>
-                      ) : (
-                        <div className="flex max-w-56 flex-wrap gap-1">
-                          {r.masked_field_rules.map((m, i) => (
-                            <Badge key={i} tone="warning" size="sm" className="font-mono">
-                              {m}
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
+                    <td className="text-right font-mono tabular-nums text-fg-secondary">{r.latency_ms}</td>
+                    <td>
+                      <MaskingRules rules={r.masked_field_rules} />
                     </td>
-                    <td className="px-3 py-3">
-                      <PolicyChips decisions={r.policy_decisions} t={t} />
+                    <td>
+                      <GateDecisions decisions={r.policy_decisions} t={t} />
                     </td>
                   </tr>
                 ))}
@@ -199,32 +187,58 @@ export default function AuditView({ session, onLogout }) {
             </table>
           </div>
         )}
-      </Card>
+      </Section>
     </Page>
   );
 }
 
-/** One chip per gate decision: localized name + ✓/✗, raw key=value on hover. */
-function PolicyChips({ decisions, t }) {
-  const entries = Object.entries(decisions || {}).sort(
-    ([a], [b]) => rank(a) - rank(b) || a.localeCompare(b)
+/** "CASE_REF, EMAIL, PHONE" — rule names as text, one span each. */
+function MaskingRules({ rules }) {
+  if (!rules?.length) return <span className="text-fg-muted">—</span>;
+  return (
+    <span className="flex max-w-56 flex-wrap gap-x-1.5 font-mono text-xs leading-6 text-warning">
+      {rules.map((m, i) => (
+        <span key={i}>
+          <span>{m}</span>
+          {i < rules.length - 1 && <span className="text-fg-muted">,</span>}
+        </span>
+      ))}
+    </span>
   );
+}
+
+/**
+ * Gate decisions in words: "權限 ✓ 頻率限制 ✓ 配額 ✓". A failed gate is the
+ * only thing in red; cache hit / open breaker appear only when they happened.
+ * The raw key=value stays on hover for auditors.
+ */
+function GateDecisions({ decisions, t }) {
+  const entries = Object.entries(decisions || {})
+    .filter(([k, v]) => !INFORMATIONAL.has(k) || v)
+    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
   if (entries.length === 0) return <span className="text-fg-muted">—</span>;
   return (
-    <div className="flex max-w-64 flex-wrap gap-1">
+    <span className="flex min-w-40 max-w-64 flex-wrap gap-x-3 gap-y-0.5 text-sm">
       {entries.map(([k, v]) => {
         const info = INFORMATIONAL.has(k);
-        const tone = info ? (v ? 'warning' : 'neutral') : v ? 'success' : 'error';
+        const failed = !info && !v;
         const Icon = v ? Check : X;
         return (
-          <Badge key={k} tone={tone} size="sm" title={`${k}=${v}`}>
+          <span
+            key={k}
+            title={`${k}=${v}`}
+            className={cn(
+              'inline-flex items-center gap-0.5 whitespace-nowrap',
+              failed ? 'font-semibold text-danger' : info ? 'text-warning' : 'text-fg-secondary'
+            )}
+          >
             {t(`audit_page.gate.${k}`, { defaultValue: k })}
-            <Icon className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-            <span className="sr-only">{v ? t('audit_page.yes') : t('audit_page.no')}</span>
-          </Badge>
+            {!info && <Icon className="h-3.5 w-3.5" strokeWidth={2.25} aria-hidden="true" />}
+            {!info && <span className="sr-only">{v ? t('audit_page.yes') : t('audit_page.no')}</span>}
+          </span>
         );
       })}
-    </div>
+    </span>
   );
 }
 

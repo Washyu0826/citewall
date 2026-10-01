@@ -86,7 +86,7 @@ test.describe('Audit flow', () => {
 
   test('an attorney has no audit entry in the navigation', async ({ page }) => {
     await loginAsAlice(page, '/home');
-    await expect(page.getByTestId('nav-rail')).toBeVisible();
+    await expect(page.getByTestId('primary-nav')).toBeVisible();
     await expect(page.getByTestId('nav-audit')).toHaveCount(0);
     await expect(page.getByTestId('nav-cases')).toBeVisible();
   });

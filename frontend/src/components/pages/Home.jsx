@@ -1,32 +1,21 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import {
-  AlarmClock,
-  ArrowRight,
-  CalendarClock,
-  FileSearch,
-  FolderOpen,
-  Lock,
-  ScrollText,
-  ShieldCheck,
-  Sparkles,
-} from 'lucide-react';
+import { FileSearch } from 'lucide-react';
 
 import { useCases } from '../../api/queries.js';
 import { useCurrentCase } from '../../lib/currentCase.jsx';
 import { caseStatus, dashboardStats, upcomingDeadlines } from '../../lib/cases.js';
 import { Button } from '../ui/button.jsx';
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
-import { Page, PageHeader, Stat } from '../ui/page.jsx';
-import EmptyState from '../EmptyState.jsx';
+import { KeyFigures, Page, PageHeader, Section } from '../ui/page.jsx';
 import ErrorBanner from '../ErrorBanner.jsx';
-import { SkeletonCard } from '../Skeleton.jsx';
-import { DeadlineCell, RejectionBadges, SecurityBadge } from '../cases/CaseBits.jsx';
+import { Skeleton } from '../Skeleton.jsx';
+import { DateText, DaysLeftText, RejectionText, SecurityText } from '../cases/CaseBits.jsx';
 
 /**
- * Attorney / paralegal home: what is due, what has not been looked at, and a
- * one-line reminder of how the workspace protects client data (P1 trust-first).
+ * Attorney / paralegal home, written like a register rather than a dashboard:
+ * the key figures in one ruled line, then what is due and what has not been
+ * analysed yet, as ruled tables.
  */
 export default function Home({ session }) {
   const { t } = useTranslation();
@@ -35,19 +24,20 @@ export default function Home({ session }) {
   const casesQ = useCases(session.token);
   const cases = useMemo(() => casesQ.data?.cases ?? [], [casesQ.data]);
   const stats = useMemo(() => dashboardStats(cases), [cases]);
-  const upcoming = useMemo(() => upcomingDeadlines(cases).slice(0, 6), [cases]);
+  const upcoming = useMemo(() => upcomingDeadlines(cases).slice(0, 8), [cases]);
   const pending = useMemo(() => cases.filter((c) => caseStatus(c) === 'not_analyzed'), [cases]);
+  const loading = casesQ.isLoading;
+  const figure = (n) => (loading ? '—' : n);
 
   const openCase = (caseId) => {
     setCaseId(caseId);
     navigate('/analyze');
   };
-  const firstName = (session.display_name || '').split(' (')[0];
 
   return (
     <Page>
       <PageHeader
-        title={t('home.greeting', { name: firstName })}
+        title={t('home.title')}
         description={t('home.subtitle')}
         actions={
           <Button onClick={() => navigate('/analyze')} data-testid="home-new-analysis">
@@ -63,115 +53,118 @@ export default function Home({ session }) {
         </div>
       )}
 
-      <section aria-label={t('home.stats.total')} className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label={t('home.stats.total')} value={casesQ.isLoading ? '—' : stats.total} icon={FolderOpen} />
-        <Stat
-          label={t('home.stats.due_soon')}
-          value={casesQ.isLoading ? '—' : stats.dueSoon}
-          tone={stats.dueSoon ? 'warning' : 'neutral'}
-          icon={CalendarClock}
-        />
-        <Stat
-          label={t('home.stats.overdue')}
-          value={casesQ.isLoading ? '—' : stats.overdue}
-          tone={stats.overdue ? 'danger' : 'neutral'}
-          icon={AlarmClock}
-        />
-        <Stat label={t('home.stats.confidential')} value={casesQ.isLoading ? '—' : stats.confidential} icon={Lock} />
-      </section>
+      <KeyFigures
+        label={t('home.figures_label')}
+        items={[
+          { label: t('home.stats.total'), value: figure(stats.total) },
+          { label: t('home.stats.due_soon'), value: figure(stats.dueSoon), tone: stats.dueSoon ? 'warning' : undefined },
+          { label: t('home.stats.overdue'), value: figure(stats.overdue), tone: stats.overdue ? 'danger' : undefined },
+          { label: t('home.stats.not_analyzed'), value: figure(stats.notAnalyzed) },
+          { label: t('home.stats.confidential'), value: figure(stats.confidential) },
+        ]}
+      />
 
-      <div className="grid items-start gap-6 xl:grid-cols-[2fr_1fr]">
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>{t('home.deadlines_title')}</CardTitle>
-              <p className="mt-0.5 text-sm text-fg-muted">{t('home.deadlines_hint')}</p>
-            </div>
-          </CardHeader>
-          {casesQ.isLoading ? (
-            <CardContent>
-              <SkeletonCard className="border-0 p-0 shadow-none" />
-            </CardContent>
-          ) : upcoming.length === 0 ? (
-            <EmptyState
-              bare
-              icon={<CalendarClock className="mx-auto h-9 w-9 text-fg-muted" strokeWidth={1.5} aria-hidden="true" />}
-              title={t('home.deadlines_empty')}
-            />
-          ) : (
-            <ul className="divide-y divide-line-subtle" data-testid="home-deadlines">
-              {upcoming.map((c) => (
-                <li key={c.case_id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-                  <div className="min-w-40">
-                    <p className="font-mono text-sm font-medium text-fg">{c.case_id}</p>
-                    <p className="text-sm text-fg-muted">
+      <Section id="home-due" title={t('home.deadlines_title')} description={t('home.deadlines_hint')}>
+        {loading ? (
+          <LoadingRows />
+        ) : upcoming.length === 0 ? (
+          <p className="border-t-2 border-fg py-4 text-fg-muted">{t('home.deadlines_empty')}</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="doc-table" data-testid="home-deadlines">
+              <thead>
+                <tr>
+                  <th scope="col">{t('cases_page.columns.case')}</th>
+                  <th scope="col">{t('cases_page.columns.jurisdiction')}</th>
+                  <th scope="col">{t('cases_page.columns.rejections')}</th>
+                  <th scope="col">{t('cases_page.columns.deadline')}</th>
+                  <th scope="col">{t('home.remaining')}</th>
+                  <th scope="col">
+                    <span className="sr-only">{t('cases_page.columns.actions')}</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {upcoming.map((c) => (
+                  <tr key={c.case_id}>
+                    <th scope="row" className="whitespace-nowrap font-mono">
+                      {c.case_id}
+                    </th>
+                    <td className="whitespace-nowrap">
                       {t(`jurisdiction.${c.last_analysis.jurisdiction}`, {
                         defaultValue: c.last_analysis.jurisdiction || '—',
                       })}
-                    </p>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <RejectionBadges types={c.last_analysis.rejection_types} />
-                  </div>
-                  <DeadlineCell iso={c.last_analysis.statutory_deadline} />
-                  <Button variant="outline" size="sm" onClick={() => openCase(c.case_id)}>
-                    {t('home.open')}
-                    <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+                    </td>
+                    <td>
+                      <RejectionText types={c.last_analysis.rejection_types} />
+                    </td>
+                    <td>
+                      <DateText iso={c.last_analysis.statutory_deadline} />
+                    </td>
+                    <td>
+                      <DaysLeftText iso={c.last_analysis.statutory_deadline} />
+                    </td>
+                    <td className="text-right">
+                      <Button variant="link" size="sm" className="h-auto px-0" onClick={() => openCase(c.case_id)}>
+                        {t('home.open')}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
 
-        <div className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('home.pending_title')}</CardTitle>
-            </CardHeader>
-            {pending.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-fg-muted">
-                {casesQ.isLoading ? '…' : t('home.pending_empty')}
-              </p>
-            ) : (
-              <ul className="divide-y divide-line-subtle">
+      <Section id="home-pending" title={t('home.pending_title')}>
+        {loading ? (
+          <LoadingRows />
+        ) : pending.length === 0 ? (
+          <p className="border-t-2 border-fg py-4 text-fg-muted">{t('home.pending_empty')}</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="doc-table">
+              <thead>
+                <tr>
+                  <th scope="col">{t('cases_page.columns.case')}</th>
+                  <th scope="col">{t('cases_page.columns.security')}</th>
+                  <th scope="col">
+                    <span className="sr-only">{t('cases_page.columns.actions')}</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
                 {pending.map((c) => (
-                  <li key={c.case_id} className="flex items-center justify-between gap-3 px-4 py-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="truncate font-mono text-sm font-medium text-fg">{c.case_id}</span>
-                      <SecurityBadge level={c.security_level} size="sm" />
-                    </div>
-                    <Button variant="ghost" size="sm" onClick={() => openCase(c.case_id)}>
-                      {t('home.analyze')}
-                    </Button>
-                  </li>
+                  <tr key={c.case_id}>
+                    <th scope="row" className="whitespace-nowrap font-mono">
+                      {c.case_id}
+                    </th>
+                    <td className="w-full">
+                      <SecurityText level={c.security_level} />
+                    </td>
+                    <td className="text-right">
+                      <Button variant="link" size="sm" className="h-auto px-0" onClick={() => openCase(c.case_id)}>
+                        {t('home.analyze')}
+                      </Button>
+                    </td>
+                  </tr>
                 ))}
-              </ul>
-            )}
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('home.protection_title')}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-3 text-sm text-fg-secondary">
-                {[
-                  { Icon: ShieldCheck, key: 'redaction' },
-                  { Icon: Lock, key: 'routing' },
-                  { Icon: Sparkles, key: 'citations' },
-                  { Icon: ScrollText, key: 'audit' },
-                ].map(({ Icon, key }) => (
-                  <li key={key} className="flex gap-3">
-                    <Icon className="mt-0.5 h-4 w-4 shrink-0 text-brand-fg" strokeWidth={1.75} aria-hidden="true" />
-                    <span>{t(`home.protection.${key}`)}</span>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
     </Page>
+  );
+}
+
+function LoadingRows() {
+  return (
+    <div className="space-y-3 border-t-2 border-fg pt-4">
+      {[0, 1, 2].map((i) => (
+        <Skeleton key={i} className="h-6 w-full" />
+      ))}
+    </div>
   );
 }

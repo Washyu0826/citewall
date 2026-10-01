@@ -189,7 +189,7 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   const isDegraded = (result?.cost_meta?.model || '').includes('-DEGRADED-');
 
   return (
-    <Page className="max-w-[1920px]" width="full">
+    <Page>
       <PageHeader
         title={t('workspace.title')}
         actions={

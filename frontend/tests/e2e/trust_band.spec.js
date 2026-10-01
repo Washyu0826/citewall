@@ -94,11 +94,22 @@ test.describe('Trust band (Day 9C CHUNK-8)', () => {
     await expect(page.getByTestId('trust-routing')).toContainText('尚未選擇案件');
   });
 
-  test('chain-verify chip is present in the top bar', async ({ page }) => {
+  test('chain-verify chip is shown to audit roles only', async ({ page }) => {
+    // An attorney cannot open the audit log, so a chip linking there would
+    // be a dead control — it is not rendered.
     await loginAsAlice(page);
+    await expect(page.getByTestId('trust-band')).toBeVisible();
+    await expect(page.getByTestId('trust-chain-chip')).toHaveCount(0);
+  });
+
+  test('the auditor sees the verified chain in the top bar', async ({ page }) => {
+    await mockLogin(page, 'audit_dave');
+    await mockQuota(page);
+    await mockAuditRecent(page);
     await mockAuditVerify(page);
-    // Attorney role doesn't poll, but the chip is rendered as the "Chain
-    // verified" neutral chip variant. testid is stable across variants.
+    await page.goto('/');
+    await page.getByRole('button', { name: /Dave/ }).click();
+    await page.waitForURL(/\/audit/);
     await expect(page.getByTestId('trust-chain-chip')).toBeVisible();
   });
 });

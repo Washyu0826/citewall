@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { ChevronRight, Loader2, LogIn, Mail } from 'lucide-react';
 
 import { api } from '../api/client.js';
-import { Badge } from './ui/badge.jsx';
 import { Button } from './ui/button.jsx';
 import { Card, CardDescription, CardHeader, CardTitle } from './ui/card.jsx';
 import { Input, Label } from './ui/field.jsx';
@@ -11,10 +10,10 @@ import { Input, Label } from './ui/field.jsx';
 // The demo identity matrix. Person names stay verbatim (e2e selects the
 // buttons by name); role and capability text are localised.
 const DEMO_USERS = [
-  { id: 'alice', initial: 'A', name: 'Alice', role: 'attorney', tenant: 'tenant_a' },
-  { id: 'bob', initial: 'B', name: 'Bob', role: 'paralegal', tenant: 'tenant_a' },
-  { id: 'carol', initial: 'C', name: 'Carol', role: 'it_admin', tenant: 'tenant_b' },
-  { id: 'audit_dave', initial: 'D', name: 'Dave', role: 'auditor', tenant: 'tenant_a' },
+  { id: 'alice', name: 'Alice', role: 'attorney', tenant: 'tenant_a' },
+  { id: 'bob', name: 'Bob', role: 'paralegal', tenant: 'tenant_a' },
+  { id: 'carol', name: 'Carol', role: 'it_admin', tenant: 'tenant_b' },
+  { id: 'audit_dave', name: 'Dave', role: 'auditor', tenant: 'tenant_a' },
 ];
 const DESC_KEY = { alice: 'login.user_alice', bob: 'login.user_bob', carol: 'login.user_carol', audit_dave: 'login.user_dave' };
 
@@ -113,19 +112,12 @@ export default function Login({ onLogin }) {
                         disabled ? 'cursor-wait opacity-60' : 'hover:bg-surface-hover',
                       ].join(' ')}
                     >
-                      <span
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-white"
-                        aria-hidden="true"
-                      >
-                        {u.initial}
-                      </span>
                       <span className="min-w-0 flex-1">
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold text-fg">{u.name}</span>
-                          <Badge tone="brand" size="sm">
-                            {t(`shell.role_badge.${u.role}`)}
-                          </Badge>
-                          <span className="font-mono text-xs text-fg-muted">{u.tenant}</span>
+                        <span className="flex flex-wrap items-baseline gap-x-2">
+                          <span className="text-lg font-bold text-fg-link underline underline-offset-4">{u.name}</span>
+                          <span className="text-sm text-fg-secondary">
+                            {t(`shell.role_badge.${u.role}`)} · <span className="font-mono">{u.tenant}</span>
+                          </span>
                         </span>
                         <span className="mt-1 block text-sm text-fg-secondary">{t(DESC_KEY[u.id])}</span>
                       </span>

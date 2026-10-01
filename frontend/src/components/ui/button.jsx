@@ -22,7 +22,8 @@ const buttonVariants = cva(
           'border border-line-strong bg-surface-raised text-fg-secondary hover:bg-surface-hover hover:text-fg',
         secondary: 'bg-surface-sunken text-fg hover:bg-surface-hover',
         ghost: 'text-fg-secondary hover:bg-surface-hover hover:text-fg',
-        link: 'text-fg-link underline-offset-4 hover:underline',
+        // Official-site convention: links are always underlined; hover thickens it.
+        link: 'text-fg-link underline underline-offset-4 hover:decoration-2',
       },
       size: {
         default: 'h-10 px-4',

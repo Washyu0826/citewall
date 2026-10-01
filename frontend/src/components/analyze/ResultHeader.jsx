@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, CalendarPlus, ChevronDown, PencilLine } from 'lucide-react';
+import { AlertTriangle, CalendarPlus, Check, ChevronDown, PencilLine } from 'lucide-react';
 
 import { downloadDeadlineIcs } from '../../lib/ics.js';
 import { formatDate } from '../../lib/format.js';
@@ -11,9 +11,10 @@ import { toast } from '../../lib/toast.jsx';
 import { cn } from '../../lib/utils';
 import { Badge } from '../ui/badge.jsx';
 import { Button } from '../ui/button.jsx';
-import { SecurityBadge } from '../cases/CaseBits.jsx';
+import { SecurityText } from '../cases/CaseBits.jsx';
 
 const POLICY_KEYS = ['authz_passed', 'rate_limit_passed', 'quota_passed'];
+const DAYS_TONE = { error: 'font-semibold text-danger', warning: 'font-semibold text-warning', neutral: 'text-fg-secondary' };
 
 /**
  * Result header: the case, the statutory deadline (with how it was computed —
@@ -47,6 +48,7 @@ export default function ResultHeader({ result, caseId, targetPatent, securityLev
     }
     return out;
   }, [result, t]);
+  const failedGates = chips.filter((c) => !c.neutral && !c.good);
 
   const daysLabel =
     days === null
@@ -64,7 +66,7 @@ export default function ResultHeader({ result, caseId, targetPatent, securityLev
           <p className="text-sm text-fg-muted">{t('workspace.case_card')}</p>
           <p className="mt-0.5 flex flex-wrap items-center gap-2">
             <span className="font-mono text-lg font-semibold text-fg">{caseId}</span>
-            <SecurityBadge level={securityLevel} size="sm" />
+            <SecurityText level={securityLevel} />
           </p>
           <p className="mt-0.5 font-mono text-sm text-fg-muted">{targetPatent}</p>
         </div>
@@ -75,7 +77,7 @@ export default function ResultHeader({ result, caseId, targetPatent, securityLev
             <time dateTime={ds.statutory_deadline} className="font-mono text-lg font-semibold text-fg">
               {fmt(ds.statutory_deadline)}
             </time>
-            <Badge tone={deadlineTone(days)}>{daysLabel}</Badge>
+            <span className={cn('text-sm', DAYS_TONE[deadlineTone(days)])}>{daysLabel}</span>
             {warnings.length > 0 && (
               <Badge tone="warning" title={warnings.join('\n')}>
                 <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
@@ -101,13 +103,19 @@ export default function ResultHeader({ result, caseId, targetPatent, securityLev
               {t('workspace.edit_input')}
             </Button>
           </div>
+          {/* One line, not a chip per gate: all passed → a quiet sentence;
+              anything failed → the failures, in red. Each gate is listed in
+              the details panel. */}
           {chips.length > 0 && (
-            <span className="flex flex-wrap justify-end gap-1.5" data-testid="policy-chips">
-              {chips.map((c) => (
-                <Badge key={c.key} size="sm" tone={c.neutral ? 'neutral' : c.good ? 'success' : 'error'}>
-                  {c.label}
-                </Badge>
-              ))}
+            <span data-testid="policy-chips" className="text-sm" title={chips.map((c) => c.label).join('、')}>
+              {failedGates.length === 0 ? (
+                <span className="inline-flex items-center gap-1 text-fg-secondary">
+                  <Check className="h-4 w-4 text-success" strokeWidth={2.25} aria-hidden="true" />
+                  {t('workspace.gates_ok')}
+                </span>
+              ) : (
+                <span className="font-semibold text-danger">{failedGates.map((c) => c.label).join('、')}</span>
+              )}
             </span>
           )}
         </div>
@@ -151,6 +159,12 @@ export default function ResultHeader({ result, caseId, targetPatent, securityLev
             <Detail term={t('analyze.result.statutory')} value={fmt(ds.statutory_deadline)} />
             {ds.holiday_calendar_version && <Detail term={t('analyze.result.calendar')} value={ds.holiday_calendar_version} />}
           </dl>
+          {chips.length > 0 && (
+            <p className="text-fg-secondary">
+              <span className="text-fg-muted">{t('workspace.gates')}：</span>
+              {chips.map((c) => c.label).join('、')}
+            </p>
+          )}
           {warnings.length > 0 && (
             <ul className="list-inside list-disc text-warning">
               {warnings.map((w, i) => (

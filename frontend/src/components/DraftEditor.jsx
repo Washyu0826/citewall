@@ -253,7 +253,7 @@ export default function DraftEditor({
                     if (e.key === 'Escape') setEditingIdx(null);
                   }}
                   autoFocus
-                  className="w-full rounded border border-success/50 bg-surface-raised p-2 text-[15px] leading-7 text-fg"
+                  className="w-full rounded border border-success/50 bg-surface-raised p-2 font-serif text-base leading-8 text-fg"
                   rows={3}
                 />
                 <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -271,7 +271,7 @@ export default function DraftEditor({
                 <div className="min-w-0 flex-1">
                   <p
                     className={cn(
-                      'px-1 text-[15px] leading-7 text-fg',
+                      'px-1 font-serif text-base leading-8 text-fg',
                       l.source === 'ai_generated' ? 'ai-line' : 'attorney-line',
                       l.status === 'excluded' && 'text-fg-muted line-through decoration-rose-400/60'
                     )}
@@ -549,7 +549,7 @@ function CitationPill({ n, hit, onCitationClick, unsupported = false }) {
               {hit.patent_no}
               <span className="ml-1 font-sans font-normal text-fg-muted">· {hit.section}</span>
             </p>
-            <blockquote className="mt-2 max-h-48 overflow-y-auto border-l-2 border-line-strong pl-3 text-sm leading-relaxed text-fg-secondary">
+            <blockquote className="mt-2 max-h-48 overflow-y-auto border-l-2 border-line-strong pl-3 font-serif text-sm leading-relaxed text-fg-secondary">
               {hit.text}
             </blockquote>
             {onCitationClick && (

@@ -6,9 +6,7 @@ import { adminApi, filterCases, normalizeRegistry } from '../api/admin.js';
 import { formatDate } from '../lib/cases.js';
 import { toast } from '../lib/toast.jsx';
 import { useMediaQuery } from '../lib/useMediaQuery.js';
-import { Badge } from './ui/badge.jsx';
 import { Button } from './ui/button.jsx';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card.jsx';
 import { Field, Input, Select } from './ui/field.jsx';
 import {
   Dialog,
@@ -19,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from './ui/overlay.jsx';
-import { Page, PageHeader } from './ui/page.jsx';
+import { Page, PageHeader, Section } from './ui/page.jsx';
 import { Skeleton } from './Skeleton.jsx';
 
 const EMPTY_DRAFT = { case_id: '', security_level: 'confidential', note: '' };
@@ -142,17 +140,11 @@ export default function CaseAdmin({ session }) {
 
       <div className="grid items-start gap-6 xl:grid-cols-[1fr_20rem]">
         <div className="flex min-w-0 flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <div>
-                <CardTitle id="case-admin-add">{t('admin.add')}</CardTitle>
-                <CardDescription>{t('admin_page.add_desc')}</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent>
+          <Section id="case-admin-add" title={t('admin.add')} description={t('admin_page.add_desc')} className="mb-0">
+            <div className="border-t-2 border-fg pt-4">
               <form
                 onSubmit={submitNew}
-                aria-labelledby="case-admin-add"
+                aria-labelledby="case-admin-add-heading"
                 className="grid gap-4 md:grid-cols-[2fr_1.4fr_2fr_auto] md:items-end"
               >
                 <Field label={t('admin.case_id')}>
@@ -191,12 +183,12 @@ export default function CaseAdmin({ session }) {
                   {t('admin.add')}
                 </Button>
               </form>
-            </CardContent>
-          </Card>
+            </div>
+          </Section>
 
           <section aria-labelledby="case-admin-list" className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-3">
-              <h2 id="case-admin-list" className="text-base font-semibold text-fg">
+              <h2 id="case-admin-list" className="text-xl font-bold text-fg">
                 {t('admin_page.registered')}
               </h2>
               <div className="relative w-full sm:ml-auto sm:max-w-xs">
@@ -219,97 +211,90 @@ export default function CaseAdmin({ session }) {
               </p>
             </div>
 
-            <Card className="overflow-hidden">
-              {loading ? (
-                <div className="space-y-3 p-4">
-                  {[0, 1].map((i) => (
-                    <Skeleton key={i} className="h-10 w-full" />
-                  ))}
-                </div>
-              ) : rows.length === 0 ? (
-                <p className="px-4 py-8 text-center text-sm text-fg-muted">{t('admin.empty')}</p>
-              ) : asTable ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm" aria-labelledby="case-admin-list">
-                    <thead className="border-b border-line bg-surface-sunken text-xs font-medium text-fg-muted">
-                      <tr>
-                        <th scope="col" className="px-4 py-2.5">{t('admin.case_id')}</th>
-                        <th scope="col" className="px-4 py-2.5">{t('admin.level')}</th>
-                        <th scope="col" className="px-4 py-2.5">{t('admin.status')}</th>
-                        <th scope="col" className="px-4 py-2.5">{t('admin.note')}</th>
-                        <th scope="col" className="px-4 py-2.5">{t('admin.updated')}</th>
-                        <th scope="col" className="px-4 py-2.5">
-                          <span className="sr-only">{t('admin.actions')}</span>
+            {loading ? (
+              <div className="space-y-3 border-t-2 border-fg pt-4">
+                {[0, 1].map((i) => (
+                  <Skeleton key={i} className="h-8 w-full" />
+                ))}
+              </div>
+            ) : rows.length === 0 ? (
+              <p className="border-t-2 border-fg py-6 text-fg-muted">{t('admin.empty')}</p>
+            ) : asTable ? (
+              <div className="overflow-x-auto">
+                <table className="doc-table" aria-labelledby="case-admin-list">
+                  <thead>
+                    <tr>
+                      <th scope="col">{t('admin.case_id')}</th>
+                      <th scope="col">{t('admin.level')}</th>
+                      <th scope="col">{t('admin.status')}</th>
+                      <th scope="col">{t('admin.note')}</th>
+                      <th scope="col">{t('admin.updated')}</th>
+                      <th scope="col">
+                        <span className="sr-only">{t('admin.actions')}</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((c) => (
+                      <tr key={c.case_id} data-testid={`admin-row-${c.case_id}`}>
+                        <th scope="row" className="whitespace-nowrap font-mono font-semibold text-fg">
+                          {c.case_id}
                         </th>
+                        <td>{levelSelect(c, 'h-9 min-w-44')}</td>
+                        <td>
+                          <ActiveText active={c.active} t={t} />
+                        </td>
+                        <td className="max-w-64 text-fg-secondary">{c.note || '—'}</td>
+                        <td className="whitespace-nowrap text-fg-secondary">
+                          <UpdatedBy c={c} />
+                        </td>
+                        <td className="text-right">{deactivateButton(c)}</td>
                       </tr>
-                    </thead>
-                    <tbody className="divide-y divide-line-subtle">
-                      {rows.map((c) => (
-                        <tr key={c.case_id} className="hover:bg-surface-hover" data-testid={`admin-row-${c.case_id}`}>
-                          <th scope="row" className="whitespace-nowrap px-4 py-3 text-left font-mono font-medium text-fg">
-                            {c.case_id}
-                          </th>
-                          <td className="px-4 py-3">{levelSelect(c, 'h-9 min-w-44')}</td>
-                          <td className="px-4 py-3">
-                            <ActiveBadge active={c.active} t={t} />
-                          </td>
-                          <td className="max-w-64 px-4 py-3 text-fg-secondary">{c.note || '—'}</td>
-                          <td className="whitespace-nowrap px-4 py-3 text-fg-secondary">
-                            <UpdatedBy c={c} />
-                          </td>
-                          <td className="px-4 py-3 text-right">{deactivateButton(c)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <ul className="divide-y divide-line-subtle" aria-labelledby="case-admin-list">
-                  {rows.map((c) => (
-                    <li key={c.case_id} className="flex flex-col gap-3 p-4" data-testid={`admin-row-${c.case_id}`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="break-all font-mono font-medium text-fg">{c.case_id}</span>
-                        <ActiveBadge active={c.active} t={t} />
-                      </div>
-                      {levelSelect(c)}
-                      {c.note && <p className="text-sm text-fg-secondary">{c.note}</p>}
-                      <div className="flex items-center justify-between gap-2 text-sm text-fg-secondary">
-                        <UpdatedBy c={c} />
-                        {deactivateButton(c)}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Card>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <ul className="border-t-2 border-fg" aria-labelledby="case-admin-list">
+                {rows.map((c) => (
+                  <li key={c.case_id} className="flex flex-col gap-3 border-b border-line py-4" data-testid={`admin-row-${c.case_id}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="break-all font-mono font-semibold text-fg">{c.case_id}</span>
+                      <ActiveText active={c.active} t={t} />
+                    </div>
+                    {levelSelect(c)}
+                    {c.note && <p className="text-sm text-fg-secondary">{c.note}</p>}
+                    <div className="flex items-center justify-between gap-2 text-sm text-fg-secondary">
+                      <UpdatedBy c={c} />
+                      {deactivateButton(c)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         </div>
 
-        <aside className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <div className="flex items-start gap-3">
-                <Lock className="mt-0.5 h-5 w-5 shrink-0 text-confidential" strokeWidth={1.75} aria-hidden="true" />
-                <div>
-                  <CardTitle>{t('admin_page.fail_closed_title')}</CardTitle>
-                  <CardDescription className="mt-1">{t('admin.fail_closed')}</CardDescription>
-                </div>
-              </div>
-            </CardHeader>
-            {data.patterns.length > 0 && (
-              <CardContent>
-                <h3 className="text-sm font-medium text-fg-secondary">{t('admin.patterns')}</h3>
-                <ul className="mt-2 flex flex-col gap-2">
-                  {data.patterns.map((p) => (
-                    <li key={p.pattern} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                      <code className="rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-fg">{p.pattern}</code>
-                      <span className="text-fg-muted">{levelLabel(p.level)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            )}
-          </Card>
+        {/* Inset text: the rule an admin must not forget, set off by a rule, not a card. */}
+        <aside className="border-l-4 border-confidential py-1 pl-4">
+          <h2 className="flex items-center gap-2 text-base font-bold text-fg">
+            <Lock className="h-4 w-4 text-confidential" strokeWidth={2} aria-hidden="true" />
+            {t('admin_page.fail_closed_title')}
+          </h2>
+          <p className="mt-1 text-sm text-fg-secondary">{t('admin.fail_closed')}</p>
+          {data.patterns.length > 0 && (
+            <>
+              <h3 className="mt-4 text-sm font-semibold text-fg">{t('admin.patterns')}</h3>
+              <ul className="mt-2 flex flex-col gap-1.5">
+                {data.patterns.map((p) => (
+                  <li key={p.pattern} className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+                    <code className="font-mono text-fg">{p.pattern}</code>
+                    <span className="text-fg-muted">{levelLabel(p.level)}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </aside>
       </div>
 
@@ -336,11 +321,11 @@ export default function CaseAdmin({ session }) {
   );
 }
 
-function ActiveBadge({ active, t }) {
+function ActiveText({ active, t }) {
   return (
-    <Badge tone={active ? 'success' : 'neutral'} size="sm">
+    <span className={active ? 'whitespace-nowrap text-fg-secondary' : 'whitespace-nowrap text-fg-muted line-through'}>
       {active ? t('admin.active') : t('admin.inactive')}
-    </Badge>
+    </span>
   );
 }
 

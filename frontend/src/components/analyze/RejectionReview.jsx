@@ -33,12 +33,10 @@ export default function RejectionReview({
     <Card>
       <CardHeader className="flex-wrap">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h2 className="text-lg font-semibold text-fg">
+          <h2 className="text-xl font-bold text-fg">
             {t(`rejection.${rejection.rejection_type}`, { defaultValue: rejection.rejection_type })}
           </h2>
-          <Badge tone="neutral" size="sm" className="font-mono">
-            {rejection.rejection_type}
-          </Badge>
+          <span className="font-mono text-xs text-fg-muted">{rejection.rejection_type}</span>
           <span className="text-sm text-fg-muted">
             {t('claims_list', { list: rejection.affected_claims.join(', ') })}
           </span>
@@ -57,7 +55,7 @@ export default function RejectionReview({
       <CardContent className="space-y-6">
         <section>
           <h3 className="mb-2 text-sm font-medium text-fg-muted">{t('workspace.examiner_argument')}</h3>
-          <blockquote className="rounded-brand border-l-4 border-line-strong bg-surface-sunken px-4 py-3 text-[15px] leading-7 text-fg">
+          <blockquote className="border-l-4 border-line-strong py-1 pl-4 font-serif text-base leading-8 text-fg">
             {rejection.examiner_argument}
           </blockquote>
         </section>
@@ -70,7 +68,7 @@ export default function RejectionReview({
           <>
             <section>
               <h3 className="mb-2 text-sm font-medium text-fg-muted">{t('workspace.strategy')}</h3>
-              <p className="text-[15px] leading-7 text-fg">
+              <p className="font-serif text-base leading-8 text-fg">
                 <CitationText
                   text={draft.strategy || ''}
                   citationLookup={citationLookup}
