@@ -11,6 +11,7 @@ import { buildDeadlineRequestFields } from '../lib/deadlineInputs.js';
 import { tablesForRejection } from '../lib/elementTable.js';
 import { toast } from '../lib/toast.jsx';
 import { useDebouncedValue } from '../lib/useDebouncedValue.js';
+import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from './ui/overlay.jsx';
 import { Page, PageHeader } from './ui/page.jsx';
@@ -338,18 +339,4 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
       )}
     </Page>
   );
-}
-
-function useMediaQuery(query) {
-  const get = () => typeof window !== 'undefined' && !!window.matchMedia?.(query).matches;
-  const [matches, setMatches] = useState(get);
-  useEffect(() => {
-    const mql = window.matchMedia?.(query);
-    if (!mql) return undefined;
-    const onChange = () => setMatches(mql.matches);
-    onChange();
-    mql.addEventListener('change', onChange);
-    return () => mql.removeEventListener('change', onChange);
-  }, [query]);
-  return matches;
 }

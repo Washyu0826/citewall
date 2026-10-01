@@ -87,3 +87,7 @@
     **B-7** 格式不對的回應不再讓整個 app 當掉（`normalizeRegistry`，+3 測試）。
   - 手機版：`admin_cases` e2e 取消「只測桌面」，兩個專案都跑。
   - 驗證：eslint 0、vitest 92 passed、build 成功。
+  - CI（d7d5a40）：桌面 61 passed；手機的案件登錄測試失敗——表格在手機上要橫向捲動，「停用」按鈕在畫面外，
+    點擊被其他元素擋住。改為：案件登錄與案件列表在 <768px 用卡片清單（`useMediaQuery` 只渲染一種版面，
+    避免重複的列與 test id）；新增 `cases_list.spec.js`（開啟案件後工作台、信任帶、切換器一致；B-6 回歸測試）。
+  - CI 設定：三個 Playwright 步驟各用自己的 `--output`，失敗截圖不再被後面的步驟清掉（FAILURE_LOG B-8）。

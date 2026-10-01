@@ -6,6 +6,7 @@ import { ArrowRight, FolderOpen, Search } from 'lucide-react';
 import { useCases } from '../../api/queries.js';
 import { useCurrentCase } from '../../lib/currentCase.jsx';
 import { CASE_FILTERS, filterCases, formatDate } from '../../lib/cases.js';
+import { useMediaQuery } from '../../lib/useMediaQuery.js';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button.jsx';
 import { Card } from '../ui/card.jsx';
@@ -29,6 +30,8 @@ export default function Cases({ session }) {
   const readOnly = casesQ.data?.read_only ?? session.role === 'auditor';
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
+  // Phones get a card list (one variant only — no duplicated rows/test ids).
+  const asTable = useMediaQuery('(min-width: 768px)');
 
   const rows = useMemo(
     () => filterCases(casesQ.data?.cases ?? [], { query, filter }),
@@ -105,6 +108,37 @@ export default function Cases({ session }) {
             icon={<FolderOpen className="mx-auto h-9 w-9 text-fg-muted" strokeWidth={1.5} aria-hidden="true" />}
             title={t('cases_page.empty')}
           />
+        ) : !asTable ? (
+          <ul className="divide-y divide-line-subtle" data-testid="cases-list">
+            {rows.map((c) => {
+              const a = c.last_analysis;
+              return (
+                <li key={c.case_id} className="flex flex-col gap-2 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="break-all font-mono font-medium text-fg">{c.case_id}</span>
+                    <SecurityBadge level={c.security_level} size="sm" />
+                  </div>
+                  {a?.jurisdiction && (
+                    <p className="text-xs text-fg-muted">
+                      {t(`jurisdiction.${a.jurisdiction}`, { defaultValue: a.jurisdiction })}
+                      {a.target_patent_no ? ` · ${a.target_patent_no}` : ''}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge row={c} />
+                    <RejectionBadges types={a?.rejection_types} />
+                  </div>
+                  <DeadlineCell iso={a?.statutory_deadline} />
+                  {!readOnly && (
+                    <Button variant="outline" size="sm" className="self-start" onClick={() => openCase(c.case_id)}>
+                      {t('cases_page.open_analysis')}
+                      <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm" data-testid="cases-table">

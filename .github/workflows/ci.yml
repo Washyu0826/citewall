@@ -265,17 +265,20 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      # Each step writes to its own output dir: Playwright empties its output
+      # dir at start, so a shared one let the last step wipe the earlier
+      # steps' failure screenshots and traces.
       - name: Playwright functional (desktop)
-        run: npx playwright test --project=chromium-desktop --grep-invert "Visual regression"
+        run: npx playwright test --project=chromium-desktop --grep-invert "Visual regression" --output=test-results/desktop
 
       - name: Playwright functional (mobile)
         if: always()
-        run: npx playwright test --project=chromium-mobile --grep-invert "Visual regression"
+        run: npx playwright test --project=chromium-mobile --grep-invert "Visual regression" --output=test-results/mobile
 
       - name: Playwright visual regression (non-blocking — platform-specific baselines)
         if: always()
         continue-on-error: true
-        run: npx playwright test --grep "Visual regression"
+        run: npx playwright test --grep "Visual regression" --output=test-results/visual
 
       # Always upload: the visual step is non-blocking, so on a green run its
       # actual screenshots (the Linux baselines to commit) would otherwise be lost.

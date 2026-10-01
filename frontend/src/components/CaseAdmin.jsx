@@ -5,6 +5,7 @@ import { Lock, Plus, Search } from 'lucide-react';
 import { adminApi, filterCases, normalizeRegistry } from '../api/admin.js';
 import { formatDate } from '../lib/cases.js';
 import { toast } from '../lib/toast.jsx';
+import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { Badge } from './ui/badge.jsx';
 import { Button } from './ui/button.jsx';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card.jsx';
@@ -23,6 +24,11 @@ import { Skeleton } from './Skeleton.jsx';
 
 const EMPTY_DRAFT = { case_id: '', security_level: 'confidential', note: '' };
 
+// Below md the registry is a card list: a six-column table with a select in
+// it only fits a phone by scrolling sideways, and its row actions end up
+// off-screen.
+const TABLE_QUERY = '(min-width: 768px)';
+
 /**
  * Case-registry admin (it_admin only — the route is not mounted for other
  * roles and the gateway 403s them anyway). Lists registered cases, lets the
@@ -30,7 +36,7 @@ const EMPTY_DRAFT = { case_id: '', security_level: 'confidential', note: '' };
  * (never delete). Every change is audited server-side with before/after.
  */
 export default function CaseAdmin({ session }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const token = session?.token;
   const [data, setData] = useState(() => normalizeRegistry(null));
   const [loading, setLoading] = useState(true);
@@ -39,6 +45,7 @@ export default function CaseAdmin({ session }) {
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(null); // case_id awaiting deactivate confirmation
+  const asTable = useMediaQuery(TABLE_QUERY);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -85,10 +92,40 @@ export default function CaseAdmin({ session }) {
     );
   }
 
+  function changeLevel(caseId, level) {
+    run(
+      () => adminApi.updateCase(token, { case_id: caseId, security_level: level }),
+      t('admin.updated_ok', { id: caseId })
+    );
+  }
+
   function deactivate(caseId) {
     setConfirming(null);
     run(() => adminApi.deactivateCase(token, caseId), t('admin.deactivated', { id: caseId }));
   }
+
+  // Shared by the table and the card list.
+  const levelSelect = (c, className) => (
+    <Select
+      aria-label={t('admin.level_for', { id: c.case_id })}
+      className={className}
+      value={c.level}
+      disabled={busy}
+      onChange={(e) => changeLevel(c.case_id, e.target.value)}
+    >
+      {data.levels.map((l) => (
+        <option key={l} value={l}>
+          {levelLabel(l)}
+        </option>
+      ))}
+    </Select>
+  );
+  const deactivateButton = (c) =>
+    c.active && (
+      <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirming(c.case_id)}>
+        {t('admin.deactivate')}
+      </Button>
+    );
 
   return (
     <Page>
@@ -162,7 +199,7 @@ export default function CaseAdmin({ session }) {
               <h2 id="case-admin-list" className="text-base font-semibold text-fg">
                 {t('admin_page.registered')}
               </h2>
-              <div className="relative ml-auto w-full max-w-xs">
+              <div className="relative w-full sm:ml-auto sm:max-w-xs">
                 <Search
                   className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-muted"
                   aria-hidden="true"
@@ -183,94 +220,67 @@ export default function CaseAdmin({ session }) {
             </div>
 
             <Card className="overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm" aria-labelledby="case-admin-list">
-                  <thead className="border-b border-line bg-surface-sunken text-xs font-medium text-fg-muted">
-                    <tr>
-                      <th scope="col" className="px-4 py-2.5">{t('admin.case_id')}</th>
-                      <th scope="col" className="px-4 py-2.5">{t('admin.level')}</th>
-                      <th scope="col" className="px-4 py-2.5">{t('admin.status')}</th>
-                      <th scope="col" className="px-4 py-2.5">{t('admin.note')}</th>
-                      <th scope="col" className="px-4 py-2.5">{t('admin.updated')}</th>
-                      <th scope="col" className="px-4 py-2.5">
-                        <span className="sr-only">{t('admin.actions')}</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line-subtle">
-                    {loading &&
-                      [0, 1].map((i) => (
-                        <tr key={i}>
-                          <td colSpan={6} className="px-4 py-3">
-                            <Skeleton className="h-8 w-full" />
-                          </td>
-                        </tr>
-                      ))}
-                    {!loading && rows.length === 0 && (
+              {loading ? (
+                <div className="space-y-3 p-4">
+                  {[0, 1].map((i) => (
+                    <Skeleton key={i} className="h-10 w-full" />
+                  ))}
+                </div>
+              ) : rows.length === 0 ? (
+                <p className="px-4 py-8 text-center text-sm text-fg-muted">{t('admin.empty')}</p>
+              ) : asTable ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm" aria-labelledby="case-admin-list">
+                    <thead className="border-b border-line bg-surface-sunken text-xs font-medium text-fg-muted">
                       <tr>
-                        <td colSpan={6} className="px-4 py-8 text-center text-fg-muted">
-                          {t('admin.empty')}
-                        </td>
+                        <th scope="col" className="px-4 py-2.5">{t('admin.case_id')}</th>
+                        <th scope="col" className="px-4 py-2.5">{t('admin.level')}</th>
+                        <th scope="col" className="px-4 py-2.5">{t('admin.status')}</th>
+                        <th scope="col" className="px-4 py-2.5">{t('admin.note')}</th>
+                        <th scope="col" className="px-4 py-2.5">{t('admin.updated')}</th>
+                        <th scope="col" className="px-4 py-2.5">
+                          <span className="sr-only">{t('admin.actions')}</span>
+                        </th>
                       </tr>
-                    )}
-                    {!loading &&
-                      rows.map((c) => (
+                    </thead>
+                    <tbody className="divide-y divide-line-subtle">
+                      {rows.map((c) => (
                         <tr key={c.case_id} className="hover:bg-surface-hover" data-testid={`admin-row-${c.case_id}`}>
                           <th scope="row" className="whitespace-nowrap px-4 py-3 text-left font-mono font-medium text-fg">
                             {c.case_id}
                           </th>
+                          <td className="px-4 py-3">{levelSelect(c, 'h-9 min-w-44')}</td>
                           <td className="px-4 py-3">
-                            <Select
-                              aria-label={t('admin.level_for', { id: c.case_id })}
-                              className="h-9 min-w-44"
-                              value={c.level}
-                              disabled={busy}
-                              onChange={(e) =>
-                                run(
-                                  () => adminApi.updateCase(token, { case_id: c.case_id, security_level: e.target.value }),
-                                  t('admin.updated_ok', { id: c.case_id })
-                                )
-                              }
-                            >
-                              {data.levels.map((l) => (
-                                <option key={l} value={l}>
-                                  {levelLabel(l)}
-                                </option>
-                              ))}
-                            </Select>
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge tone={c.active ? 'success' : 'neutral'} size="sm">
-                              {c.active ? t('admin.active') : t('admin.inactive')}
-                            </Badge>
+                            <ActiveBadge active={c.active} t={t} />
                           </td>
                           <td className="max-w-64 px-4 py-3 text-fg-secondary">{c.note || '—'}</td>
                           <td className="whitespace-nowrap px-4 py-3 text-fg-secondary">
-                            {c.updated_by ? (
-                              <>
-                                <span className="block">{c.updated_by}</span>
-                                {c.updated_at && (
-                                  <time dateTime={c.updated_at} className="font-mono text-xs text-fg-muted">
-                                    {formatDate(c.updated_at, i18n.language)}
-                                  </time>
-                                )}
-                              </>
-                            ) : (
-                              <span className="text-fg-muted">—</span>
-                            )}
+                            <UpdatedBy c={c} />
                           </td>
-                          <td className="px-4 py-3 text-right">
-                            {c.active && (
-                              <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirming(c.case_id)}>
-                                {t('admin.deactivate')}
-                              </Button>
-                            )}
-                          </td>
+                          <td className="px-4 py-3 text-right">{deactivateButton(c)}</td>
                         </tr>
                       ))}
-                  </tbody>
-                </table>
-              </div>
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <ul className="divide-y divide-line-subtle" aria-labelledby="case-admin-list">
+                  {rows.map((c) => (
+                    <li key={c.case_id} className="flex flex-col gap-3 p-4" data-testid={`admin-row-${c.case_id}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="break-all font-mono font-medium text-fg">{c.case_id}</span>
+                        <ActiveBadge active={c.active} t={t} />
+                      </div>
+                      {levelSelect(c)}
+                      {c.note && <p className="text-sm text-fg-secondary">{c.note}</p>}
+                      <div className="flex items-center justify-between gap-2 text-sm text-fg-secondary">
+                        <UpdatedBy c={c} />
+                        {deactivateButton(c)}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Card>
           </section>
         </div>
@@ -323,5 +333,28 @@ export default function CaseAdmin({ session }) {
         </DialogContent>
       </Dialog>
     </Page>
+  );
+}
+
+function ActiveBadge({ active, t }) {
+  return (
+    <Badge tone={active ? 'success' : 'neutral'} size="sm">
+      {active ? t('admin.active') : t('admin.inactive')}
+    </Badge>
+  );
+}
+
+function UpdatedBy({ c }) {
+  const { i18n } = useTranslation();
+  if (!c.updated_by) return <span className="text-fg-muted">—</span>;
+  return (
+    <span>
+      <span className="block">{c.updated_by}</span>
+      {c.updated_at && (
+        <time dateTime={c.updated_at} className="font-mono text-xs text-fg-muted">
+          {formatDate(c.updated_at, i18n.language)}
+        </time>
+      )}
+    </span>
   );
 }
