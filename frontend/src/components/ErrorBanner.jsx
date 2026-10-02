@@ -3,37 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { AlertCircle } from 'lucide-react';
 
 import { Button } from './ui/button.jsx';
+import { asText, classifyError } from '../lib/errorInfo.js';
 
 const RATE_LIMIT_COUNTDOWN_SEC = 30;
-
-function classifyError(err, t) {
-  if (!err) return null;
-  const status = err.status ?? null;
-
-  if (status === 401) {
-    return { message: t('errors.session_expired'), retryable: false, requiresLogin: true };
-  }
-  if (status === 403) {
-    return { message: t('errors.no_access'), retryable: false };
-  }
-  if (status === 413) {
-    return { message: t('errors.file_too_large'), retryable: false };
-  }
-  if (status === 429) {
-    return { message: t('errors.rate_limited'), retryable: true, countdown: true };
-  }
-  if (status === 500 || status === 502 || status === 503) {
-    return { message: t('errors.server_busy'), retryable: true };
-  }
-  if (status === null || status === undefined || status === 0) {
-    return { message: t('errors.network'), retryable: true };
-  }
-  if (status >= 400 && status < 500) {
-    const detail = (err.body && typeof err.body === 'object' && err.body.detail) || err.message;
-    return { message: detail || t('errors.request_failed'), retryable: false };
-  }
-  return { message: t('errors.unexpected'), retryable: false, showDetails: true };
-}
 
 export default function ErrorBanner({ error, onRetry, onDismiss, onLogin }) {
   const { t } = useTranslation();
@@ -67,7 +39,12 @@ export default function ErrorBanner({ error, onRetry, onDismiss, onLogin }) {
       <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
 
       <div className="min-w-0 flex-1">
-        <p className="wrap-break-word text-sm leading-5">{info.message}</p>
+        <p className="wrap-break-word text-sm leading-5">{asText(info.message)}</p>
+        {error?.requestId && (
+          <p className="mt-1 text-xs opacity-80">
+            {t('errors.reference', { id: error.requestId })}
+          </p>
+        )}
         {info.showDetails && rawMessage && (
           <details className="mt-1 text-xs text-rose-600/80 dark:text-rose-300/80">
             <summary className="cursor-pointer select-none">

@@ -124,6 +124,15 @@ function VerificationBanner({ draft }) {
     tone = 'error';
     Icon = ShieldAlert;
     title = t('analyze.verifier.removed_title', { count: removedCount });
+  } else if (unsupportedCount > 0) {
+    // Valid citations whose passage does not support the sentence: never
+    // "all verified" in green next to a mismatch warning (UX review UX-2).
+    tone = 'warning';
+    Icon = AlertTriangle;
+    title = t('analyze.verifier.unsupported_title', {
+      count: unsupportedCount,
+      total: Math.max(groundedCount ?? 0, unsupportedCount),
+    });
   } else if (groundedCount) {
     tone = 'success';
     Icon = ShieldCheck;
@@ -136,19 +145,27 @@ function VerificationBanner({ draft }) {
       className={cn(
         'rounded-brand border px-4 py-3',
         tone === 'error' && 'border-danger/40 bg-danger-soft',
+        tone === 'warning' && 'border-warning/40 bg-warning-soft',
         tone === 'success' && 'border-success/40 bg-success-soft',
         tone === 'neutral' && 'border-line bg-surface-sunken'
       )}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <Icon
-          className={cn('h-5 w-5 shrink-0', tone === 'error' ? 'text-danger' : tone === 'success' ? 'text-success' : 'text-fg-muted')}
+          className={cn(
+            'h-5 w-5 shrink-0',
+            { error: 'text-danger', warning: 'text-warning', success: 'text-success' }[tone] || 'text-fg-muted'
+          )}
           aria-hidden="true"
         />
         <span className="text-sm font-semibold text-fg">{t('analyze.verifier.heading')}</span>
         <span className="text-sm text-fg-secondary">{title}</span>
         <span className="ml-auto flex flex-wrap items-center gap-2">
-          {groundedCount != null && <Badge tone="success" size="sm">{t('analyze.verifier.grounded', { count: groundedCount })}</Badge>}
+          {groundedCount != null && (
+            <Badge tone={tone === 'success' ? 'success' : 'neutral'} size="sm">
+              {t('analyze.verifier.grounded', { count: groundedCount })}
+            </Badge>
+          )}
           {removedCount > 0 && <Badge tone="error" size="sm">{t('analyze.verifier.removed', { count: removedCount })}</Badge>}
           {unsupportedCount > 0 && (
             <Badge tone="warning" size="sm" data-testid="alignment-banner">

@@ -138,10 +138,11 @@ async def _observability_middleware(request: Request, call_next):
         # path, so a high-cardinality path param can't explode the label set.
         route = request.scope.get("route")
         endpoint = getattr(route, "path", None) or request.url.path
-        metrics.HTTP_REQUEST_DURATION.observe(
-            elapsed,
-            {"endpoint": endpoint, "method": request.method, "status": str(status_code)},
-        )
+        if endpoint not in metrics.UNTIMED_PATHS:
+            metrics.HTTP_REQUEST_DURATION.observe(
+                elapsed,
+                {"endpoint": endpoint, "method": request.method, "status": str(status_code)},
+            )
         # Echo the correlation id so a caller / proxy can stitch the trace. The
         # `response` local may be unset if call_next raised — guard for that.
         try:
@@ -372,6 +373,13 @@ def verify_citations_endpoint(req: VerifyRequest):
         draft, grounded, jurisdiction=req.jurisdiction, security_level=req.security_level
     )
     metrics.record_llm_usage(meta)  # Q19 cost/route/token metrics
+    # Citation-wall rate (the hallucination SLI). These counters were declared
+    # and charted but never written, so the panel read 0 by construction
+    # (FAILURE_LOG B-18). Counts only — no citation text leaves the process.
+    invalid = len(result.get("invalid_citations") or [])
+    metrics.CITATIONS.inc(value=len(result.get("valid_citations") or []) + invalid)
+    if invalid:
+        metrics.CITATIONS_INVALID.inc(value=invalid)
     return {**result, **meta}
 
 

@@ -91,8 +91,28 @@ test.describe('Upload flow', () => {
       buffer: Buffer.from('Office Action body text - not allowed'),
     });
 
-    // upload.invalid_type → "只支援 PDF 或 DOCX"
-    await expect(visibleMain(page).getByText('只支援 PDF 或 DOCX').first()).toBeVisible();
+    // upload.invalid_type → "只支援 PDF 或 DOCX" — said once, in the upload
+    // panel, never as the workspace's "connection failed" banner (UX-1).
+    await expect(visibleMain(page).getByRole('alert')).toHaveText('只支援 PDF 或 DOCX');
+    await expect(page.getByText(/連線失敗/)).toHaveCount(0);
+  });
+
+  test('a server-side upload failure keeps the file and offers a retry', async ({ page }) => {
+    await openUpload(page);
+    await mockUpload(page, { status: 500, body: { detail: 'OCR engine unavailable' } });
+    await fileInput(page).setInputFiles({
+      name: 'scan.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from('%PDF-1.4 fake'),
+    });
+    const main = visibleMain(page);
+    await main.getByRole('button', { name: /^上傳$/ }).click();
+
+    await expect(main.getByRole('alert')).toHaveText('OCR engine unavailable');
+    await expect(main.getByText('scan.pdf').first()).toBeVisible();
+    await expect(main.getByRole('button', { name: '重試' })).toBeEnabled();
+    // The analyze action is untouched: no analyze banner, no misleading retry.
+    await expect(page.getByText(/連線失敗/)).toHaveCount(0);
   });
 
   test('drop zone is keyboard-accessible (role=button)', async ({ page }) => {

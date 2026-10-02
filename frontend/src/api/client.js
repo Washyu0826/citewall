@@ -10,11 +10,32 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const LLM_TIMEOUT_MS = 420_000; // > orchestrator's DIFY_TIMEOUT_SEC(300)+30s margin
 
 export class ApiError extends Error {
-  constructor(status, message, body) {
+  constructor(status, message, body, requestId = null) {
     super(message);
     this.status = status;
     this.body = body;
+    // The gateway's X-Request-ID for this call — the same id its logs carry,
+    // so an attorney can quote it and ops can find the request.
+    this.requestId = requestId;
   }
+}
+
+/**
+ * A FastAPI error body as ONE string. `detail` is a string for HTTPException
+ * but an ARRAY of {loc,msg,type} objects for request-validation 422s; passing
+ * that array on as the message made <ErrorBanner> render objects as a React
+ * child, which crashed the whole app (FAILURE_LOG B-9). Pure — unit tested.
+ */
+export function errorDetailText(body, fallback = '') {
+  const detail = body && typeof body === 'object' ? body.detail : null;
+  if (typeof detail === 'string' && detail) return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) => (d && typeof d === 'object' ? d.msg : typeof d === 'string' ? d : null))
+      .filter((m) => typeof m === 'string' && m);
+    if (msgs.length) return msgs.join('; ');
+  }
+  return fallback;
 }
 
 // 401 on an AUTHED call means the session died server-side (expired JWT or
@@ -44,8 +65,10 @@ export async function call(
     // Normalise transport-level failures to ApiError(0/408) so every caller's
     // `instanceof ApiError` branch handles them with a readable message
     // instead of a raw TypeError("Failed to fetch").
+    // No path in the message: it is shown to the user, and paths are not
+    // theirs to read (a path once carried a case id — FAILURE_LOG B-10).
     if (e?.name === 'AbortError') {
-      throw new ApiError(408, `request timed out after ${Math.round(timeoutMs / 1000)}s: ${path}`);
+      throw new ApiError(408, `request timed out after ${Math.round(timeoutMs / 1000)}s`);
     }
     throw new ApiError(0, 'network error: gateway unreachable. check your connection.', null);
   } finally {
@@ -62,7 +85,12 @@ export async function call(
     if (res.status === 401 && token) {
       window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
     }
-    throw new ApiError(res.status, data?.detail || res.statusText, data);
+    throw new ApiError(
+      res.status,
+      errorDetailText(data, res.statusText),
+      data,
+      res.headers?.get?.('X-Request-ID') || null
+    );
   }
   return data;
 }
@@ -102,8 +130,9 @@ export const api = {
   logout: (token) => call('/v1/auth/logout', { method: 'POST', token }),
   // Cases the caller may open (dashboard / case list). No case_id in the URL.
   cases: (token) => call('/v1/cases', { token }),
-  quota: (token, case_id) =>
-    call(`/v1/quota?case_id=${encodeURIComponent(case_id || '')}`, { token }),
+  // Quota is per user / tenant — the gateway never read a case id here, and a
+  // case id in a query string lands in proxy access logs (FAILURE_LOG B-10).
+  quota: (token) => call('/v1/quota', { token }),
   analyze: (token, payload) =>
     call('/v1/oa/analyze', {
       method: 'POST',
@@ -140,16 +169,12 @@ export const api = {
       body: { text },
       headers: { 'X-Case-Id': case_id },
     }),
-  auditRecent: (token, case_id) =>
-    call('/v1/audit/recent?limit=50', {
-      token,
-      headers: { 'X-Case-Id': case_id || 'CASE-2025-001' },
-    }),
-  auditVerify: (token, case_id, scope = 'tenant') =>
-    call(`/v1/audit/verify?scope=${encodeURIComponent(scope)}`, {
-      token,
-      headers: { 'X-Case-Id': case_id || 'CASE-2025-001' },
-    }),
+  // Audit endpoints are role-gated, not case-scoped: no X-Case-Id. A demo case
+  // id used to be hard-coded here, which ran the case ACL and 403'd every
+  // IT admin and any real user without that demo case (FAILURE_LOG B-11).
+  auditRecent: (token) => call('/v1/audit/recent?limit=50', { token }),
+  auditVerify: (token, scope = 'tenant') =>
+    call(`/v1/audit/verify?scope=${encodeURIComponent(scope)}`, { token }),
 
   // Day 2: PDF/DOCX OA upload via XHR (real progress + cancel).
   // Returns { promise, abort } — the OAUpload component wires the cancel button to abort().

@@ -90,6 +90,26 @@ def test_erase_subject_reports_backups_still_holding_subject(stores):
     assert any("backup snapshot" in n for n in result["not_covered"])
 
 
+def test_erase_subject_makes_cached_results_unreachable(stores, monkeypatch):
+    """Cached analyses hold the subject's un-masked data; erasure bumps the
+    tenant's cache generation so they are never served again (B-16)."""
+    from backend.gateway import cache
+
+    monkeypatch.setattr(cache, "_cache", cache._MemoryCache())
+    cache.set_response("tenant_a", "alice", "CASE-1", "h", {"draft_text": "0912-345-678"})
+    backup.erase_subject("tenant_a", ["0912-345-678"])
+    assert cache.get_response("tenant_a", "alice", "CASE-1", "h") is None
+
+
+def test_erase_subject_dry_run_leaves_the_cache_alone(stores, monkeypatch):
+    from backend.gateway import cache
+
+    monkeypatch.setattr(cache, "_cache", cache._MemoryCache())
+    cache.set_response("tenant_a", "alice", "CASE-1", "h", {"v": 1})
+    backup.erase_subject("tenant_a", ["0912-345-678"], dry_run=True)
+    assert cache.get_response("tenant_a", "alice", "CASE-1", "h") == {"v": 1}
+
+
 def test_erase_subject_requires_identifier(stores):
     with pytest.raises(ValueError):
         backup.erase_subject("tenant_a", ["  "])

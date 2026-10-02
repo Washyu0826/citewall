@@ -137,11 +137,9 @@ class Counter:
         return lines
 
 
-# Latency buckets in SECONDS. Tuned for this workload: audit writes are
-# sub-millisecond–to-low-ms (the <100ms SLO sits at the 0.1 boundary), while a
-# full /v1/oa/analyze round-trip through the AI engine can run seconds. The
-# spread (1ms → 10s) lets Prometheus' histogram_quantile() interpolate p50/p95/
-# p99 across both regimes.
+# Latency buckets in SECONDS for short operations (audit writes: sub-ms to low
+# ms; the <100ms SLO sits at the 0.1 boundary). NOT for HTTP requests — an
+# analysis takes tens of seconds; see REQUEST_LATENCY_BUCKETS below.
 DEFAULT_LATENCY_BUCKETS: tuple[float, ...] = (
     0.001,
     0.005,
@@ -156,6 +154,39 @@ DEFAULT_LATENCY_BUCKETS: tuple[float, ...] = (
     5.0,
     10.0,
 )
+
+# Request latency buckets in SECONDS. An analysis takes 25–28 s end to end (and
+# up to the 420/450 s client/proxy budgets on a slow model), so with the 10 s
+# ceiling above EVERY analyze landed in +Inf: histogram_quantile returned 10
+# and the "p95 ≤ 25 s" SLA could not be computed at all (FAILURE_LOG B-17).
+# The SLO thresholds (25 s, 30 s, 90 s) are bucket edges, so they can be
+# alerted on exactly.
+REQUEST_LATENCY_BUCKETS: tuple[float, ...] = (
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    15.0,
+    20.0,
+    25.0,
+    30.0,
+    45.0,
+    60.0,
+    90.0,
+    120.0,
+    180.0,
+    300.0,
+    450.0,
+)
+
+# Paths that must not be timed as traffic: Docker's 15 s health probe and the
+# Prometheus scrape would otherwise dominate the request-rate and latency
+# series of a low-traffic on-prem deployment.
+UNTIMED_PATHS = frozenset({"/v1/health", "/metrics"})
 
 
 class Histogram:
@@ -366,6 +397,7 @@ HTTP_REQUEST_DURATION = REGISTRY.register(
         "http_request_duration_seconds",
         "HTTP request handler latency in seconds (for p50/p95/p99 per endpoint).",
         labels=("endpoint", "method", "status"),
+        buckets=REQUEST_LATENCY_BUCKETS,
     )
 )
 LLM_ERRORS = REGISTRY.register(
@@ -526,7 +558,10 @@ def record_llm_usage(meta: dict[str, object] | None) -> None:
     if completion_n:
         LLM_TOKENS.inc({"model": model, "kind": "completion"}, completion_n)
 
-    if meta.get("llm_error"):
+    # A fallback to the mock model ("-DEGRADED-") IS an LLM failure: Dify and
+    # Ollama outages degrade instead of raising, so without this the error
+    # counter stayed at 0 through a full outage (FAILURE_LOG B-18).
+    if meta.get("llm_error") or "-DEGRADED-" in model:
         LLM_ERRORS.inc({"model": model})
 
 

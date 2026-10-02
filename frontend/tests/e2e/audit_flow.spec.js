@@ -35,8 +35,36 @@ test.describe('Audit flow', () => {
     await expect(page.locator('span', { hasText: /^CASE_REF$/ }).first()).toBeVisible();
   });
 
-  test('non-auditor receives 403 and shows an error banner', async ({ page }) => {
-    // Carol (it_admin / tenant_b) cannot read tenant_a audit logs.
+  test('IT admin audit calls carry no case id and are not refused', async ({ page }) => {
+    // The audit API is role-gated (auditor / it_admin), not case-scoped. A
+    // hard-coded demo X-Case-Id used to run the case ACL and 403 Carol, and
+    // this suite had mocked that 403 as if it were intended (FAILURE_LOG B-11).
+    const auditHeaders = [];
+    page.on('request', (req) => {
+      if (/\/api\/v1\/audit\//.test(req.url())) auditHeaders.push(req.headers());
+    });
+    await mockLogin(page, 'carol');
+    await mockQuota(page);
+    await mockAuditRecent(page);
+    await mockAuditVerify(page);
+    await page.route('**/api/v1/admin/cases**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(EMPTY_REGISTRY) })
+    );
+
+    await page.goto('/');
+    await page.getByRole('button', { name: /Carol/ }).click();
+    await page.waitForURL(/\/admin\/cases/, { timeout: 5000 });
+    await page.getByTestId('nav-audit').click();
+    await page.waitForURL(/\/audit/);
+
+    await expect(page.locator('td', { hasText: '/v1/oa/analyze' }).first()).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    expect(auditHeaders.length).toBeGreaterThan(0);
+    for (const h of auditHeaders) expect(h['x-case-id']).toBeUndefined();
+  });
+
+  test('a 403 from the audit API shows an error banner', async ({ page }) => {
+    // e.g. the role was revoked server-side after login.
     await mockLogin(page, 'carol');
     await mockQuota(page);
     await mockAuditRecent(page, [], {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle } from 'lucide-react';
@@ -10,7 +10,6 @@ import { useCurrentCase } from '../lib/currentCase.jsx';
 import { buildDeadlineRequestFields } from '../lib/deadlineInputs.js';
 import { tablesForRejection } from '../lib/elementTable.js';
 import { toast } from '../lib/toast.jsx';
-import { useDebouncedValue } from '../lib/useDebouncedValue.js';
 import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from './ui/overlay.jsx';
@@ -81,8 +80,7 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   const [responseExported, setResponseExported] = useState(false);
   const isWide = useMediaQuery(WIDE_QUERY);
 
-  const quotaCaseId = useDebouncedValue(caseId, 400);
-  const { data: quota } = useQuota(session.token, quotaCaseId);
+  const { data: quota } = useQuota(session.token);
   const casesQ = useCases(session.token);
   const cases = casesQ.data?.cases;
   const securityLevel = cases?.find((c) => c.case_id === caseId)?.security_level;
@@ -94,6 +92,13 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   useEffect(() => {
     if (!initialCaseId && caseId) setCurrentCase(caseId);
   }, [initialCaseId, caseId, setCurrentCase]);
+
+  // The case the page shows right now, readable from an in-flight request's
+  // continuation (state captured by runAnalyze's closure would be stale).
+  const caseRef = useRef(caseId);
+  useEffect(() => {
+    caseRef.current = caseId;
+  }, [caseId]);
 
   // The shell switched case: follow it, keep the typed OA, drop the old result.
   useEffect(() => {
@@ -162,6 +167,7 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   }
 
   async function runAnalyze() {
+    const requestedCase = caseId;
     setError(null);
     setResult(null);
     setProgress({});
@@ -170,15 +176,22 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
     try {
       const r = await analyzeMut.mutateAsync({
         oa_text: oaText,
-        case_id: caseId,
+        case_id: requestedCase,
         target_patent_no: targetPatent,
         ...buildDeadlineRequestFields({ domicile, oaSequence, serviceDate }),
       });
-      setResult(r);
-      queryClient.invalidateQueries({ queryKey: ['quota', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['quota'] });
       queryClient.invalidateQueries({ queryKey: ['cases'] });
+      // The case was switched while the analysis ran: this result belongs to
+      // the old case. Showing it would let it be signed off and exported under
+      // the new case id (FAILURE_LOG B-12) — drop it and say so.
+      if (caseRef.current !== requestedCase) {
+        toast.info(t('workspace.result_discarded', { id: requestedCase }));
+        return;
+      }
+      setResult(r);
     } catch (e) {
-      setError(e);
+      if (caseRef.current === requestedCase) setError(e);
     }
   }
 

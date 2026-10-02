@@ -10,10 +10,11 @@ import { api } from './client.js';
  * hand-rolling useState+useEffect+fetch.
  */
 
-export function useQuota(token, caseId, enabled = true) {
+/** Per-user / per-tenant usage — not case-scoped, so one cache entry. */
+export function useQuota(token, enabled = true) {
   return useQuery({
-    queryKey: ['quota', caseId],
-    queryFn: () => api.quota(token, caseId),
+    queryKey: ['quota'],
+    queryFn: () => api.quota(token),
     enabled: enabled && !!token,
     // Quota fetch failing must never block the analyze surface — the old code
     // swallowed the error (.catch(()=>{})); mirror that by not retrying.
@@ -48,7 +49,7 @@ export function useAuditRecent(token, enabled = true) {
 export function useAuditVerify(token, scope = 'tenant', { poll = false, enabled = true } = {}) {
   return useQuery({
     queryKey: ['audit', 'verify', scope],
-    queryFn: () => api.auditVerify(token, null, scope),
+    queryFn: () => api.auditVerify(token, scope),
     enabled: enabled && !!token,
     refetchInterval: poll ? 60_000 : false,
   });

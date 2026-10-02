@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 
 from backend.ai_engine import alignment, injection_guard, llm_client
 from backend.ai_engine.prompt_loader import render_system
+from backend.shared import metrics
 from backend.shared.config import settings
 from backend.shared.models import (
     DraftResponse,
@@ -79,6 +80,7 @@ def _guarded_chat(
     try:
         injection_guard.enforce(resp.text, canary, intent=intent, grounded_count=grounded_count)
     except injection_guard.InjectionDetected as exc:
+        metrics.PROMPT_INJECTION_DETECTED.inc()
         # Never log the response body or the canary itself — that would re-leak
         # the very content we are defending. Log the intent + which signals
         # fired only.

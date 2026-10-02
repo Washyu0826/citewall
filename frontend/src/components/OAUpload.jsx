@@ -4,7 +4,6 @@ import { UploadCloud, FileText, Loader2, Download } from 'lucide-react';
 import { api } from '../api/client.js';
 import { Button } from './ui/button.jsx';
 import { Badge } from './ui/badge.jsx';
-import { toast } from '../lib/toast.jsx';
 
 // Backend joins per-page extracted text with this exact separator (see
 // backend OA upload handler). We split on it to render per-page blocks.
@@ -42,7 +41,7 @@ function fmtSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-export default function OAUpload({ caseId, token, onExtractSuccess, onError }) {
+export default function OAUpload({ caseId, token, onExtractSuccess }) {
   const { t } = useTranslation();
   const [status, setStatus] = useState('idle'); // idle | file-selected | uploading | server-extracting | success | error
   const [file, setFile] = useState(null);
@@ -61,23 +60,31 @@ export default function OAUpload({ caseId, token, onExtractSuccess, onError }) {
     };
   }, [blobUrl]);
 
+  // Upload errors stay in this panel — one inline alert with its own retry /
+  // change-file actions. They used to be forwarded to the workspace's analyze
+  // banner too, which mis-labelled them "connection failed" and whose Retry
+  // started an analysis (UX review UX-1).
+  const rejectFile = useCallback(
+    (msg) => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      setBlobUrl(null);
+      setFile(null);
+      setErrorMsg(msg);
+      setStatus('error');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    },
+    [blobUrl]
+  );
+
   const handleFileChosen = useCallback(
     (f) => {
       if (!f) return;
       if (!isAllowed(f)) {
-        const msg = t('upload.invalid_type');
-        toast.error(msg); // toast per spec; inline chip below for in-pane context
-        setErrorMsg(msg);
-        setStatus('error');
-        if (onError) onError(new Error(msg));
+        rejectFile(t('upload.invalid_type'));
         return;
       }
       if (f.size > MAX_BYTES) {
-        const msg = t('upload.too_large');
-        toast.error(msg);
-        setErrorMsg(msg);
-        setStatus('error');
-        if (onError) onError(new Error(msg));
+        rejectFile(t('upload.too_large'));
         return;
       }
       // Replace any existing blobUrl
@@ -89,7 +96,7 @@ export default function OAUpload({ caseId, token, onExtractSuccess, onError }) {
       setExtractResult(null);
       setStatus('file-selected');
     },
-    [blobUrl, onError, t]
+    [blobUrl, rejectFile, t]
   );
 
   const reset = useCallback(() => {
@@ -140,15 +147,15 @@ export default function OAUpload({ caseId, token, onExtractSuccess, onError }) {
         }
         // Localize the transport-level failure strings from client.js; keep
         // server-provided `detail` messages verbatim (already human-readable).
+        // The file stays selected, so the status pane's Retry re-sends it.
         const msg =
           err?.message === 'Network error during upload'
             ? t('errors.network')
             : err?.message || t('errors.request_failed');
         setErrorMsg(msg);
         setStatus('error');
-        if (onError) onError(err);
       });
-  }, [file, caseId, token, onError, t]);
+  }, [file, caseId, token, t]);
 
   const cancelUpload = useCallback(() => {
     if (abortRef.current) {
@@ -189,7 +196,9 @@ export default function OAUpload({ caseId, token, onExtractSuccess, onError }) {
   };
 
   // ---- Render ----
-  const showDropZone = status === 'idle' || status === 'error';
+  // A rejected file (wrong type / too big) returns to the drop zone; a failed
+  // upload keeps the file and shows the status pane with Retry / Change file.
+  const showDropZone = status === 'idle' || (status === 'error' && !file);
 
   return (
     // flex+gap (not space-y): Tailwind v4 space-y margins every child but the
@@ -224,10 +233,10 @@ export default function OAUpload({ caseId, token, onExtractSuccess, onError }) {
         </div>
       )}
 
-      {status === 'error' && errorMsg && (
-        <div className="rounded border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
+      {showDropZone && status === 'error' && errorMsg && (
+        <p role="alert" className="border-l-4 border-danger py-1 pl-3 text-sm text-danger">
           {errorMsg}
-        </div>
+        </p>
       )}
 
       <input
@@ -548,9 +557,9 @@ function StatusPane({
       {status === 'error' && (
         <div className="space-y-2">
           {errorMsg && (
-            <div className="rounded border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
+            <p role="alert" className="border-l-4 border-danger py-1 pl-3 text-sm text-danger">
               {errorMsg}
-            </div>
+            </p>
           )}
           <div className="flex gap-2">
             <Button variant="primary" onClick={onRetry} disabled={!file} className="flex-1">

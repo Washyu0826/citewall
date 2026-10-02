@@ -12,6 +12,7 @@ POC: in-memory dict with TTL.  Production: Redis with EVAL atomic ops.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -215,22 +216,101 @@ def _hash_key(parts: list[str]) -> str:
 # --- Public API ---
 
 
+def _generation_key(tenant_id: str) -> str:
+    return "gen:" + _hash_key([tenant_id])
+
+
+def tenant_generation(tenant_id: str) -> int:
+    """The tenant's response-cache generation (part of every response key)."""
+    try:
+        return int(_cache.get(_generation_key(tenant_id)) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def bump_tenant_generation(tenant_id: str) -> int:
+    """Make every cached response of this tenant unreachable at once.
+
+    Response keys are hashes, so a backend cannot delete "all of tenant X".
+    Instead the generation is part of the key: after a bump, older entries are
+    never read again and expire with their TTL. Called on personal-data
+    erasure (backup.erase_subject) so an erased subject is not served back
+    from the cache.
+    """
+    nxt = tenant_generation(tenant_id) + 1
+    _safe_set(_generation_key(tenant_id), nxt, ttl_sec=0)
+    return nxt
+
+
 def response_cache_key(tenant_id: str, user_id: str, case_id: str, prompt_hash: str) -> str:
-    return "resp:" + _hash_key([tenant_id, user_id, case_id, prompt_hash])
+    gen = str(tenant_generation(tenant_id))
+    return "resp:" + _hash_key([tenant_id, user_id, case_id, prompt_hash, gen])
+
+
+# --- Response encryption at rest (BE-17) ---------------------------------
+# The cached analysis is the UN-masked result the attorney sees, so in Redis
+# (and its RDB/AOF snapshots) it would be exactly the personal data masking
+# kept away from the model. It is stored as a Fernet token under a per-tenant
+# key derived from the mapping master key with its OWN HKDF label (ADR-01 key
+# separation: a cache key never decrypts the mapping table, or vice versa).
+_RESP_HKDF_SALT = b"patentmind-response-cache"
+_RESP_HKDF_INFO = b"patentmind/response-cache/v1/tenant="
+_ENC_MARK = "citewall-enc-v1"
+_fernets: dict[str, Any] = {}
+_fernets_lock = threading.Lock()
+
+
+def _response_fernet(tenant_id: str):
+    with _fernets_lock:
+        f = _fernets.get(tenant_id)
+        if f is not None:
+            return f
+    import base64
+
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    from backend.gateway.masking import _master_key_bytes
+
+    raw = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=_RESP_HKDF_SALT,
+        info=_RESP_HKDF_INFO + tenant_id.encode("utf-8"),
+    ).derive(_master_key_bytes())
+    f = Fernet(base64.urlsafe_b64encode(raw))
+    with _fernets_lock:
+        _fernets[tenant_id] = f
+    return f
 
 
 def get_response(tenant_id: str, user_id: str, case_id: str, prompt_hash: str) -> Any | None:
-    return _cache.get(response_cache_key(tenant_id, user_id, case_id, prompt_hash))
+    stored = _cache.get(response_cache_key(tenant_id, user_id, case_id, prompt_hash))
+    if not isinstance(stored, dict) or stored.get("enc") != _ENC_MARK:
+        # Missing, or a pre-encryption plaintext entry: never served.
+        return None
+    try:
+        from cryptography.fernet import InvalidToken
+
+        plain = _response_fernet(tenant_id).decrypt(stored["ct"].encode("ascii"))
+    except (InvalidToken, KeyError, AttributeError, ValueError):
+        logger.warning("response cache entry could not be decrypted — treated as a miss")
+        return None
+    return json.loads(plain)
 
 
 def set_response(tenant_id: str, user_id: str, case_id: str, prompt_hash: str, value: Any):
+    token = _response_fernet(tenant_id).encrypt(
+        json.dumps(value, ensure_ascii=False).encode("utf-8")
+    )
     # M-8: pass tenant explicitly so the per-tenant cap counts this entry.
     # The cache backend signature is permissive — RedisCacheBackend ignores
     # the kwarg via **kwargs / lack thereof. We guard with a hasattr check
     # so the redis path doesn't break when this kwarg is added.
     _safe_set(
         response_cache_key(tenant_id, user_id, case_id, prompt_hash),
-        value,
+        {"enc": _ENC_MARK, "ct": token.decode("ascii")},
         ttl_sec=settings.CACHE_TTL_RESPONSE_SEC,
         tenant=tenant_id,
     )

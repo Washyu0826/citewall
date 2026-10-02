@@ -126,6 +126,10 @@ test.describe('Claim-element table & citation alignment', () => {
     await page.getByRole('button', { name: /^分析 OA/ }).click();
 
     await expect(page.getByTestId('alignment-banner')).toContainText('1');
+    // The citation wall must not claim "all verified" next to a mismatch.
+    const banner = page.getByTestId('verification-banner');
+    await expect(banner).toContainText('與所引段落不符');
+    await expect(banner).not.toContainText('全部通過驗證');
     await expect(page.getByTestId('unsupported-ref')).toBeVisible();
     const lines = page.getByTestId('draft-line');
     await expect(lines).toHaveCount(2);

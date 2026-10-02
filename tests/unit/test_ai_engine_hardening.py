@@ -277,6 +277,45 @@ def test_ollama_failure_is_labelled_degraded(monkeypatch):
     assert "-DEGRADED-" in resp.model
 
 
+def test_local_mode_verifier_never_reuses_the_drafting_model(monkeypatch):
+    """BE-1: in local mode the citation verifier must not go to the same
+    Ollama model that wrote the draft (no independence, +1 LLM round)."""
+    monkeypatch.setattr(settings, "LLM_MODE", "local")
+    monkeypatch.setattr(settings, "LOCAL_VERIFIER_MODEL", "")
+    calls = []
+    monkeypatch.setattr(
+        llm_client, "_real_ollama", lambda *a, **kw: calls.append(a) or _fake_resp("{}")
+    )
+
+    resp = llm_client.chat(
+        system="s", user="u", intent="verify_citations", security_level="confidential"
+    )
+    assert calls == []
+    assert resp.model == "local-verifier-mock"
+
+    # Naming the drafting model itself is the same as not naming one.
+    monkeypatch.setattr(settings, "LOCAL_VERIFIER_MODEL", settings.LLM_MODEL_LOCAL)
+    llm_client.chat(system="s", user="u", intent="verify_citations", security_level="confidential")
+    assert calls == []
+
+    # Drafting still uses the local model.
+    llm_client.chat(system="s", user="u", intent="draft_response", security_level="confidential")
+    assert len(calls) == 1
+
+
+def test_local_mode_verifier_can_opt_into_a_different_model(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_MODE", "local")
+    monkeypatch.setattr(settings, "LOCAL_VERIFIER_MODEL", "llama3.1:8b")
+    seen = []
+    monkeypatch.setattr(
+        llm_client,
+        "_real_ollama",
+        lambda system, user, model, intent: seen.append(model) or _fake_resp("{}"),
+    )
+    llm_client.chat(system="s", user="u", intent="verify_citations", security_level="confidential")
+    assert seen == ["llama3.1:8b"]
+
+
 def test_unparseable_verifier_reply_is_zero_confidence(monkeypatch):
     monkeypatch.setattr(llm_client, "chat", lambda **kw: _fake_resp("not json at all"))
     result, _ = oa_analyzer.verify_citations(_draft("text"), [])

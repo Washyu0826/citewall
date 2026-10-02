@@ -718,9 +718,21 @@ def erase_subject(tenant_id: str, values: list[str], *, dry_run: bool = False) -
             if n:
                 backups_with_subject.append({"backup_id": backup_id, "rows": n})
 
-    not_covered = [
-        "response cache: un-masked drafts may persist until CACHE_TTL_RESPONSE_SEC expires",
-    ]
+    # Response cache: entries are encrypted at rest, and bumping the tenant's
+    # cache generation makes every older entry unreachable (it then expires
+    # with its TTL). Through Redis this reaches the running gateways; the
+    # in-memory backend lives inside each gateway process, which this CLI
+    # cannot reach.
+    from backend.gateway import cache
+
+    not_covered = []
+    if not dry_run:
+        cache.bump_tenant_generation(tenant_id)
+    if _cfg().settings.CACHE_BACKEND != "redis":
+        not_covered.append(
+            "response cache (in-memory backend): a running gateway's cached results "
+            "stay readable there until CACHE_TTL_RESPONSE_SEC expires"
+        )
     if backups_with_subject:
         not_covered.append(
             f"{len(backups_with_subject)} backup snapshot(s) still contain this subject's "

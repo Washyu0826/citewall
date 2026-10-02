@@ -18,6 +18,24 @@ test.describe('Analyze flow', () => {
     await expect(analyzeButton(page)).toBeEnabled();
   });
 
+  test('no request URL ever carries a case id (CLAUDE.md §9)', async ({ page }) => {
+    // Proxy and gateway access logs record URLs; case ids travel in the
+    // X-Case-Id header or the JSON body only. The quota call used to put the
+    // case id in its query string (FAILURE_LOG B-10).
+    const urls = [];
+    page.on('request', (req) => {
+      if (req.url().includes('/api/')) urls.push(req.url());
+    });
+    await loginAsAlice(page);
+    await mockAnalyze(page);
+    await page.locator('#analyze-case-id').selectOption('CASE-2025-002');
+    await analyzeButton(page).click();
+    await expect(page.getByText('答辯策略').first()).toBeVisible({ timeout: 10_000 });
+
+    expect(urls.length).toBeGreaterThan(0);
+    for (const u of urls) expect(decodeURIComponent(u)).not.toMatch(/CASE-\d/);
+  });
+
   test('analyze button POSTs to /v1/oa/analyze with expected body', async ({ page }) => {
     await loginAsAlice(page);
     const route = mockAnalyze(page);

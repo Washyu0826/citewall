@@ -66,6 +66,52 @@ def test_one_tenant_cannot_read_anothers_cached_response():
 
 
 # ---------------------------------------------------------------------------
+# Response encryption at rest + erasure reach (BE-17 / FAILURE_LOG B-16)
+# ---------------------------------------------------------------------------
+def test_cached_response_is_not_stored_in_plaintext():
+    """The cached analysis is the UN-masked result; what the backend (Redis,
+    its snapshots) holds must be ciphertext, not the attorney's plaintext."""
+    secret = {"draft_text": "王小明 0912-345-678 alice@example.com"}
+    cache_mod.set_response("tenant_a", "alice", "CASE-1", "h", secret)
+    stored = cache_mod._cache.get(cache_mod.response_cache_key("tenant_a", "alice", "CASE-1", "h"))
+    blob = str(stored)
+    assert "王小明" not in blob and "alice@example.com" not in blob and "0912" not in blob
+    assert cache_mod.get_response("tenant_a", "alice", "CASE-1", "h") == secret
+
+
+def test_legacy_plaintext_entry_is_never_served():
+    key = cache_mod.response_cache_key("tenant_a", "alice", "CASE-1", "h")
+    cache_mod._cache.set(key, {"draft_text": "plaintext from before encryption"}, ttl_sec=60)
+    assert cache_mod.get_response("tenant_a", "alice", "CASE-1", "h") is None
+
+
+def test_tampered_ciphertext_reads_as_a_miss():
+    cache_mod.set_response("tenant_a", "alice", "CASE-1", "h", {"v": 1})
+    key = cache_mod.response_cache_key("tenant_a", "alice", "CASE-1", "h")
+    stored = cache_mod._cache.get(key)
+    cache_mod._cache.set(key, {**stored, "ct": stored["ct"][:-4] + "AAAA"}, ttl_sec=60)
+    assert cache_mod.get_response("tenant_a", "alice", "CASE-1", "h") is None
+
+
+def test_one_tenants_key_cannot_decrypt_anothers_entry():
+    cache_mod.set_response("tenant_a", "alice", "CASE-1", "h", {"v": "a"})
+    stored = cache_mod._cache.get(cache_mod.response_cache_key("tenant_a", "alice", "CASE-1", "h"))
+    from cryptography.fernet import InvalidToken
+
+    with pytest.raises(InvalidToken):
+        cache_mod._response_fernet("tenant_b").decrypt(stored["ct"].encode())
+
+
+def test_generation_bump_makes_a_tenants_entries_unreachable():
+    cache_mod.set_response("tenant_a", "alice", "CASE-1", "h", {"v": "old"})
+    cache_mod.set_response("tenant_b", "carol", "CASE-9", "h", {"v": "other tenant"})
+    cache_mod.bump_tenant_generation("tenant_a")
+    assert cache_mod.get_response("tenant_a", "alice", "CASE-1", "h") is None
+    # Other tenants are untouched.
+    assert cache_mod.get_response("tenant_b", "carol", "CASE-9", "h") == {"v": "other tenant"}
+
+
+# ---------------------------------------------------------------------------
 # Embedding + retrieval — tenant namespacing (H-3)
 # ---------------------------------------------------------------------------
 def test_embedding_key_namespaced_by_tenant():

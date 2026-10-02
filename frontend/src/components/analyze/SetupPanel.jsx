@@ -91,7 +91,6 @@ export default function SetupPanel({
                 caseId={caseId}
                 token={session.token}
                 onExtractSuccess={onExtractSuccess}
-                onError={(err) => setError(err?.message ? err : new Error(String(err)))}
               />
             </TabsContent>
             <TabsContent value="paste" className="pt-4">

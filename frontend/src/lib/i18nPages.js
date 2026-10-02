@@ -59,6 +59,7 @@ export const pagesZhTW = {
       heading: '引用牆',
       removed_title: '{{count}} 個引用未通過驗證，已移除',
       verified_title: '{{count}} 個引用全部通過驗證',
+      unsupported_title: '{{total}} 個引用中有 {{count}} 個與所引段落不符，需改寫或排除',
       no_data: '沒有引用驗證資料',
       grounded: '通過 {{count}}',
       removed: '移除 {{count}}',
@@ -123,6 +124,13 @@ export const pagesZhTW = {
     deadline_internal: '建議內部完成日',
     gates_ok: '閘道檢查全部通過',
     gates: '閘道檢查',
+    result_discarded: '分析期間已切換案件，{{id}} 的結果沒有顯示。請在該案件重新分析。',
+  },
+  errors: {
+    timeout: '請求逾時。模型可能仍在處理，請稍後重試。',
+    quota_exceeded: '今日或本月用量已達上限，請洽事務所管理員。',
+    reference: '參考編號：{{id}}',
+    no_access: '您沒有此案件的存取權限。請確認案號與您的登入身分相符。',
   },
   response_export: {
     title: '整份申復書',
@@ -358,6 +366,8 @@ export const pagesEn = {
     verifier: {
       heading: 'Citation wall',
       grounded: 'passed {{count}}',
+      unsupported_title_one: '{{count}} of {{total}} citations does not match the cited passage — rewrite or exclude it',
+      unsupported_title_other: '{{count}} of {{total}} citations do not match the cited passage — rewrite or exclude them',
       verified_by: 'Verifier model: {{model}}',
     },
   },
@@ -418,6 +428,13 @@ export const pagesEn = {
     deadline_internal: 'Recommended internal date',
     gates_ok: 'All gateway checks passed',
     gates: 'Gateway checks',
+    result_discarded: 'The case changed during the analysis, so the result for {{id}} was not shown. Analyze it again in that case.',
+  },
+  errors: {
+    timeout: 'The request timed out. The model may still be working — try again shortly.',
+    quota_exceeded: "Today's or this month's usage limit is reached. Contact your firm's administrator.",
+    reference: 'Reference: {{id}}',
+    no_access: 'You do not have access to this case. Check the case number and the identity you signed in with.',
   },
   response_export: {
     title: 'Whole response',

@@ -152,7 +152,18 @@ class Settings:
 
     # Ollama / local LLM (MVP)
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-    OLLAMA_TIMEOUT_SEC: int = int(os.getenv("OLLAMA_TIMEOUT_SEC", "600"))  # 600s 容 CPU 冷啟動
+    # Per-call Ollama budget. 300 s like DIFY_TIMEOUT_SEC so the hop budgets
+    # nest inside the SPA's 420 s (gateway waits this + 30 s; see
+    # orchestrator.ai_call_timeout_sec). It was 600 s "for CPU cold start",
+    # which the gateway's 60 s cut off anyway; a cold model past 300 s now
+    # degrades (labelled) instead of hanging — warm the model instead
+    # (OLLAMA_KEEP_ALIVE, docs/research/09 BE-13).
+    OLLAMA_TIMEOUT_SEC: int = int(os.getenv("OLLAMA_TIMEOUT_SEC", "300"))
+    # Local-mode citation verifier. Empty (default) = the deterministic
+    # verifier, as in Dify mode; set to a DIFFERENT local model to get an
+    # independent LLM second opinion (the same model as LLM_MODEL_LOCAL is
+    # treated as empty — it would grade its own draft).
+    LOCAL_VERIFIER_MODEL: str = os.getenv("LOCAL_VERIFIER_MODEL", "")
 
     # ------------------------------------------------------------------
     # Dify (Phase 3 — LLM_MODE=dify routes parse_oa / draft_response through
@@ -190,6 +201,10 @@ class Settings:
     # Store unreachable → 503 with this Retry-After (fail closed, ADR-02).
     REVOCATION_RETRY_AFTER_SEC: int = int(os.getenv("REVOCATION_RETRY_AFTER_SEC", "5"))
     CACHE_TTL_RESPONSE_SEC: int = 3600  # LLM response cache 1hr
+    # Part of every analysis cache key. Bump after a prompt or corpus change
+    # (the gateway cannot see those) so cached answers from before are not
+    # served. Model / mode / retrieval settings are already in the key.
+    ANALYSIS_CACHE_VERSION: str = os.getenv("ANALYSIS_CACHE_VERSION", "2")
     CACHE_TTL_RETRIEVAL_SEC: int = 86400  # retrieval result 24hr
     CACHE_EMBEDDING_PERMANENT: bool = True  # patent embedding 永久
 

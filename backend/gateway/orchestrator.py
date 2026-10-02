@@ -42,7 +42,7 @@ from backend.shared.models import (
     SentenceAlignment,
     User,
 )
-from backend.shared.observability import request_id_headers
+from backend.shared.observability import current_request_id, request_id_headers
 
 logger = logging.getLogger("patentmind.gateway.egress")
 
@@ -128,6 +128,34 @@ def _assert_no_raw_pii(path: str, payload: dict) -> None:
         raise EgressGuardError(rule_id, path)
 
 
+_AI_CALL_HEADROOM_SEC = 30.0
+
+
+def ai_call_timeout_sec() -> float:
+    """Budget for ONE gateway→AI-Engine call, per LLM backend.
+
+    Timeouts must nest: the outer (gateway) wait has to outlast the inner
+    (AI Engine → model) one, so the AI Engine's own timeout and its labelled
+    degrade-to-mock path answer first and the gateway relays a structured
+    result. A flat 60 s here was shorter than the 600 s Ollama budget, so in
+    local mode a 60–120 s zh-TW draft was silently replaced by a placeholder
+    while Ollama kept generating for nobody (FAILURE_LOG B-13).
+
+    The SPA allows 420 s per analysis (frontend/src/api/client.js), so inner
+    budgets stay at ~300 s. A whole-request deadline passed down to every hop
+    (X-Deadline) is the follow-up — see docs/research/09 BE-4.
+    """
+    mode = settings.LLM_MODE
+    if mode == "dify":
+        return float(settings.DIFY_TIMEOUT_SEC) + _AI_CALL_HEADROOM_SEC
+    if mode == "local":
+        return float(settings.OLLAMA_TIMEOUT_SEC) + _AI_CALL_HEADROOM_SEC
+    if mode == "anthropic":
+        # A cited draft is two model calls back to back (llm_client draft path).
+        return 2 * float(settings.LLM_REQUEST_TIMEOUT_SEC) + _AI_CALL_HEADROOM_SEC
+    return 60.0
+
+
 class AIEngineClient:
     """Thin client to the Dify-mock service."""
 
@@ -141,17 +169,9 @@ class AIEngineClient:
         # leave the gateway we scan the whole payload for raw PII that should
         # have been redacted upstream. Fail closed if redaction escaped.
         _assert_no_raw_pii(path, payload)
-        # P1-2: the timeout must outlive the slowest downstream LLM path.
-        # LLM_MODE=dify budgets DIFY_TIMEOUT_SEC (default 300s — qwen2.5:7b
-        # on local Ollama can take 60-120s per zh-TW draft); a flat 60s here
-        # aborted the gateway side mid-inference and surfaced a 502 even
-        # though the Dify workflow was still running. +30s headroom so the
-        # AI Engine's own timeout (and its degrade-to-mock path) fires first
-        # and the gateway relays a structured answer instead of timing out.
-        timeout = 60.0
-        if settings.LLM_MODE == "dify":
-            timeout = max(timeout, float(settings.DIFY_TIMEOUT_SEC) + 30.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        # The timeout must outlive the slowest downstream LLM path in EVERY
+        # mode, not only dify (see ai_call_timeout_sec).
+        async with httpx.AsyncClient(timeout=ai_call_timeout_sec()) as client:
             # Security Chunk A — C-2. AI Engine's middleware refuses any
             # non-`/v1/health` request that lacks X-Internal-Token. The
             # token is server-side only; the SPA never sees it.
@@ -183,7 +203,10 @@ async def orchestrate_analysis(
     when True the AI Engine degrades the draft model to the cheap tier.
     """
     started = time.monotonic()
-    request_id = str(uuid.uuid4())
+    # The id the user sees must be the one the logs carry: the request-id
+    # middleware's bound X-Request-ID (also sent to the AI Engine). A fresh
+    # uuid here made "analysis 3f2a… was slow" untraceable (FAILURE_LOG B-14).
+    request_id = current_request_id() or str(uuid.uuid4())
     ai = AIEngineClient()
 
     # ---- Step 0: redact OA before anything leaves the gateway (Q3 + Q10) ----
@@ -532,8 +555,22 @@ async def orchestrate_analysis(
         "prompt_tokens": cost_meta.prompt_tokens,
         "completion_tokens": cost_meta.completion_tokens,
         "estimated_cost_usd": cost_meta.estimated_cost_usd,
+        # Any step fell back (mock model or saga placeholder): the result is
+        # shown, but must never be cached — a short outage would otherwise be
+        # served from cache for the whole TTL (FAILURE_LOG B-15).
+        "degraded": is_degraded_response(response),
     }
     return response, obs
+
+
+_DEGRADED_NOTE = "[draft generation failed for this rejection — manual attorney drafting required]"
+
+
+def is_degraded_response(response: AnalysisResponse) -> bool:
+    """True if any part of the analysis came from a fallback path."""
+    if "-DEGRADED-" in str(response.cost_meta.model or ""):
+        return True
+    return any(d.draft_text == _DEGRADED_NOTE for d in response.drafts)
 
 
 def _degraded_draft(rejection_id: str) -> DraftResponse:
@@ -544,11 +581,10 @@ def _degraded_draft(rejection_id: str) -> DraftResponse:
     the attorney treat it as "AI could not help here — draft manually". The
     rest of the analysis (other rejections, deadline, claim tree) is unaffected.
     """
-    note = "[draft generation failed for this rejection — manual attorney drafting required]"
     return DraftResponse(
         rejection_id=rejection_id,
-        strategy=note,
-        draft_text=note,
+        strategy=_DEGRADED_NOTE,
+        draft_text=_DEGRADED_NOTE,
         grounded_citations=[],
         confidence=0.0,
         requires_attorney_review=True,

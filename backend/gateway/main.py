@@ -85,6 +85,7 @@ from backend.shared.observability import (
     REQUEST_ID_HEADER,
     bind_request_id,
     configure_logging,
+    current_request_id,
     init_sentry,
     request_id_headers,
 )
@@ -1051,6 +1052,34 @@ def list_cases(user: User = Depends(auth_dependency)):
 # ---------- Main analysis endpoint ----------
 
 
+def _analysis_cache_fingerprint() -> str:
+    """Everything besides the request inputs that changes an analysis.
+
+    It used to be the constant "orchestrator-v1", so switching the model,
+    the LLM mode or the retrieval stack kept serving answers computed by the
+    old setup for the whole TTL (FAILURE_LOG B-15). Prompt or corpus changes
+    are not visible to the gateway — bump ANALYSIS_CACHE_VERSION for those.
+    """
+    return "|".join(
+        [
+            "orchestrator",
+            settings.ANALYSIS_CACHE_VERSION,
+            settings.LLM_MODE,
+            settings.LLM_MODEL_REASONING,
+            settings.LLM_MODEL_CHEAP,
+            settings.LLM_MODEL_VERIFIER,
+            settings.LLM_MODEL_LOCAL,
+            settings.LOCAL_VERIFIER_MODEL,
+            settings.DIFY_MODEL_LABEL,
+            settings.VECTOR_BACKEND,
+            settings.EMBEDDING_BACKEND,
+            settings.RETRIEVAL_MODE,
+            settings.RERANKER_BACKEND,
+            settings.CONTEXTUAL_RETRIEVAL,
+        ]
+    )
+
+
 @app.post("/v1/oa/analyze", response_model=AnalysisResponse)
 async def analyze_oa(
     body: AnalysisRequest,
@@ -1173,7 +1202,7 @@ async def analyze_oa(
                     str(body.service_date or ""),
                 ]
             ),
-            "orchestrator-v1",
+            _analysis_cache_fingerprint(),
             redaction_version=settings.REDACTION_VERSION,
         )
         cached = cache.get_response(user.tenant_id, user.user_id, body.case_id, prompt_hash)
@@ -1194,6 +1223,9 @@ async def analyze_oa(
             # so the SPA's cache chip lied on every hit until this flip.
             response.policy_decisions = dict(policy_decisions)
             response.cost_meta.cache_hit = True
+            # The reference id must be THIS request's (the one in the logs and
+            # audit trail), not the run that filled the cache (B-14).
+            response.request_id = current_request_id() or response.request_id
             return response
 
         # 5. Circuit breaker
@@ -1223,6 +1255,13 @@ async def analyze_oa(
             reserved_tokens=reserved_quota_tokens,
         )
         quota_reservation_settled = True
+        # Cumulative spend per (opaque) tenant and model — declared and charted
+        # but never written before (FAILURE_LOG B-18).
+        if obs.get("estimated_cost_usd"):
+            metrics.LLM_COST_USD.inc(
+                {"tenant": user.tenant_id, "model": str(obs.get("model_used") or "unknown")[:64]},
+                float(obs["estimated_cost_usd"]),
+            )
 
         # 7b. Case summary (dashboard / case list) — metadata only, no OA
         # text. A failure here must never fail the analysis the user waited for.
@@ -1237,14 +1276,17 @@ async def analyze_oa(
         except Exception:  # noqa: BLE001 — convenience data, never fatal
             logger.exception("case summary write failed for case=%s", body.case_id)
 
-        # 8. Cache write
-        cache.set_response(
-            user.tenant_id,
-            user.user_id,
-            body.case_id,
-            prompt_hash,
-            response.model_dump(mode="json"),
-        )
+        # 8. Cache write — never for a degraded result (mock fallback or saga
+        # placeholder): it would replay a short outage for the whole TTL, and
+        # the attorney's retry would keep getting the placeholder (B-15).
+        if not obs.get("degraded"):
+            cache.set_response(
+                user.tenant_id,
+                user.user_id,
+                body.case_id,
+                prompt_hash,
+                response.model_dump(mode="json"),
+            )
 
         return response
     except BaseException as exc:  # noqa: BLE001 — must reach the finally
