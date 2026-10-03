@@ -2322,16 +2322,33 @@ def chat(
     # model can be opted in with LOCAL_VERIFIER_MODEL.
     if settings.LLM_MODE == "local" and intent == "verify_citations":
         verifier_model = (settings.LOCAL_VERIFIER_MODEL or "").strip()
-        if not verifier_model or verifier_model == settings.LLM_MODEL_LOCAL:
+
+        def _deterministic(label: str) -> LLMResponse:
             resp = _mock.chat(hardened_system, user, intent, model)
             return LLMResponse(
                 text=resp.text,
-                model="local-verifier-mock",
+                model=label,
                 prompt_tokens=resp.prompt_tokens,
                 completion_tokens=resp.completion_tokens,
                 latency_ms=resp.latency_ms,
             )
-        model = verifier_model
+
+        if not verifier_model or verifier_model == settings.LLM_MODEL_LOCAL:
+            return _deterministic("local-verifier-mock")
+        # The opted-in second model failed (not pulled, Ollama busy …): fall
+        # back to the deterministic verifier — the documented baseline — not
+        # a "-DEGRADED-" label, which would block every export although the
+        # drafts are real (review V-B6). Loud, and counted as an LLM error.
+        try:
+            return _real_ollama(hardened_system, user, verifier_model, intent)
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "LOCAL_VERIFIER_MODEL %r failed (%s: %s) — using the deterministic verifier",
+                verifier_model,
+                e.__class__.__name__,
+                e,
+            )
+            return _deterministic("local-verifier-fallback")
 
     if settings.LLM_MODE == "local":
         try:

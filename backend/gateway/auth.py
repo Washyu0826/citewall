@@ -1187,7 +1187,7 @@ def authorize_case_access(user: User, case_id: str | None) -> None:
     Raises 403 if not.  This is the conflict-of-interest 看錯案件 防呆.
 
     Important: the dependency-level call (``auth_dependency``) only inspects
-    the X-Case-Id header and the ``case_id`` query string. It deliberately
+    the X-Case-Id header (a ``case_id`` query string is refused). It deliberately
     does NOT peek into the request body — Starlette consumes the body stream
     when Pydantic parses it, and an attempt to read it twice silently
     deadlocks the request. That means JSON POST handlers carrying ``case_id``
@@ -1408,8 +1408,8 @@ async def auth_dependency(request: Request) -> User:
 
     # Case-level access check.
     #
-    # We only consult X-Case-Id header / ?case_id= query string here. We do
-    # NOT peek into the request body — the previous implementation tried to
+    # We only consult the X-Case-Id header here (a ?case_id= query string is
+    # refused below). We do NOT peek into the request body — the previous implementation tried to
     # do that via ``request.state._cached_body`` but that attribute was never
     # set anywhere in the codebase, so JSON POSTs that omitted X-Case-Id
     # silently passed ACL even when their body referenced a foreign case_id
@@ -1421,7 +1421,17 @@ async def auth_dependency(request: Request) -> User:
     # ``authorize_case_access(user, body.case_id)`` after Pydantic parses
     # the body. See ``/v1/oa/analyze``, ``/v1/oa/upload`` (X-Case-Id-only;
     # multipart bodies have no JSON case_id) and ``/v1/audit/append``.
-    case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+    # CLAUDE.md §9 — case ids never travel in URLs (proxies, digiRunner and
+    # uvicorn access logs record them). The rule used to be client-side
+    # only: this dependency READ ?case_id= and ran the ACL on it, so a client
+    # that put a case id in the query string was served and logged
+    # (FAILURE_LOG B-10, review V-F9). Refused outright now.
+    if "case_id" in request.query_params:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "case_id must be sent in the X-Case-Id header or the JSON body, never in the URL",
+        )
+    case_id = request.headers.get("X-Case-Id")
     authorize_case_access(user, case_id)
 
     request.state.user = user

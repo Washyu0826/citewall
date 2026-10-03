@@ -316,6 +316,22 @@ def test_local_mode_verifier_can_opt_into_a_different_model(monkeypatch):
     assert seen == ["llama3.1:8b"]
 
 
+def test_unavailable_local_verifier_model_falls_back_without_degrading(monkeypatch):
+    """V-B6: a LOCAL_VERIFIER_MODEL that is not pulled must not mark every
+    analysis degraded (which blocks every export) — the deterministic verifier
+    takes over, labelled so the failure is still visible and counted."""
+    monkeypatch.setattr(settings, "LLM_MODE", "local")
+    monkeypatch.setattr(settings, "LOCAL_VERIFIER_MODEL", "not-pulled:1b")
+
+    def missing(*a, **kw):
+        raise ConnectionError("model not found")
+
+    monkeypatch.setattr(llm_client, "_real_ollama", missing)
+    resp = llm_client.chat(system="s", user="u", intent="verify_citations", security_level="public")
+    assert resp.model == "local-verifier-fallback"
+    assert "-DEGRADED-" not in resp.model
+
+
 def test_unparseable_verifier_reply_is_zero_confidence(monkeypatch):
     monkeypatch.setattr(llm_client, "chat", lambda **kw: _fake_resp("not json at all"))
     result, _ = oa_analyzer.verify_citations(_draft("text"), [])

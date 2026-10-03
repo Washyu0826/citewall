@@ -74,6 +74,7 @@ export default function SetupPanel({
                 id="analyze-target-patent"
                 value={targetPatent}
                 onChange={(e) => setTargetPatent(e.target.value)}
+                maxLength={64}
                 className="font-mono"
               />
             </Field>

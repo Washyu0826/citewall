@@ -89,7 +89,8 @@ test.describe('Audit flow', () => {
     await page.getByTestId('nav-audit').click();
     await page.waitForURL(/\/audit/);
 
-    const alert = page.getByRole('alert').filter({ hasText: '您沒有此案件的存取權限' }).first();
+    // Role-neutral wording: this 403 is a role gate, not a case ACL (V-F3).
+    const alert = page.getByRole('alert').filter({ hasText: '您沒有權限執行這個操作' }).first();
     await expect(alert).toBeVisible({ timeout: 5000 });
   });
 

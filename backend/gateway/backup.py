@@ -726,12 +726,30 @@ def erase_subject(tenant_id: str, values: list[str], *, dry_run: bool = False) -
     from backend.gateway import cache
 
     not_covered = []
+    cache_bumped = False
     if not dry_run:
-        cache.bump_tenant_generation(tenant_id)
+        try:
+            cache.bump_tenant_generation(tenant_id)
+            cache_bumped = True
+        except cache.CacheUnavailable as exc:
+            # Never report the cache as covered when the bump did not happen
+            # (review V-B5): the subject's cached results stay readable.
+            not_covered.append(
+                f"response cache: the generation bump FAILED ({exc}); cached results of "
+                "this tenant stay readable until CACHE_TTL_RESPONSE_SEC — re-run when "
+                "the cache is reachable"
+            )
     if _cfg().settings.CACHE_BACKEND != "redis":
         not_covered.append(
             "response cache (in-memory backend): a running gateway's cached results "
             "stay readable there until CACHE_TTL_RESPONSE_SEC expires"
+        )
+    elif cache_bumped:
+        # Honest about what a generation bump is: the entries become
+        # unreachable, not deleted (no crypto-shredding — ADR-01 follow-up).
+        not_covered.append(
+            "response cache: older entries are unreachable but their ciphertext "
+            "remains in Redis (and its RDB/AOF files) until CACHE_TTL_RESPONSE_SEC"
         )
     if backups_with_subject:
         not_covered.append(

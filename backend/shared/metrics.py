@@ -561,7 +561,7 @@ def record_llm_usage(meta: dict[str, object] | None) -> None:
     # A fallback to the mock model ("-DEGRADED-") IS an LLM failure: Dify and
     # Ollama outages degrade instead of raising, so without this the error
     # counter stayed at 0 through a full outage (FAILURE_LOG B-18).
-    if meta.get("llm_error") or "-DEGRADED-" in model:
+    if meta.get("llm_error") or "-DEGRADED-" in model or model.endswith("-verifier-fallback"):
         LLM_ERRORS.inc({"model": model})
 
 

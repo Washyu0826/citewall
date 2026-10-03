@@ -160,12 +160,12 @@ def health() -> dict[str, object]:
 
 
 @app.get("/v1/quota")
-def quota(case_id: str = "", user: User = Depends(auth_dependency)) -> dict:
-    # Shape matches what frontend Analyze.jsx renders.
+def quota(user: User = Depends(auth_dependency)) -> dict:
+    # Shape matches what frontend Analyze.jsx renders. Quota is per user /
+    # tenant; case ids never travel in the URL (CLAUDE.md §9).
     return {
         "user_id": user.user_id,
         "tenant_id": user.tenant_id,
-        "case_id": case_id,
         "user_daily_used": 0,
         "user_daily_limit": settings.DEFAULT_DAILY_TOKENS,
         "tenant_monthly_used": 0,

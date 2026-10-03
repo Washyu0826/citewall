@@ -129,10 +129,15 @@ function VerificationBanner({ draft }) {
     // "all verified" in green next to a mismatch warning (UX review UX-2).
     tone = 'warning';
     Icon = AlertTriangle;
-    title = t('analyze.verifier.unsupported_title', {
-      count: unsupportedCount,
-      total: Math.max(groundedCount ?? 0, unsupportedCount),
-    });
+    // Without the grounded list there is no honest total — don't claim
+    // "N of N" (review V-F5).
+    title =
+      groundedCount == null
+        ? t('analyze.verifier.unsupported_count_title', { count: unsupportedCount })
+        : t('analyze.verifier.unsupported_title', {
+            count: unsupportedCount,
+            total: Math.max(groundedCount, unsupportedCount),
+          });
   } else if (groundedCount) {
     tone = 'success';
     Icon = ShieldCheck;

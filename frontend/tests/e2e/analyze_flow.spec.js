@@ -36,6 +36,37 @@ test.describe('Analyze flow', () => {
     for (const u of urls) expect(decodeURIComponent(u)).not.toMatch(/CASE-\d/);
   });
 
+  test('a result for a case switched away from mid-analysis is not shown (B-12)', async ({
+    page,
+    viewport,
+  }) => {
+    test.skip(viewport && viewport.width < 768, 'the top-bar case switcher is shown from md');
+    await loginAsAlice(page);
+    // Hold the analysis response until the case has been switched.
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/v1/oa/analyze', async (route) => {
+      await gate;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(defaultAnalysisResponse()),
+      });
+    });
+
+    await analyzeButton(page).click(); // analysis for CASE-2025-001 in flight
+    await page.getByTestId('case-switcher').click();
+    await page.getByRole('menuitem', { name: /CASE-2025-002/ }).click();
+    release();
+
+    // The old case's result is dropped and the attorney is told why.
+    await expect(page.getByText(/分析期間已切換案件/)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#analyze-case-id')).toHaveValue('CASE-2025-002');
+    await expect(page.getByText('答辯策略')).toHaveCount(0);
+  });
+
   test('analyze button POSTs to /v1/oa/analyze with expected body', async ({ page }) => {
     await loginAsAlice(page);
     const route = mockAnalyze(page);

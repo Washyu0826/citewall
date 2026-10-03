@@ -220,12 +220,28 @@ def _generation_key(tenant_id: str) -> str:
     return "gen:" + _hash_key([tenant_id])
 
 
-def tenant_generation(tenant_id: str) -> int:
-    """The tenant's response-cache generation (part of every response key)."""
+class CacheUnavailable(RuntimeError):
+    """The cache backend failed (not merely missed)."""
+
+
+def tenant_generation(tenant_id: str) -> int | None:
+    """The tenant's response-cache generation (part of every response key).
+
+    ``None`` = it could not be READ (backend failure). That is not generation
+    0: treating an outage as 0 would make entries an erasure had retired
+    readable again, so callers must then skip the cache entirely (fail
+    closed — ADR-02 for privacy controls; review V-B5).
+    """
+    getter = getattr(_cache, "get_or_raise", _cache.get)
     try:
-        return int(_cache.get(_generation_key(tenant_id)) or 0)
+        raw = getter(_generation_key(tenant_id))
+    except Exception:  # noqa: BLE001 — any backend error = unknown generation
+        logger.warning("response cache generation unreadable — cache bypassed for this request")
+        return None
+    try:
+        return int(raw or 0)
     except (TypeError, ValueError):
-        return 0
+        return None
 
 
 def bump_tenant_generation(tenant_id: str) -> int:
@@ -235,16 +251,41 @@ def bump_tenant_generation(tenant_id: str) -> int:
     Instead the generation is part of the key: after a bump, older entries are
     never read again and expire with their TTL. Called on personal-data
     erasure (backup.erase_subject) so an erased subject is not served back
-    from the cache.
+    from the cache. Atomic on Redis (INCR). Raises CacheUnavailable when the
+    bump did not happen — the caller must report it, not assume it.
     """
-    nxt = tenant_generation(tenant_id) + 1
-    _safe_set(_generation_key(tenant_id), nxt, ttl_sec=0)
-    return nxt
+    key = _generation_key(tenant_id)
+    incr = getattr(_cache, "incr", None)
+    if incr is not None:
+        try:
+            return int(incr(key))
+        except Exception as exc:  # noqa: BLE001
+            raise CacheUnavailable(
+                f"cache generation bump failed: {exc.__class__.__name__}"
+            ) from exc
+    current = tenant_generation(tenant_id)
+    if current is None:
+        raise CacheUnavailable("cache generation unreadable")
+    _safe_set(key, current + 1, ttl_sec=0)
+    return current + 1
+
+
+def response_key_for(tenant_id: str, user_id: str, case_id: str, prompt_hash: str) -> str | None:
+    """The response-cache key, or None when the cache must be bypassed
+    (generation unreadable). Compute it ONCE per request and use it for both
+    the lookup and the write — each build reads the generation (review V-B10)."""
+    gen = tenant_generation(tenant_id)
+    if gen is None:
+        return None
+    return "resp:" + _hash_key([tenant_id, user_id, case_id, prompt_hash, str(gen)])
 
 
 def response_cache_key(tenant_id: str, user_id: str, case_id: str, prompt_hash: str) -> str:
-    gen = str(tenant_generation(tenant_id))
-    return "resp:" + _hash_key([tenant_id, user_id, case_id, prompt_hash, gen])
+    """Key shape for tests and tooling (generation unreadable → treated as 0
+    here; request paths use response_key_for, which fails closed)."""
+    return response_key_for(tenant_id, user_id, case_id, prompt_hash) or (
+        "resp:" + _hash_key([tenant_id, user_id, case_id, prompt_hash, "0"])
+    )
 
 
 # --- Response encryption at rest (BE-17) ---------------------------------
@@ -286,7 +327,18 @@ def _response_fernet(tenant_id: str):
 
 
 def get_response(tenant_id: str, user_id: str, case_id: str, prompt_hash: str) -> Any | None:
-    stored = _cache.get(response_cache_key(tenant_id, user_id, case_id, prompt_hash))
+    return get_response_at(response_key_for(tenant_id, user_id, case_id, prompt_hash), tenant_id)
+
+
+def set_response(tenant_id: str, user_id: str, case_id: str, prompt_hash: str, value: Any):
+    set_response_at(response_key_for(tenant_id, user_id, case_id, prompt_hash), tenant_id, value)
+
+
+def get_response_at(key: str | None, tenant_id: str) -> Any | None:
+    """Decrypt and return the cached analysis at ``key`` (None key = bypass)."""
+    if key is None:
+        return None
+    stored = _cache.get(key)
     if not isinstance(stored, dict) or stored.get("enc") != _ENC_MARK:
         # Missing, or a pre-encryption plaintext entry: never served.
         return None
@@ -300,7 +352,10 @@ def get_response(tenant_id: str, user_id: str, case_id: str, prompt_hash: str) -
     return json.loads(plain)
 
 
-def set_response(tenant_id: str, user_id: str, case_id: str, prompt_hash: str, value: Any):
+def set_response_at(key: str | None, tenant_id: str, value: Any) -> None:
+    """Encrypt and store an analysis at ``key`` (None key = bypass)."""
+    if key is None:
+        return
     token = _response_fernet(tenant_id).encrypt(
         json.dumps(value, ensure_ascii=False).encode("utf-8")
     )
@@ -309,7 +364,7 @@ def set_response(tenant_id: str, user_id: str, case_id: str, prompt_hash: str, v
     # the kwarg via **kwargs / lack thereof. We guard with a hasattr check
     # so the redis path doesn't break when this kwarg is added.
     _safe_set(
-        response_cache_key(tenant_id, user_id, case_id, prompt_hash),
+        key,
         {"enc": _ENC_MARK, "ct": token.decode("ascii")},
         ttl_sec=settings.CACHE_TTL_RESPONSE_SEC,
         tenant=tenant_id,

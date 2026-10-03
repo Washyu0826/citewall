@@ -71,7 +71,7 @@
 
 ### 2. Local-LLM hosting — Q15 (implementation layer)
 
-**Current state.** `config.py` lines 100-101 reference Ollama (`OLLAMA_BASE_URL`, `OLLAMA_TIMEOUT_SEC=600`).
+**Current state.** `config.py` references Ollama (`OLLAMA_BASE_URL`, `OLLAMA_TIMEOUT_SEC=300` — lowered from 600 on 2026-10-03 so the timeouts nest inside the browser's 420 s; FAILURE_LOG B-13).
 
 **Build option.** Roll your own FastAPI wrapper around `transformers` + `accelerate`. Don't. PagedAttention and continuous batching are non-trivial and inventing them costs months.
 

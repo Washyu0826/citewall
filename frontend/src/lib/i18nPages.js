@@ -60,6 +60,7 @@ export const pagesZhTW = {
       removed_title: '{{count}} 個引用未通過驗證，已移除',
       verified_title: '{{count}} 個引用全部通過驗證',
       unsupported_title: '{{total}} 個引用中有 {{count}} 個與所引段落不符，需改寫或排除',
+      unsupported_count_title: '有 {{count}} 個引用與所引段落不符，需改寫或排除',
       no_data: '沒有引用驗證資料',
       grounded: '通過 {{count}}',
       removed: '移除 {{count}}',
@@ -130,7 +131,8 @@ export const pagesZhTW = {
     timeout: '請求逾時。模型可能仍在處理，請稍後重試。',
     quota_exceeded: '今日或本月用量已達上限，請洽事務所管理員。',
     reference: '參考編號：{{id}}',
-    no_access: '您沒有此案件的存取權限。請確認案號與您的登入身分相符。',
+    // A 403 is either a case ACL or a role gate (audit, registry …): say both.
+    no_access: '您沒有權限執行這個操作：此案件不在您的存取範圍，或您的角色不能使用這項功能。',
   },
   response_export: {
     title: '整份申復書',
@@ -368,6 +370,8 @@ export const pagesEn = {
       grounded: 'passed {{count}}',
       unsupported_title_one: '{{count}} of {{total}} citations does not match the cited passage — rewrite or exclude it',
       unsupported_title_other: '{{count}} of {{total}} citations do not match the cited passage — rewrite or exclude them',
+      unsupported_count_title_one: '{{count}} citation does not match the cited passage — rewrite or exclude it',
+      unsupported_count_title_other: '{{count}} citations do not match the cited passage — rewrite or exclude them',
       verified_by: 'Verifier model: {{model}}',
     },
   },
@@ -434,7 +438,7 @@ export const pagesEn = {
     timeout: 'The request timed out. The model may still be working — try again shortly.',
     quota_exceeded: "Today's or this month's usage limit is reached. Contact your firm's administrator.",
     reference: 'Reference: {{id}}',
-    no_access: 'You do not have access to this case. Check the case number and the identity you signed in with.',
+    no_access: 'You are not allowed to do this: the case is outside your access, or your role cannot use this feature.',
   },
   response_export: {
     title: 'Whole response',

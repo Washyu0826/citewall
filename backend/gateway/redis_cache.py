@@ -140,6 +140,23 @@ class RedisCacheBackend:
             log.warning("redis_cache: corrupt value at %s, dropping: %s", key, exc)
             return None
 
+    def get_or_raise(self, key: str) -> Any | None:
+        """Like ``get`` but a Redis failure RAISES instead of reading as a miss.
+
+        For values whose absence and unavailability mean different things —
+        the response-cache generation: "no key" is generation 0, "Redis down"
+        must not be (it would resurrect entries an erasure made unreachable).
+        """
+        raw = self._client.get(key)
+        if raw is None:
+            return None
+        return json.loads(raw)
+
+    def incr(self, key: str) -> int:
+        """Atomic INCR (raises on Redis failure). Values written by ``set`` as
+        JSON integers are plain integer strings, so INCR works on them."""
+        return int(self._client.incr(key))
+
     def set(self, key: str, value: Any, ttl_sec: int = 0, tenant: str | None = None) -> None:
         """Set a cache entry, optionally tracked under a per-tenant FIFO cap.
 

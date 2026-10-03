@@ -17,7 +17,7 @@ describe('errorDetailText', () => {
       ],
     };
     expect(errorDetailText(body, 'Unprocessable Entity')).toBe(
-      'String should have at most 64 characters; Field required'
+      'target_patent_no: String should have at most 64 characters; oa_text: Field required'
     );
   });
   it('falls back to the status text for anything else', () => {

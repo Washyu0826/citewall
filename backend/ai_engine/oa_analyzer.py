@@ -163,7 +163,9 @@ def parse_oa(
         except Exception:
             continue
     usage = _usage_dict(resp)
-    return rejections, {"usage": usage, "model_used": resp.model}
+    # Model output that is not JSON reads as "zero rejections" — a fallback,
+    # not an answer. Flag it so the gateway never caches it (review V-B3).
+    return rejections, {"usage": usage, "model_used": resp.model, "output_unparseable": not data}
 
 
 # ---------- draft_response ----------
@@ -221,7 +223,11 @@ def draft_response(
     )
 
     usage = _usage_dict(resp)
-    return draft, {"usage": usage, "model_used": resp.model}
+    return draft, {
+        "usage": usage,
+        "model_used": resp.model,
+        "output_unparseable": not data or not draft.draft_text,
+    }
 
 
 # Cap per grounded document on the Citations path (chars). Hits are chunks, so

@@ -101,6 +101,20 @@ def test_erase_subject_makes_cached_results_unreachable(stores, monkeypatch):
     assert cache.get_response("tenant_a", "alice", "CASE-1", "h") is None
 
 
+def test_erase_subject_reports_a_failed_cache_bump(stores, monkeypatch):
+    """V-B5: if the cache could not be invalidated, the report must say so —
+    never claim coverage that did not happen."""
+    from backend.gateway import cache
+
+    def fail(_tenant):
+        raise cache.CacheUnavailable("redis down")
+
+    monkeypatch.setattr(cache, "bump_tenant_generation", fail)
+    result = backup.erase_subject("tenant_a", ["0912-345-678"])
+    assert result["erased_mapping_entries"] == 1
+    assert any("bump FAILED" in n for n in result["not_covered"])
+
+
 def test_erase_subject_dry_run_leaves_the_cache_alone(stores, monkeypatch):
     from backend.gateway import cache
 

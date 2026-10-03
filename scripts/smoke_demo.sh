@@ -54,7 +54,7 @@ if [ -n "$TOKEN" ]; then ok "JWT issued (${#TOKEN} chars)"; else bad "login fail
 
 # ----- 3. Quota -----
 inf "Check quota endpoint..."
-if curl -fs "$GW/v1/quota?case_id=CASE-2025-001" -H "Authorization: Bearer $TOKEN" > /dev/null; then
+if curl -fs "$GW/v1/quota" -H "Authorization: Bearer $TOKEN" > /dev/null; then
   ok "quota endpoint"
 else
   bad "quota endpoint"

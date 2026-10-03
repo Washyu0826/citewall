@@ -67,7 +67,11 @@ from backend.gateway.auth import (
     require_roles,
     revoke_token,
 )
-from backend.gateway.orchestrator import _jurisdiction_for_patent, orchestrate_analysis
+from backend.gateway.orchestrator import (
+    _jurisdiction_for_patent,
+    ai_call_timeout_sec,
+    orchestrate_analysis,
+)
 from backend.shared import metrics
 from backend.shared.case_registry import is_confidential, security_level_for_case
 from backend.shared.config import settings
@@ -94,6 +98,29 @@ from backend.shared.observability import (
 configure_logging("gateway")
 
 logger = logging.getLogger(__name__)
+
+# Timeouts must nest inside the browser's wait. Per-call budgets now do
+# (orchestrator.ai_call_timeout_sec), but an old .env (OLLAMA_TIMEOUT_SEC=600)
+# or Anthropic retries can still push one call past it — say so at startup
+# instead of failing as an unexplained client timeout (review V-B4). A
+# whole-request deadline passed down every hop is the real fix (research
+# 09 BE-4, wave 2).
+_SPA_ANALYZE_BUDGET_SEC = 420  # frontend/src/api/client.js LLM_TIMEOUT_MS
+if ai_call_timeout_sec() >= _SPA_ANALYZE_BUDGET_SEC:
+    logger.warning(
+        "per-call AI wait %.0f s (LLM_MODE=%s) reaches the browser's %d s analyze "
+        "budget — lower OLLAMA_TIMEOUT_SEC / DIFY_TIMEOUT_SEC / LLM_REQUEST_TIMEOUT_SEC",
+        ai_call_timeout_sec(),
+        settings.LLM_MODE,
+        _SPA_ANALYZE_BUDGET_SEC,
+    )
+if settings.LLM_MODE == "anthropic" and settings.LLM_MAX_RETRIES > 0:
+    logger.info(
+        "anthropic retries (%d x %.0f s) can outlast the gateway's per-call wait; "
+        "the gateway then degrades that step (deadline propagation pending)",
+        settings.LLM_MAX_RETRIES,
+        settings.LLM_REQUEST_TIMEOUT_SEC,
+    )
 
 
 def _safe_audit_write(**kwargs: Any) -> None:
@@ -314,6 +341,24 @@ async def request_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers[REQUEST_ID_HEADER] = rid
     return response
+
+
+@app.exception_handler(Exception)
+async def _unhandled_error_with_reference(request: Request, exc: Exception):
+    """An unhandled error still answers with the request's reference id.
+
+    The middleware above never sees the response of an exception that escapes
+    the app, so a 500 went out WITHOUT X-Request-ID — the one moment the
+    attorney most needs a reference to quote (review V-F7). Starlette calls
+    this from ServerErrorMiddleware and re-raises afterwards, so server logs
+    and Sentry still record the exception.
+    """
+    rid = current_request_id()
+    return JSONResponse(
+        {"detail": "Internal Server Error"},
+        status_code=500,
+        headers={REQUEST_ID_HEADER: rid} if rid else None,
+    )
 
 
 # H-1: env-driven CORS with specific methods + headers (was `*` wildcards).
@@ -1059,6 +1104,9 @@ def _analysis_cache_fingerprint() -> str:
     the LLM mode or the retrieval stack kept serving answers computed by the
     old setup for the whole TTL (FAILURE_LOG B-15). Prompt or corpus changes
     are not visible to the gateway — bump ANALYSIS_CACHE_VERSION for those.
+    These are the GATEWAY's settings: in a deployment where the AI Engine has
+    its own env (not the shared compose .env), keep them in sync or bump
+    ANALYSIS_CACHE_VERSION on every AI Engine change.
     """
     return "|".join(
         [
@@ -1073,9 +1121,19 @@ def _analysis_cache_fingerprint() -> str:
             settings.DIFY_MODEL_LABEL,
             settings.VECTOR_BACKEND,
             settings.EMBEDDING_BACKEND,
+            settings.EMBEDDING_MODEL,
+            settings.QWEN3_EMBEDDING_MODEL,
             settings.RETRIEVAL_MODE,
             settings.RERANKER_BACKEND,
+            settings.RERANKER_MODEL,
+            str(settings.RERANK_CANDIDATES),
             settings.CONTEXTUAL_RETRIEVAL,
+            str(settings.CLAIM_ELEMENTS_ENABLED),
+            settings.CLAIM_ELEMENTS_DECOMPOSER,
+            # The deadline block depends on the holiday calendar the gateway
+            # itself sends (review V-B9).
+            settings.HOLIDAY_CALENDAR_VERSION,
+            settings.HOLIDAY_SOURCE,
         ]
     )
 
@@ -1136,7 +1194,7 @@ async def analyze_oa(
         # only check when both are present — handlers that previously sent
         # only one or the other (the frontend always sends both with the
         # same value; smoke tests sometimes send only body) keep working.
-        header_case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+        header_case_id = request.headers.get("X-Case-Id")
         if header_case_id and header_case_id != body.case_id:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -1205,7 +1263,10 @@ async def analyze_oa(
             _analysis_cache_fingerprint(),
             redaction_version=settings.REDACTION_VERSION,
         )
-        cached = cache.get_response(user.tenant_id, user.user_id, body.case_id, prompt_hash)
+        # One key per request (one generation read) for both lookup and write;
+        # None = cache bypassed because the generation could not be read.
+        cache_key = cache.response_key_for(user.tenant_id, user.user_id, body.case_id, prompt_hash)
+        cached = cache.get_response_at(cache_key, user.tenant_id)
         # Q19 系統 metric: cache effectiveness (hit ratio panel in Grafana).
         metrics.CACHE_REQUESTS.inc({"result": "hit" if cached else "miss"})
         if cached:
@@ -1223,9 +1284,13 @@ async def analyze_oa(
             # so the SPA's cache chip lied on every hit until this flip.
             response.policy_decisions = dict(policy_decisions)
             response.cost_meta.cache_hit = True
-            # The reference id must be THIS request's (the one in the logs and
-            # audit trail), not the run that filled the cache (B-14).
-            response.request_id = current_request_id() or response.request_id
+            # The reference id must be THIS request's (the one in the logs),
+            # not the run that filled the cache (B-14) — in the response AND in
+            # the payload the audit row hashes, so the two match (review V-B8).
+            rid = current_request_id()
+            if rid and len(rid) <= 128:
+                response.request_id = rid
+                cached_payload = {**cached, "request_id": rid}
             return response
 
         # 5. Circuit breaker
@@ -1255,13 +1320,7 @@ async def analyze_oa(
             reserved_tokens=reserved_quota_tokens,
         )
         quota_reservation_settled = True
-        # Cumulative spend per (opaque) tenant and model — declared and charted
-        # but never written before (FAILURE_LOG B-18).
-        if obs.get("estimated_cost_usd"):
-            metrics.LLM_COST_USD.inc(
-                {"tenant": user.tenant_id, "model": str(obs.get("model_used") or "unknown")[:64]},
-                float(obs["estimated_cost_usd"]),
-            )
+        # (llm_cost_usd_total is written per call in the orchestrator.)
 
         # 7b. Case summary (dashboard / case list) — metadata only, no OA
         # text. A failure here must never fail the analysis the user waited for.
@@ -1280,13 +1339,7 @@ async def analyze_oa(
         # placeholder): it would replay a short outage for the whole TTL, and
         # the attorney's retry would keep getting the placeholder (B-15).
         if not obs.get("degraded"):
-            cache.set_response(
-                user.tenant_id,
-                user.user_id,
-                body.case_id,
-                prompt_hash,
-                response.model_dump(mode="json"),
-            )
+            cache.set_response_at(cache_key, user.tenant_id, response.model_dump(mode="json"))
 
         return response
     except BaseException as exc:  # noqa: BLE001 — must reach the finally
@@ -1404,7 +1457,7 @@ async def upload_oa(
     # Pull case_id explicitly: multipart bodies are streams so auth_dependency
     # can't autodetect it from body the way it does for JSON POSTs. (And per
     # C-3 fix, the dependency never peeks at the body at all now.)
-    case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+    case_id = request.headers.get("X-Case-Id")
 
     # Pre-set audit shape so the finally block always has something coherent
     # to write — even if we error out before reading the file body.
@@ -1482,8 +1535,10 @@ async def upload_oa(
         }
         ai_url = f"{settings.AI_ENGINE_URL.rstrip('/')}/v1/ai/extract_text"
         async with httpx.AsyncClient(timeout=120.0) as client:
-            # OCR over a 100-page scan can take ~60s through Haiku, so the
-            # timeout intentionally exceeds the orchestrator's 60s.
+            # OCR over a 100-page scan can take ~60s through Haiku; 120 s is a
+            # fixed budget for this hop (the analyze hops follow
+            # orchestrator.ai_call_timeout_sec). Large scans should become
+            # async jobs — docs/research/09 BE-16.
             try:
                 # Security Chunk A — C-2. AI Engine refuses requests lacking
                 # X-Internal-Token. Gateway is the only legitimate caller.
@@ -1817,7 +1872,7 @@ def _do_redact(req: RedactionPreviewRequest, user: User, request: Request, endpo
     paths (H-7 fix).
     """
     started = time.monotonic()
-    case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+    case_id = request.headers.get("X-Case-Id")
 
     policy_decisions: dict[str, bool] = {
         "authn_passed": True,
@@ -2110,7 +2165,7 @@ def export_draft(
         # 1. Confused-deputy guard + ACL re-check on the body case_id, mirroring
         #    /v1/oa/analyze. If both header and body case_id are present they
         #    must agree; then the body case_id is ACL-checked explicitly.
-        header_case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+        header_case_id = request.headers.get("X-Case-Id")
         if header_case_id and header_case_id != body.case_id:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -2264,7 +2319,7 @@ def export_response(
     error: BaseException | None = None
     all_segments = [s for sec in body.sections for s in sec.segments]
     try:
-        header_case_id = request.headers.get("X-Case-Id") or request.query_params.get("case_id")
+        header_case_id = request.headers.get("X-Case-Id")
         if header_case_id and header_case_id != body.case_id:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,

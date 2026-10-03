@@ -102,6 +102,68 @@ def test_one_tenants_key_cannot_decrypt_anothers_entry():
         cache_mod._response_fernet("tenant_b").decrypt(stored["ct"].encode())
 
 
+class _FlakyBackend:
+    """A backend whose generation read fails like an unreachable Redis."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.down = False
+
+    def get_or_raise(self, key):
+        if self.down:
+            raise ConnectionError("redis down")
+        return self.inner.get(key)
+
+    def incr(self, key):
+        if self.down:
+            raise ConnectionError("redis down")
+        nxt = int(self.inner.get(key) or 0) + 1
+        self.inner.set(key, nxt, ttl_sec=0)
+        return nxt
+
+    def get(self, key):
+        return None if self.down else self.inner.get(key)
+
+    def set(self, key, value, ttl_sec=0, tenant=None):
+        if not self.down:
+            self.inner.set(key, value, ttl_sec=ttl_sec, tenant=tenant)
+
+
+def test_unreadable_generation_bypasses_the_cache_instead_of_reading_gen_0(monkeypatch):
+    """V-B5: an outage must not read as generation 0 — that would resurrect
+    entries an erasure retired. The cache is skipped (fail closed)."""
+    backend = _FlakyBackend(cache_mod._MemoryCache())
+    monkeypatch.setattr(cache_mod, "_cache", backend)
+    cache_mod.set_response("tenant_a", "alice", "CASE-1", "h", {"v": "gen0"})
+    cache_mod.bump_tenant_generation("tenant_a")  # erasure: gen 0 entries retired
+    backend.down = True
+    assert cache_mod.response_key_for("tenant_a", "alice", "CASE-1", "h") is None
+    assert cache_mod.get_response("tenant_a", "alice", "CASE-1", "h") is None
+    backend.down = False
+    assert cache_mod.get_response("tenant_a", "alice", "CASE-1", "h") is None  # still retired
+
+
+def test_a_failed_bump_raises_so_erasure_can_report_it(monkeypatch):
+    backend = _FlakyBackend(cache_mod._MemoryCache())
+    backend.down = True
+    monkeypatch.setattr(cache_mod, "_cache", backend)
+    with pytest.raises(cache_mod.CacheUnavailable):
+        cache_mod.bump_tenant_generation("tenant_a")
+
+
+def test_response_cache_key_cannot_be_opened_with_the_mapping_key():
+    """Key separation (ADR-01): the mapping table's tenant key must not
+    decrypt a cached analysis."""
+    from cryptography.fernet import InvalidToken
+
+    from backend.gateway import masking
+
+    cache_mod.set_response("tenant_a", "alice", "CASE-1", "h", {"v": 1})
+    stored = cache_mod._cache.get(cache_mod.response_cache_key("tenant_a", "alice", "CASE-1", "h"))
+    with pytest.raises(InvalidToken):
+        masking._tenant_fernet("tenant_a").decrypt(stored["ct"].encode())
+
+
 def test_generation_bump_makes_a_tenants_entries_unreachable():
     cache_mod.set_response("tenant_a", "alice", "CASE-1", "h", {"v": "old"})
     cache_mod.set_response("tenant_b", "carol", "CASE-9", "h", {"v": "other tenant"})

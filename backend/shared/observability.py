@@ -56,9 +56,11 @@ logger = logging.getLogger(__name__)
 REQUEST_ID_HEADER = "X-Request-ID"
 
 # A bounded id length so a hostile upstream can't smuggle a megabyte "id" into
-# every log line. 200 chars comfortably fits a UUID, a W3C traceparent, or a
-# digiRunner correlation token while bounding the blast radius.
-_MAX_REQUEST_ID_LEN = 200
+# every log line. 128 = AnalysisResponse.request_id max_length: the bound id
+# is shown to the user, and the old 200-char cap let a longer id fail response
+# validation AFTER all model work had run (FAILURE_LOG B-22). A UUID (36), a
+# W3C traceparent (55) or a digiRunner correlation token fits.
+_MAX_REQUEST_ID_LEN = 128
 
 # The single source of truth for "which request am I handling right now". A
 # ContextVar is asyncio-task-local AND thread-local: FastAPI runs sync handlers

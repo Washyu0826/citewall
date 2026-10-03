@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle } from 'lucide-react';
@@ -95,17 +95,24 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
 
   // The case the page shows right now, readable from an in-flight request's
   // continuation (state captured by runAnalyze's closure would be stale).
+  // A LAYOUT effect, and keyed on the shell's case first: it runs in the same
+  // commit as the switch, before any network continuation can. A passive
+  // effect on `caseId` left a window of one render + one scheduler task in
+  // which the old case's result could still land (review V-F1).
   const caseRef = useRef(caseId);
-  useEffect(() => {
-    caseRef.current = caseId;
-  }, [caseId]);
+  useLayoutEffect(() => {
+    caseRef.current = initialCaseId || caseId;
+  }, [initialCaseId, caseId]);
 
-  // The shell switched case: follow it, keep the typed OA, drop the old result.
+  // The shell switched case: follow it, keep the typed OA, drop the old
+  // result, preview and error (an old case's error + Retry would re-run
+  // against the new case).
   useEffect(() => {
     if (!initialCaseId) return;
     setCaseId(initialCaseId);
     setResult(null);
     setRedactPreview(null);
+    setError(null);
     setEditing(false);
   }, [initialCaseId]);
 
@@ -156,11 +163,13 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   }
 
   async function previewRedaction() {
+    const requestedCase = caseId;
     setPreviewing(true);
     try {
-      setRedactPreview(await api.redactionPreview(session.token, oaText, caseId));
+      const preview = await api.redactionPreview(session.token, oaText, requestedCase);
+      if (caseRef.current === requestedCase) setRedactPreview(preview);
     } catch (e) {
-      setError(e);
+      if (caseRef.current === requestedCase) setError(e);
     } finally {
       setPreviewing(false);
     }

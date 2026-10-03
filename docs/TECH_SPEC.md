@@ -154,7 +154,7 @@ Dify CE (:8088, 12 容器) ｜ Ollama (:11434)
 | 6 | 成本斷路器 | gateway/rate_limit.py | 當日 LLM 成本 ≥ $100 → 熔斷拒絕 |
 | 7 | 遮罩 | gateway/masking.py | PII 規則 + 租戶詞庫 → 語意代碼；映射寫地端 SQLite |
 | 8 | 快取 | gateway/cache.py | key=`tenant:user:case:sha(遮罩文+專利號)`；命中→直接回（成本0），釋放預扣，仍寫稽核 |
-| 9 | 編排 | gateway/orchestrator.py | HTTP 呼叫 ai_engine（timeout 60s；dify 模式放大為 DIFY_TIMEOUT_SEC+30） |
+| 9 | 編排 | gateway/orchestrator.py | HTTP 呼叫 ai_engine；每次呼叫的等待 = 該模式的模型逾時 + 30 s（`ai_call_timeout_sec()`：dify `DIFY_TIMEOUT_SEC`、local `OLLAMA_TIMEOUT_SEC`、anthropic 2×`LLM_REQUEST_TIMEOUT_SEC`、mock 60 s；2026-10-03 起，見 FAILURE_LOG B-13） |
 | 10 | AI 五步 | ai_engine/oa_analyzer.py | parse→retrieve→draft→verify→deadline（見 §6）；saga 容錯：單核駁失敗標記後續行 |
 | 11 | 配額結算 | gateway/rate_limit.py | `record_usage(reserved_tokens=…)` 按實際用量結算差額；**錯誤路徑亦釋放**（try/except 包裹） |
 | 12 | 稽核寫入 | gateway/audit.py | 一請求一列（含快取命中與錯誤）：model_used/tokens/成本/遮罩規則/policy 決策；`prev_row_hash→row_hash` 鏈 |

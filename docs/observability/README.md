@@ -40,7 +40,7 @@ default is the hand-rolled path the test-suite exercises.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `http_request_duration_seconds` | histogram | `endpoint`, `method`, `status` | request latency → p50/p95/p99 per route (both services). |
+| `http_request_duration_seconds` | histogram | `endpoint`, `method`, `status` | request latency → p50/p95/p99 per route (both services). Buckets 0.05 s → 450 s with the SLO thresholds (25 / 30 / 90 s) as edges; `/v1/health` and `/metrics` are not timed. (Until 2026-10-03 the top bucket was 10 s, so every analysis fell in +Inf — FAILURE_LOG B-17.) |
 | `audit_write_duration_seconds` | histogram | — | audit-row write latency. **SLO: p99 < 0.1s** (invariant #4). |
 | `llm_errors_total` | counter | `model` | LLM call errors per model. |
 | `cache_requests_total` | counter | `result` (`hit`/`miss`) | Q9 response-cache lookups on the analyze path → cache hit ratio. |
@@ -111,20 +111,17 @@ chars stripped) so a forged header can't forge log lines.
 
 ### Propagation status
 
-| Gateway → AI Engine call | Propagated? |
+| Hop | Propagated? |
 |---|---|
-| `/v1/oa/upload` → `/v1/ai/extract_text` | ✅ wired (`request_id_headers`) |
-| `orchestrator.AIEngineClient.call` (parse / retrieve / draft / verify / deadline) | ⚠ **pending** — see cross-file follow-up below |
+| `/v1/oa/upload` → `/v1/ai/extract_text` | ✅ `request_id_headers` |
+| `orchestrator.AIEngineClient.call` (parse / retrieve / draft / verify / deadline / claim tree / elements) | ✅ `request_id_headers(_internal_headers())` |
+| Response body: `AnalysisResponse.request_id` | ✅ since 2026-10-03 the **same** bound id (it used to be a separate `uuid4`, so the id an attorney quoted was in no log — FAILURE_LOG B-14). A cache hit reports the hitting request's id. |
+| SPA | ✅ reads `X-Request-ID` into `ApiError.requestId`; error banners show it as 「參考編號」 |
+| AI Engine → Dify | ❌ Dify receives a constant `user`; follow-up in `docs/research/09` OBS-4 |
+| Audit row | ❌ no `request_id` column yet (needs a hash-chain-aware migration); follow-up OBS-4 |
 
-> **Cross-file follow-up (not in Agent D's ownership):** the orchestrator's
-> `AIEngineClient.call` (and its `_internal_headers()` source in `auth.py`)
-> need a one-line change to send `request_id_headers(_internal_headers())`
-> instead of `_internal_headers()`. The mechanism is in place
-> (`observability.request_id_headers`); only those two call sites remain. Until
-> then the analyze-path correlation is bound + logged on **each** service but
-> the id is regenerated at the AI-Engine hop rather than shared. Logs are still
-> structured and individually traceable; the gateway-side id still ties the
-> whole gateway flow + audit row together.
+Until the audit row carries the id, join an audit row to logs by tenant +
+endpoint + timestamp.
 
 ---
 

@@ -38,6 +38,20 @@ def test_default_on_prem_budgets_fit_inside_the_browser_wait(monkeypatch, mode):
     assert ai_call_timeout_sec() < SPA_ANALYZE_BUDGET_SEC
 
 
+@pytest.mark.parametrize(
+    "mode, env", [("dify", "DIFY_TIMEOUT_SEC"), ("local", "OLLAMA_TIMEOUT_SEC")]
+)
+def test_shipped_defaults_fit_inside_the_browser_wait(monkeypatch, mode, env):
+    """The test above pins 300 s; this one checks the values that actually
+    ship (review: the pinned version passes whatever the default is)."""
+    import os
+
+    if os.getenv(env) is not None:
+        pytest.skip(f"{env} is overridden in this environment")
+    monkeypatch.setattr(settings, "LLM_MODE", mode)
+    assert ai_call_timeout_sec() < SPA_ANALYZE_BUDGET_SEC
+
+
 def test_mock_mode_keeps_a_short_wait(monkeypatch):
     monkeypatch.setattr(settings, "LLM_MODE", "mock")
     assert ai_call_timeout_sec() == 60.0

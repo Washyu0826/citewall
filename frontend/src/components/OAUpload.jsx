@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { UploadCloud, FileText, Loader2, Download } from 'lucide-react';
 import { api } from '../api/client.js';
+import { asText, classifyError } from '../lib/errorInfo.js';
 import { Button } from './ui/button.jsx';
 import { Badge } from './ui/badge.jsx';
 
@@ -48,6 +49,9 @@ export default function OAUpload({ caseId, token, onExtractSuccess }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [progress, setProgress] = useState(0); // 0..1 (network upload phase)
   const [errorMsg, setErrorMsg] = useState(null);
+  // Bumped on every rejection so the alert re-mounts: the same message twice
+  // in a row would otherwise not be re-announced by screen readers (V-F8).
+  const [rejections, setRejections] = useState(0);
   const [extractResult, setExtractResult] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
@@ -70,6 +74,7 @@ export default function OAUpload({ caseId, token, onExtractSuccess }) {
       setBlobUrl(null);
       setFile(null);
       setErrorMsg(msg);
+      setRejections((n) => n + 1);
       setStatus('error');
       if (fileInputRef.current) fileInputRef.current.value = '';
     },
@@ -145,14 +150,11 @@ export default function OAUpload({ caseId, token, onExtractSuccess }) {
           setProgress(0);
           return;
         }
-        // Localize the transport-level failure strings from client.js; keep
-        // server-provided `detail` messages verbatim (already human-readable).
-        // The file stays selected, so the status pane's Retry re-sends it.
-        const msg =
-          err?.message === 'Network error during upload'
-            ? t('errors.network')
-            : err?.message || t('errors.request_failed');
-        setErrorMsg(msg);
+        // Same classification as every other API error (session expiry, size,
+        // rate limit, server busy …); the file stays selected, so the status
+        // pane's Retry re-sends it.
+        setErrorMsg(asText(classifyError(err, t)?.message) || t('errors.request_failed'));
+        setRejections((n) => n + 1);
         setStatus('error');
       });
   }, [file, caseId, token, t]);
@@ -234,7 +236,7 @@ export default function OAUpload({ caseId, token, onExtractSuccess }) {
       )}
 
       {showDropZone && status === 'error' && errorMsg && (
-        <p role="alert" className="border-l-4 border-danger py-1 pl-3 text-sm text-danger">
+        <p key={rejections} role="alert" className="border-l-4 border-danger py-1 pl-3 text-sm text-danger">
           {errorMsg}
         </p>
       )}

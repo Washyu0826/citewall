@@ -31,7 +31,14 @@ export function errorDetailText(body, fallback = '') {
   if (typeof detail === 'string' && detail) return detail;
   if (Array.isArray(detail)) {
     const msgs = detail
-      .map((d) => (d && typeof d === 'object' ? d.msg : typeof d === 'string' ? d : null))
+      .map((d) => {
+        if (typeof d === 'string') return d;
+        if (!d || typeof d !== 'object' || typeof d.msg !== 'string' || !d.msg) return null;
+        // Name the field (last `loc` segment) — "String should have at most
+        // 64 characters" alone does not say which input (review V-F6).
+        const field = Array.isArray(d.loc) ? d.loc.filter((s) => typeof s === 'string').pop() : null;
+        return field && field !== 'body' ? `${field}: ${d.msg}` : d.msg;
+      })
       .filter((m) => typeof m === 'string' && m);
     if (msgs.length) return msgs.join('; ');
   }
@@ -130,8 +137,9 @@ export const api = {
   logout: (token) => call('/v1/auth/logout', { method: 'POST', token }),
   // Cases the caller may open (dashboard / case list). No case_id in the URL.
   cases: (token) => call('/v1/cases', { token }),
-  // Quota is per user / tenant — the gateway never read a case id here, and a
-  // case id in a query string lands in proxy access logs (FAILURE_LOG B-10).
+  // Quota is per user / tenant, and a case id in a query string lands in
+  // proxy access logs (FAILURE_LOG B-10). The gateway now refuses any
+  // ?case_id= with 400 (B-27).
   quota: (token) => call('/v1/quota', { token }),
   analyze: (token, payload) =>
     call('/v1/oa/analyze', {
@@ -195,17 +203,27 @@ export const api = {
             reject(new Error('Invalid JSON response: ' + e.message));
           }
         } else {
-          let msg = `Upload failed: HTTP ${xhr.status}`;
+          // Same error contract as call(): an ApiError with a string message,
+          // the gateway's request id, and the session-expired event on 401 —
+          // the upload path used to bypass all three (review V-F2).
+          let body = null;
           try {
-            const body = JSON.parse(xhr.responseText);
-            if (body.detail) msg = body.detail;
+            body = JSON.parse(xhr.responseText);
           } catch {
-            /* response wasn't JSON — keep the HTTP status message */
+            /* response wasn't JSON — the status text stands in */
           }
-          reject(new Error(msg));
+          if (xhr.status === 401) window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+          reject(
+            new ApiError(
+              xhr.status,
+              errorDetailText(body, xhr.statusText || `HTTP ${xhr.status}`),
+              body,
+              xhr.getResponseHeader('X-Request-ID')
+            )
+          );
         }
       };
-      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.onerror = () => reject(new ApiError(0, 'network error during upload', null));
       xhr.onabort = () => reject(new Error('Upload cancelled'));
       const fd = new FormData();
       fd.append('file', file);

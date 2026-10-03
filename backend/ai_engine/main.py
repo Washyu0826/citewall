@@ -89,6 +89,11 @@ app = FastAPI(
 # gateway's /metrics — see that endpoint's SECURITY NOTE.
 _TOKEN_EXEMPT_PATHS = frozenset({"/v1/health", "/metrics"})
 
+# Endpoints that call a model; a 5xx from one of them counts as an LLM error.
+_INFERENCE_ENDPOINTS = frozenset(
+    {"/v1/parse_oa", "/v1/draft_response", "/v1/verify_citations", "/v1/element_comparison"}
+)
+
 
 @app.middleware("http")
 async def _internal_token_middleware(request: Request, call_next):
@@ -143,6 +148,13 @@ async def _observability_middleware(request: Request, call_next):
                 elapsed,
                 {"endpoint": endpoint, "method": request.method, "status": str(status_code)},
             )
+        # An inference endpoint that fails outright is an LLM failure. In
+        # anthropic mode a model error raises instead of degrading to a
+        # "-DEGRADED-" label, so without this llm_errors_total stayed at 0
+        # through a full outage (review V-B2). The label is the LLM mode —
+        # the failed call has no model label to report.
+        if status_code >= 500 and endpoint in _INFERENCE_ENDPOINTS:
+            metrics.LLM_ERRORS.inc({"model": f"{settings.LLM_MODE}:request-failed"})
         # Echo the correlation id so a caller / proxy can stitch the trace. The
         # `response` local may be unset if call_next raised — guard for that.
         try:

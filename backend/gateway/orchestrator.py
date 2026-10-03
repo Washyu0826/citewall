@@ -26,6 +26,7 @@ import httpx
 from backend.gateway import masking
 from backend.gateway.auth import _internal_headers
 from backend.gateway.rate_limit import cost_provenance_for, estimate_cost
+from backend.shared import metrics
 from backend.shared.case_registry import security_level_for_case
 from backend.shared.config import settings
 from backend.shared.models import (
@@ -130,6 +131,25 @@ def _assert_no_raw_pii(path: str, payload: dict) -> None:
 
 _AI_CALL_HEADROOM_SEC = 30.0
 
+# AnalysisResponse.request_id is max_length=128 (models.py).
+_MAX_RESPONSE_REQUEST_ID = 128
+
+
+def _user_facing_request_id() -> str:
+    """The id shown to the user: the bound X-Request-ID when it fits the
+    response schema, else a fresh uuid.
+
+    A client can supply X-Request-ID. If a longer id than the response model
+    allows reached AnalysisResponse(...), validation failed AFTER every model
+    call had run — a 500 whose quota reservation was refunded, i.e. free model
+    spend on demand (FAILURE_LOG B-22). The sanitiser now caps at 128 too;
+    this check keeps the two limits from drifting apart again.
+    """
+    rid = current_request_id()
+    if rid and len(rid) <= _MAX_RESPONSE_REQUEST_ID:
+        return rid
+    return str(uuid.uuid4())
+
 
 def ai_call_timeout_sec() -> float:
     """Budget for ONE gateway→AI-Engine call, per LLM backend.
@@ -206,8 +226,11 @@ async def orchestrate_analysis(
     # The id the user sees must be the one the logs carry: the request-id
     # middleware's bound X-Request-ID (also sent to the AI Engine). A fresh
     # uuid here made "analysis 3f2a… was slow" untraceable (FAILURE_LOG B-14).
-    request_id = current_request_id() or str(uuid.uuid4())
+    request_id = _user_facing_request_id()
     ai = AIEngineClient()
+    # Steps that fell back (saga) — any entry makes the result "degraded":
+    # shown to the attorney, never cached (review V-B3).
+    fallback_steps: list[str] = []
 
     # ---- Step 0: redact OA before anything leaves the gateway (Q3 + Q10) ----
     redacted_oa, mask_rules_triggered = masking.redact(req.oa_text, user.tenant_id)
@@ -228,6 +251,8 @@ async def orchestrate_analysis(
     }
     parsed = await ai.call("/v1/parse_oa", parse_payload)
     oa_doc = OADocument(**parsed["oa"])
+    if parsed.get("output_unparseable"):
+        fallback_steps.append("parse")
 
     # ---- Step 2: per-rejection retrieval (saga: per-rejection resilient) ----
     # Q1 + Follow-up: the orchestrator is a saga coordinator. One rejection's
@@ -260,6 +285,7 @@ async def orchestrate_analysis(
                 rej.rejection_id,
                 ret.__class__.__name__,
             )
+            fallback_steps.append("retrieve")
             hits_by_rejection[rej.rejection_id] = []
             continue
         hits = [RetrievalHit(**h) for h in ret["hits"]]
@@ -307,6 +333,8 @@ async def orchestrate_analysis(
             failed_rejection_ids.add(rej.rejection_id)
             drafts.append(_degraded_draft(rej.rejection_id))
             continue
+        if dr.get("output_unparseable"):
+            fallback_steps.append("draft")
         try:
             drafts.append(DraftResponse(**dr["draft"]))
         except (KeyError, TypeError, ValueError) as exc:
@@ -414,6 +442,7 @@ async def orchestrate_analysis(
         # the analysis pipeline. Empty list = "front-end renders nothing"
         # which is what `Field(default_factory=list)` was designed for.
         claim_tree_nodes = []
+        fallback_steps.append("claim_tree")
 
     # ---- Step 5c: claim-element comparison (Q15/Q16) ----
     # Per rejection: chart the rejected independent claim(s) element by element
@@ -453,6 +482,7 @@ async def orchestrate_analysis(
                     rej.rejection_id,
                     et.__class__.__name__,
                 )
+                fallback_steps.append("element_comparison")
                 continue
             for t in et.get("tables", []):
                 try:
@@ -502,8 +532,17 @@ async def orchestrate_analysis(
         # Skip pricing for retrieval (no LLM call) — its usage row is all zeros anyway.
         if not usage:
             continue
-        estimated_cost += estimate_cost(model, usage)
+        call_cost = estimate_cost(model, usage)
+        estimated_cost += call_cost
         prov = cost_provenance_for(model)
+        # Spend metric per call, under that call's own model, and only for
+        # exact pricing: one label for the whole analysis booked Haiku
+        # verification as Sonnet, and local/dify/mock runs reported dollars
+        # for free on-prem tokens (review V-B7).
+        if prov == "exact" and call_cost > 0:
+            metrics.LLM_COST_USD.inc(
+                {"tenant": user.tenant_id, "model": str(model)[:64]}, float(call_cost)
+            )
         if _provenance_rank.get(prov, 99) > _provenance_rank.get(worst_provenance, -1):
             worst_provenance = prov
 
@@ -555,10 +594,13 @@ async def orchestrate_analysis(
         "prompt_tokens": cost_meta.prompt_tokens,
         "completion_tokens": cost_meta.completion_tokens,
         "estimated_cost_usd": cost_meta.estimated_cost_usd,
-        # Any step fell back (mock model or saga placeholder): the result is
-        # shown, but must never be cached — a short outage would otherwise be
-        # served from cache for the whole TTL (FAILURE_LOG B-15).
-        "degraded": is_degraded_response(response),
+        # Any step fell back (mock model, saga placeholder, empty retrieval
+        # after an error, unparseable model output, missing claim tree or
+        # element table): the result is shown, but must never be cached — a
+        # short outage would otherwise be served from cache for the whole TTL
+        # (FAILURE_LOG B-15, review V-B3).
+        "degraded": is_degraded_response(response) or bool(fallback_steps),
+        "fallback_steps": sorted(set(fallback_steps)),
     }
     return response, obs
 
