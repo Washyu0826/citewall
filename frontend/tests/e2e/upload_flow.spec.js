@@ -108,7 +108,9 @@ test.describe('Upload flow', () => {
     const main = visibleMain(page);
     await main.getByRole('button', { name: /^上傳$/ }).click();
 
-    await expect(main.getByRole('alert')).toHaveText('OCR engine unavailable');
+    // Upload errors go through the shared classification (B-28): a 5xx is the
+    // localised "server busy" sentence, not the backend's English detail.
+    await expect(main.getByRole('alert')).toHaveText('伺服器忙線中');
     await expect(main.getByText('scan.pdf').first()).toBeVisible();
     await expect(main.getByRole('button', { name: '重試' })).toBeEnabled();
     // The analyze action is untouched: no analyze banner, no misleading retry.
