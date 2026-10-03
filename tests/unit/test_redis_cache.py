@@ -39,10 +39,17 @@ def patched_backend():
         client = mock.MagicMock()
         redis_mod.Redis.from_url.return_value = client
         backend = RedisCacheBackend("redis://localhost:6379/0")
-        # Sanity: lazy-connect contract — we never actually connected.
+        # Sanity: lazy-connect contract — we never actually connected — and
+        # every wait is bounded (BE-12: a hung Redis must read as a miss).
+        from backend.shared.config import settings
+
         redis_mod.Redis.from_url.assert_called_once_with(
-            "redis://localhost:6379/0", decode_responses=False
+            "redis://localhost:6379/0",
+            decode_responses=False,
+            socket_connect_timeout=settings.REDIS_SOCKET_TIMEOUT_SEC,
+            socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SEC,
         )
+        assert 0 < settings.REDIS_SOCKET_TIMEOUT_SEC <= 1.0
         yield backend
 
 

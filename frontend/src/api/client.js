@@ -7,7 +7,7 @@ const BASE = '/api'; // proxied by vite to the gateway (:8010 — see vite.confi
 // spin forever. Analyze/export ride the full LLM chain (Dify → local model can
 // take minutes on CPU), so they pass their own much larger budget.
 const DEFAULT_TIMEOUT_MS = 30_000;
-const LLM_TIMEOUT_MS = 420_000; // > orchestrator's DIFY_TIMEOUT_SEC(300)+30s margin
+const LLM_TIMEOUT_MS = 420_000; // > the gateway's analysis deadline (ANALYZE_DEADLINE_SEC, 390 s)
 
 export class ApiError extends Error {
   constructor(status, message, body, requestId = null) {

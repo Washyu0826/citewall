@@ -17,16 +17,18 @@ from __future__ import annotations
 import base64
 import hmac
 import time
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from backend.ai_engine import claim_elements, oa_analyzer, pdf_parser, rag
+from backend.ai_engine import claim_elements, oa_analyzer, pdf_parser, rag, warmup
 from backend.ai_engine import deadline as deadline_mod
 from backend.ai_engine.prompt_loader import list_intents, load_prompt
-from backend.shared import metrics
+from backend.shared import metrics, readiness, time_budget
 from backend.shared.config import settings
 from backend.shared.models import Rejection, RetrievalHit
 from backend.shared.observability import (
@@ -48,10 +50,19 @@ _PDF_MIME = "application/pdf"
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # BE-13: load lazily-loaded models in the background — boot is not
+    # delayed, /readyz says not-ready until it is done.
+    warmup.start_background()
+    yield
+
+
 app = FastAPI(
     title="PatentMind Dify (mock) — AI Engine",
     version="0.1.0",
     description="Single-step AI inference. Called by gateway orchestrator.",
+    lifespan=_lifespan,
 )
 
 
@@ -87,7 +98,8 @@ app = FastAPI(
 # server-side internal token, so /metrics is network-gated in prod (bind to an
 # internal listener / scrape-credential at the proxy), exactly like the
 # gateway's /metrics — see that endpoint's SECURITY NOTE.
-_TOKEN_EXEMPT_PATHS = frozenset({"/v1/health", "/metrics"})
+# /livez and /readyz (OBS-9) answer only ok / not ok, so they are exempt too.
+_TOKEN_EXEMPT_PATHS = frozenset({"/v1/health", "/livez", "/readyz", "/metrics"})
 
 # Endpoints that call a model; a 5xx from one of them counts as an LLM error.
 _INFERENCE_ENDPOINTS = frozenset(
@@ -131,6 +143,9 @@ async def _internal_token_middleware(request: Request, call_next):
 @app.middleware("http")
 async def _observability_middleware(request: Request, call_next):
     rid = bind_request_id(request.headers.get(REQUEST_ID_HEADER))
+    # The gateway's whole-request deadline (BE-4): every model wait inside
+    # this request is capped by the time left (backend/shared/time_budget.py).
+    time_budget.bind_deadline(time_budget.parse_deadline(request.headers.get(time_budget.DEADLINE_HEADER)))
     started = time.monotonic()
     status_code = 500
     try:
@@ -267,6 +282,47 @@ class ExtractTextRequest(BaseModel):
 @app.get("/v1/health")
 def health():
     return {"ok": True, "service": "ai_engine", "rag_stats": rag.stats()}
+
+
+# ---- OBS-9: liveness vs readiness (backend/shared/readiness.py) ----
+
+
+def _warmup_ready() -> None:
+    warmup.start_background()  # no-op once started (covers a run without lifespan)
+    if not warmup.is_done():
+        raise RuntimeError("warming up")
+
+
+def _readiness_checks() -> readiness.Checks:
+    checks: readiness.Checks = {"warmup": _warmup_ready}
+    if settings.VECTOR_BACKEND == "qdrant":
+        checks["qdrant"] = lambda: httpx.get(
+            f"{settings.QDRANT_URL.rstrip('/')}/readyz", timeout=1.0
+        ).raise_for_status()
+    if settings.LLM_MODE == "local":
+        # Ollama down = every analysis degrades to the labelled mock: not ready.
+        checks["ollama"] = lambda: httpx.get(
+            f"{settings.OLLAMA_BASE_URL.rstrip('/')}/models", timeout=1.0
+        ).raise_for_status()
+    return checks
+
+
+_READINESS = readiness.ReadinessProbe(_readiness_checks)
+
+
+@app.get("/livez")
+def livez():
+    """The process answers — nothing else is checked (a liveness probe that
+    touches a dependency turns one slow dependency into a restart loop)."""
+    return {"ok": True}
+
+
+@app.get("/readyz")
+def readyz():
+    """Warm-up finished and the dependencies this mode needs answer. Only
+    ok / not ok here; which one failed is in the log and dependency_up."""
+    ready, _ = _READINESS.check()
+    return JSONResponse({"ok": ready}, status_code=200 if ready else 503)
 
 
 @app.get("/metrics")

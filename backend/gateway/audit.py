@@ -815,10 +815,18 @@ class AuditWriter(_BaseAuditWriter):
         self._conn.executescript(_DDL)
         _sqlite_migrate(self._conn)
         self._conn.commit()
+        # Reads use their own READ-ONLY connection (M-13, parity with the
+        # Postgres writer): they used to run on the writer's connection with
+        # no lock, interleaving with an open BEGIN IMMEDIATE from another
+        # thread. mode=ro also means the read path cannot mutate the table.
+        self._read_lock = threading.Lock()
+        self._read_conn = sqlite3.connect(
+            path.resolve().as_uri() + "?mode=ro", uri=True, check_same_thread=False, timeout=30.0
+        )
 
     def _fetchall(self, sql: str, params: tuple = ()) -> list[tuple]:
-        cur = self._conn.execute(sql, params)
-        return cur.fetchall()
+        with self._read_lock:
+            return self._read_conn.execute(sql, params).fetchall()
 
     def _append_chained(self, build: Callable[[str], tuple]) -> None:
         # RLock serialises this process's threads (one shared connection);
@@ -838,8 +846,16 @@ class AuditWriter(_BaseAuditWriter):
                 self._conn.rollback()
                 raise
 
+    def ping(self) -> None:
+        """Readiness (OBS-9): the WRITE connection answers. Not the read one —
+        a long chain verify holds the read lock, and what readiness cares
+        about is that this request's audit row can be written."""
+        with self._lock:
+            self._conn.execute("SELECT 1 FROM audit LIMIT 1").fetchall()
+
     def close(self) -> None:
         self._conn.close()
+        self._read_conn.close()
 
 
 def _sqlite_has_column(conn: sqlite3.Connection, column: str) -> bool:
@@ -903,6 +919,16 @@ class PostgresAuditWriter(_BaseAuditWriter):
                 for stmt in _PG_DDL_STATEMENTS:
                     cur.execute(stmt)
             self._conn.commit()
+        # M-13: reads (the audit page, chain verification, archival) get their
+        # OWN connection and lock. Sharing the writer's meant a full-chain
+        # verify — polled every 60 s per open auditor tab — held the lock for
+        # the whole fetch, and every audit write (one per gateway request,
+        # invariant #4) queued behind it.
+        self._read_lock = threading.Lock()
+        self._read_conn = psycopg.connect(dsn, autocommit=False)
+        with self._read_conn.cursor() as cur:
+            cur.execute(f'SET search_path TO "{schema}"')
+        self._read_conn.commit()
 
     @staticmethod
     def _translate(sql: str) -> str:
@@ -912,17 +938,17 @@ class PostgresAuditWriter(_BaseAuditWriter):
         return sql.replace("?", "%s")
 
     def _fetchall(self, sql: str, params: tuple = ()) -> list[tuple]:
-        with self._lock:
+        with self._read_lock:
             try:
-                with self._conn.cursor() as cur:
+                with self._read_conn.cursor() as cur:
                     cur.execute(self._translate(sql), params)
                     rows = cur.fetchall()
                 # End the implicit read transaction so we never hold an old
                 # snapshot (and an aborted tx can't poison later statements).
-                self._conn.commit()
+                self._read_conn.commit()
                 return rows
             except Exception:
-                self._conn.rollback()
+                self._read_conn.rollback()
                 raise
 
     def _append_chained(self, build: Callable[[str], tuple]) -> None:
@@ -955,23 +981,36 @@ class PostgresAuditWriter(_BaseAuditWriter):
         """
         cols = [c.strip() for c in _VERIFY_COLS.split(",")]
         sql = f"SELECT {_VERIFY_COLS} FROM audit ORDER BY {self._ORDER_COL} ASC"  # noqa: S608
-        with self._lock:
+        with self._read_lock:
             try:
-                with self._conn.cursor() as cur:
+                with self._read_conn.cursor() as cur:
                     # psycopg (non-autocommit) opens the transaction implicitly
                     # on first execute; SET TRANSACTION must be its first
                     # statement, which this is.
                     cur.execute("SET TRANSACTION READ ONLY")
                     cur.execute(sql)
                     rows = cur.fetchall()
+                self._read_conn.commit()
+            except Exception:
+                self._read_conn.rollback()
+                raise
+        return [dict(zip(cols, r, strict=True)) for r in rows]
+
+    def ping(self) -> None:
+        """Readiness (OBS-9): the write connection answers (see AuditWriter.ping)."""
+        with self._lock:
+            try:
+                with self._conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchall()
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
-        return [dict(zip(cols, r, strict=True)) for r in rows]
 
     def close(self) -> None:
         self._conn.close()
+        self._read_conn.close()
 
 
 def _make_writer() -> _BaseAuditWriter:

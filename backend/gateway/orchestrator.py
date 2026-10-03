@@ -22,11 +22,12 @@ import uuid
 from typing import Any
 
 import httpx
+from fastapi import HTTPException
 
 from backend.gateway import masking
 from backend.gateway.auth import _internal_headers
 from backend.gateway.rate_limit import cost_provenance_for, estimate_cost
-from backend.shared import metrics
+from backend.shared import metrics, time_budget
 from backend.shared.case_registry import security_level_for_case
 from backend.shared.config import settings
 from backend.shared.models import (
@@ -176,11 +177,68 @@ def ai_call_timeout_sec() -> float:
     return 60.0
 
 
-class AIEngineClient:
-    """Thin client to the Dify-mock service."""
+class AnalysisTimeout(HTTPException):
+    """A step could not finish inside the analysis deadline (504).
 
-    def __init__(self, base_url: str = settings.AI_ENGINE_URL):
+    Raised for the per-call HTTP timeout and when the whole-request budget is
+    already spent. Saga steps (retrieve / draft / verify / claim tree / element
+    comparison) catch it and degrade that step like any other failure; the
+    required steps (parse, deadline) let it surface as a 504 the SPA treats as
+    a retryable timeout.
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(status_code=504, detail=detail)
+
+
+# A call is only started with at least this much of the analysis budget left.
+_MIN_CALL_BUDGET_SEC = 2.0
+
+# AI-Engine path → stage label (analyze_stage_duration_seconds, Server-Timing).
+_STAGE_FOR_PATH = {
+    "/v1/parse_oa": "parse",
+    "/v1/retrieve_prior_art": "retrieve",
+    "/v1/draft_response": "draft",
+    "/v1/verify_citations": "verify",
+    "/v1/deadline": "deadline",
+    "/v1/claim_tree": "claim_tree",
+    "/v1/element_comparison": "element_comparison",
+}
+
+
+class AIEngineClient:
+    """Thin client to the AI Engine for ONE analysis.
+
+    Carries the analysis deadline (BE-4) and records how long every call
+    took (OBS-3): ``timings`` holds (stage, seconds, outcome) per call.
+    """
+
+    def __init__(self, base_url: str = settings.AI_ENGINE_URL, *, deadline: float | None = None):
         self.base_url = base_url.rstrip("/")
+        self.deadline = deadline  # absolute epoch seconds, or None (no budget)
+        self.timings: list[tuple[str, float, str]] = []
+
+    def record(self, stage: str, seconds: float, outcome: str = "ok") -> None:
+        self.timings.append((stage, seconds, outcome))
+        metrics.ANALYZE_STAGE_DURATION.observe(
+            seconds, {"stage": stage, "backend": settings.LLM_MODE, "outcome": outcome}
+        )
+
+    def stage_ms(self) -> dict[str, int]:
+        """Longest call per stage, in ms (stages run concurrently, so the
+        slowest call is what the critical path waited for)."""
+        out: dict[str, int] = {}
+        for stage, seconds, _ in self.timings:
+            out[stage] = max(out.get(stage, 0), int(seconds * 1000))
+        return out
+
+    def _timeout(self, path: str) -> float:
+        if self.deadline is None:
+            return ai_call_timeout_sec()
+        left = self.deadline - time.time()
+        if left < _MIN_CALL_BUDGET_SEC:
+            raise AnalysisTimeout(f"analysis deadline reached before {path}")
+        return max(1.0, min(ai_call_timeout_sec(), left))
 
     async def call(self, path: str, payload: dict) -> dict:
         url = f"{self.base_url}{path}"
@@ -189,35 +247,72 @@ class AIEngineClient:
         # leave the gateway we scan the whole payload for raw PII that should
         # have been redacted upstream. Fail closed if redaction escaped.
         _assert_no_raw_pii(path, payload)
-        # The timeout must outlive the slowest downstream LLM path in EVERY
-        # mode, not only dify (see ai_call_timeout_sec).
-        async with httpx.AsyncClient(timeout=ai_call_timeout_sec()) as client:
-            # Security Chunk A — C-2. AI Engine's middleware refuses any
-            # non-`/v1/health` request that lacks X-Internal-Token. The
-            # token is server-side only; the SPA never sees it.
-            #
-            # Agent D deferred item (Q19 correlation IDs): wrap the internal
-            # auth headers in `request_id_headers(...)` so the gateway's bound
-            # X-Request-ID rides along on every gateway→AI-Engine call. The
-            # AI Engine's middleware reads it back out and binds it into its
-            # own context, so BOTH services' JSON log lines carry the SAME
-            # request_id and a single OA analysis is traceable end to end.
-            # When no id is bound (call outside a request context) the helper
-            # mints one so the downstream still gets *a* trace id.
-            headers = request_id_headers(_internal_headers())
-            r = await client.post(url, json=payload, headers=headers)
-            r.raise_for_status()
-            return r.json()
+        stage = _STAGE_FOR_PATH.get(path, path.rsplit("/", 1)[-1])
+        timeout = self._timeout(path)
+        started = time.monotonic()
+        outcome = "error"
+        try:
+            # The per-call wait outlives the slowest model path in every mode
+            # (ai_call_timeout_sec) but never the analysis deadline.
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                # C-2: the AI Engine refuses non-health requests without
+                # X-Internal-Token (server-side only, never the SPA's).
+                # request_id_headers adds the bound X-Request-ID so both
+                # services' logs carry the same id; X-Deadline lets the AI
+                # Engine cap its own model waits by the time left.
+                headers = request_id_headers(_internal_headers())
+                if self.deadline is not None:
+                    headers[time_budget.DEADLINE_HEADER] = f"{self.deadline:.3f}"
+                try:
+                    r = await client.post(url, json=payload, headers=headers)
+                except httpx.TimeoutException as exc:
+                    outcome = "timeout"
+                    raise AnalysisTimeout(f"{stage} step timed out") from exc
+                r.raise_for_status()
+                outcome = "ok"
+                return r.json()
+        finally:
+            self.record(stage, time.monotonic() - started, outcome)
+
+
+async def _cancel_and_drain(*tasks: asyncio.Task) -> None:
+    """Cancel unfinished tasks and wait for them, so nothing keeps calling the
+    AI Engine after the analysis has failed (and no task error goes unseen)."""
+    pending = [t for t in tasks if t is not None and not t.done()]
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    for t in tasks:
+        if t is not None and t.done() and not t.cancelled():
+            t.exception()  # finished with an error before the cancel: mark it seen
 
 
 async def orchestrate_analysis(
     user: User,
     req: AnalysisRequest,
     circuit_open: bool = False,
+    *,
+    pre_redacted: tuple[str, list[str]] | None = None,
+    pre_redacted_hint: tuple[str, list[str]] | None = None,
 ) -> tuple[AnalysisResponse, dict[str, Any]]:
-    """Main flow.  Returns (response, observability_meta).
+    """Main flow. Returns (response, observability_meta).
 
-    observability_meta is fed into audit + metrics.
+    Scheduled as a dependency graph, not as stage barriers (research 09
+    BE-2) — each step starts as soon as its inputs exist:
+
+        t0 ── parse ──┬── deadline
+           │          └── per rejection: retrieve ─┬─ draft ─ verify
+           │                                       └─ element comparison ─┐
+           └── claim tree ─────────────────────────────────────────────────┘
+
+    Previously every stage waited for ALL rejections of the previous stage,
+    and the claim tree, the deadline and the element comparison (one more
+    round of model calls in local mode) sat behind the drafts.
+
+    ``pre_redacted`` / ``pre_redacted_hint``: the gateway already redacted the
+    OA and hint for the cache key — passing (text, rules) here avoids doing it
+    twice (BE-7). Without them the orchestrator redacts itself (invariant #3).
 
     `circuit_open` is forwarded from the gateway cost circuit breaker (Q18):
     when True the AI Engine degrades the draft model to the cheap tier.
@@ -227,291 +322,314 @@ async def orchestrate_analysis(
     # middleware's bound X-Request-ID (also sent to the AI Engine). A fresh
     # uuid here made "analysis 3f2a… was slow" untraceable (FAILURE_LOG B-14).
     request_id = _user_facing_request_id()
-    ai = AIEngineClient()
+    # One absolute deadline for the whole analysis, passed down every hop.
+    deadline_at = time.time() + float(settings.ANALYZE_DEADLINE_SEC)
+    ai = AIEngineClient(deadline=deadline_at)
     # Steps that fell back (saga) — any entry makes the result "degraded":
     # shown to the attorney, never cached (review V-B3).
     fallback_steps: list[str] = []
+    # Resolved ONCE per analysis: every step of one request routes the same
+    # way even if the registry file changes mid-request (invariant #7).
+    security_level = security_level_for_case(req.case_id)
+    case_jurisdiction = _jurisdiction_for_patent(req.target_patent_no)
+    tenant = user.tenant_id
 
-    # ---- Step 0: redact OA before anything leaves the gateway (Q3 + Q10) ----
-    redacted_oa, mask_rules_triggered = masking.redact(req.oa_text, user.tenant_id)
+    # ---- Step 0: redact OA (+ hint) before anything leaves the gateway ----
+    # (Q3 + Q10, invariant #3). Masking writes the mapping store (SQLite), so
+    # it runs off the event loop (BE-6).
+    t_redact = time.monotonic()
+    redacted_here = False  # the gateway times its own redaction
+    if pre_redacted is not None:
+        redacted_oa, mask_rules_triggered = pre_redacted
+    else:
+        redacted_oa, mask_rules_triggered = await asyncio.to_thread(masking.redact, req.oa_text, tenant)
+        redacted_here = True
     # The attorney's free-text hint goes to the same LLM — it gets the same
-    # mandatory redaction (invariant #3); it used to be forwarded raw.
+    # mandatory redaction (invariant #3).
     redacted_hint = None
     if req.user_hint:
-        redacted_hint, hint_rules = masking.redact(req.user_hint, user.tenant_id)
+        if pre_redacted_hint is not None:
+            redacted_hint, hint_rules = pre_redacted_hint
+        else:
+            redacted_hint, hint_rules = await asyncio.to_thread(masking.redact, req.user_hint, tenant)
+            redacted_here = True
         mask_rules_triggered = [*mask_rules_triggered, *hint_rules]
+    if redacted_here:
+        ai.record("redact", time.monotonic() - t_redact)
 
-    # ---- Step 1: parse OA → identify rejections ----
-    parse_payload = {
-        "oa_text": redacted_oa,
-        "tenant_id": user.tenant_id,
-        "case_id": req.case_id,
-        "target_patent_no": req.target_patent_no,
-        "security_level": security_level_for_case(req.case_id),
-    }
-    parsed = await ai.call("/v1/parse_oa", parse_payload)
-    oa_doc = OADocument(**parsed["oa"])
-    if parsed.get("output_unparseable"):
-        fallback_steps.append("parse")
-
-    # ---- Step 2: per-rejection retrieval (saga: per-rejection resilient) ----
-    # Q1 + Follow-up: the orchestrator is a saga coordinator. One rejection's
-    # retrieval failing must NOT sink the others — a failed retrieval degrades
-    # to an empty grounded set for that rejection only.
-    retrieve_tasks = [
-        ai.call(
-            "/v1/retrieve_prior_art",
-            {
-                "tenant_id": user.tenant_id,
-                "rejection": rej.model_dump(),
-                "target_patent_no": req.target_patent_no,
-                "top_k": 5,
-                # When the case carries a filing/priority date, prior-art
-                # retrieval hard-excludes art published on/after it (專利法
-                # §22/§23). None (the default) = no date filter, unchanged.
-                "filing_date": req.filing_date,
-            },
-        )
-        for rej in oa_doc.rejections
-    ]
-    retrieval_results = await asyncio.gather(*retrieve_tasks, return_exceptions=True)
-
-    all_hits: list[RetrievalHit] = []
-    hits_by_rejection: dict[str, list[RetrievalHit]] = {}
-    for rej, ret in zip(oa_doc.rejections, retrieval_results, strict=True):
-        if isinstance(ret, BaseException):
-            logger.warning(
-                "saga: retrieval failed for rejection %s (%s) — proceeding with empty grounded set",
-                rej.rejection_id,
-                ret.__class__.__name__,
-            )
-            fallback_steps.append("retrieve")
-            hits_by_rejection[rej.rejection_id] = []
-            continue
-        hits = [RetrievalHit(**h) for h in ret["hits"]]
-        # [GROUNDED_REF_n] is numbered per rejection (1-based into THIS list),
-        # so tag each hit — the SPA needs this to resolve a citation pill to the
-        # right patent once all rejections' hits are flattened below.
-        for i, h in enumerate(hits):
-            h.metadata = {**h.metadata, "rejection_id": rej.rejection_id, "ref_index": i + 1}
-        all_hits.extend(hits)
-        hits_by_rejection[rej.rejection_id] = hits
-
-    # ---- Step 3: per-rejection draft (saga: per-rejection resilient) ----
-    # NB: we send the *grounded set* (retrieval hits) so LLM can only cite from there (Q14).
-    draft_tasks = [
-        ai.call(
-            "/v1/draft_response",
-            {
-                "tenant_id": user.tenant_id,
-                "user_id": user.user_id,
-                "case_id": req.case_id,
-                "rejection": rej.model_dump(),
-                "grounded_set": [h.model_dump() for h in hits_by_rejection[rej.rejection_id]],
-                "user_hint": redacted_hint,
-                "security_level": security_level_for_case(req.case_id),
-                "circuit_open": circuit_open,
-            },
-        )
-        for rej in oa_doc.rejections
-    ]
-    draft_results = await asyncio.gather(*draft_tasks, return_exceptions=True)
-
-    # Build the draft list, substituting a degraded placeholder for any
-    # rejection whose draft call raised. `failed_rejection_ids` tracks those
-    # so the verify step can skip them (no point verifying a placeholder).
-    drafts: list[DraftResponse] = []
-    failed_rejection_ids: set[str] = set()
-    for rej, dr in zip(oa_doc.rejections, draft_results, strict=True):
-        if isinstance(dr, BaseException):
-            logger.warning(
-                "saga: draft generation failed for rejection %s (%s) — "
-                "emitting degraded placeholder",
-                rej.rejection_id,
-                dr.__class__.__name__,
-            )
-            failed_rejection_ids.add(rej.rejection_id)
-            drafts.append(_degraded_draft(rej.rejection_id))
-            continue
-        if dr.get("output_unparseable"):
-            fallback_steps.append("draft")
+    # ---- t0: claim tree (needs only the patent number) ∥ parse ----
+    async def _claim_tree() -> list[ClaimNode]:
+        # Presentation nicety — a failure yields no tree, never a failed
+        # analysis (but the result counts as degraded).
         try:
-            drafts.append(DraftResponse(**dr["draft"]))
-        except (KeyError, TypeError, ValueError) as exc:
-            # Malformed AI Engine response for this rejection — treat as a
-            # per-rejection failure, not a whole-request crash.
-            logger.warning(
-                "saga: malformed draft payload for rejection %s (%s) — "
-                "emitting degraded placeholder",
-                rej.rejection_id,
-                exc.__class__.__name__,
-            )
-            failed_rejection_ids.add(rej.rejection_id)
-            drafts.append(_degraded_draft(rej.rejection_id))
+            ct_resp = await ai.call("/v1/claim_tree", {"tenant_id": tenant, "patent_no": req.target_patent_no})
+            return [ClaimNode(**n) for n in ct_resp.get("claim_tree", [])]
+        except Exception:  # noqa: BLE001 — CancelledError still propagates
+            fallback_steps.append("claim_tree")
+            return []
 
-    # ---- Step 4: verifier (Q14 third defence; saga: per-rejection resilient) ----
-    # Only verify drafts that actually generated. Placeholders carry no
-    # citations and must never reach the verifier (nothing to ground).
-    verifiable = [d for d in drafts if d.rejection_id not in failed_rejection_ids]
-    # Pass the case jurisdiction so the verifier can strip cross-jurisdiction
-    # citation leaks (e.g. a TW 申復書 must not cite 35 U.S.C.). Same derivation
-    # the deadline step uses.
-    case_jurisdiction = _jurisdiction_for_patent(req.target_patent_no)
-    verify_tasks = [
-        ai.call(
-            "/v1/verify_citations",
-            {
-                "draft": d.model_dump(),
-                "grounded_set": [h.model_dump() for h in hits_by_rejection.get(d.rejection_id, [])],
-                "jurisdiction": case_jurisdiction,
-                # The verifier sees the (redacted) draft too — a confidential
-                # case must keep it on the local model (invariant #7).
-                "security_level": security_level_for_case(req.case_id),
-            },
-        )
-        for d in verifiable
-    ]
-    verifications = await asyncio.gather(*verify_tasks, return_exceptions=True)
-    for d, v in zip(verifiable, verifications, strict=True):
-        if isinstance(v, BaseException):
-            # Verifier failed for this rejection. Q14 is a hard wall: an
-            # unverified draft must NOT be served with its (unvalidated)
-            # citations. Degrade to a placeholder rather than leak ungrounded
-            # citations or crash the whole request.
-            logger.warning(
-                "saga: citation verification failed for rejection %s (%s) — "
-                "emitting degraded placeholder",
-                d.rejection_id,
-                v.__class__.__name__,
-            )
-            failed_rejection_ids.add(d.rejection_id)
-            for idx, existing in enumerate(drafts):
-                if existing.rejection_id == d.rejection_id:
-                    drafts[idx] = _degraded_draft(d.rejection_id)
-                    break
-            continue
-        # Replace the draft with the verifier-cleaned version, and surface the
-        # verifier's transparency fields (Q14) so the front-end can render the
-        # hallucination wall (what was stripped, how confident the verifier
-        # was, which model verified) instead of an anonymous [CITATION_REMOVED].
-        d.draft_text = v["cleaned_draft_text"]
-        d.grounded_citations = v["valid_citations"]
-        d.invalid_citations = v.get("invalid_citations", [])
-        d.verifier_confidence = v.get("verifier_confidence")
-        d.verifier_model = v.get("model_used")
-        # Q14/Q17 sentence-level alignment (unsupported refs already rewritten
-        # to [UNSUPPORTED_REF_n] inside cleaned_draft_text).
-        d.alignment = [SentenceAlignment(**r) for r in v.get("alignment", [])]
-        d.unsupported_citations = v.get("unsupported_citations", [])
-        d.confidence = min(d.confidence, v["verifier_confidence"])
+    async def _masked_claims() -> tuple[list[ClaimNode], list[dict]]:
+        """The tree plus its claims redacted for element comparison (claim
+        text leaves the gateway — invariant #3), computed once for every
+        rejection."""
+        nodes = await claim_tree_task
+        if not (settings.CLAIM_ELEMENTS_ENABLED and nodes):
+            return nodes, []
 
-    # ---- Step 5: deadline (Q17) ----
-    deadline_resp = await ai.call(
-        "/v1/deadline",
-        {
-            "received_date_iso": oa_doc.received_date.isoformat(),
-            "jurisdiction": _jurisdiction_for_patent(req.target_patent_no),
-            "calendar_version": settings.HOLIDAY_CALENDAR_VERSION,
-            # Q16/Q17/Q19 deadline facts (optional; unknown -> earlier deadline)
-            "applicant_domestic": req.applicant_domestic,
-            "oa_sequence": req.oa_sequence,
-            "service_date_iso": req.service_date,
-            # redacted text only — for CN 第N次 / labelled 送達日 detection
-            "oa_text": redacted_oa[:20_000],
-        },
-    )
-    deadline = DeadlineInfo(**deadline_resp)
-    oa_doc.deadline = deadline.statutory_deadline
+        def _mask() -> list[dict]:
+            out = []
+            for node in nodes:
+                nd = node.model_dump()
+                nd["text"], _ = masking.redact(nd["text"], tenant)
+                out.append(nd)
+            return out
 
-    # ---- Step 5b: claim tree (UX_RESEARCH §5 #2) ----
-    # Pure payload lookup against the indexed target patent; no LLM call,
-    # no cost. Defensive: if the AI engine errors or the patent isn't
-    # indexed, fall back to an empty tree so the front-end renders normally.
-    claim_tree_nodes: list[ClaimNode] = []
+        return nodes, await asyncio.to_thread(_mask)
+
+    claim_tree_task = asyncio.create_task(_claim_tree())
+    claims_task = asyncio.create_task(_masked_claims())
+    deadline_task: asyncio.Task | None = None
+    pipeline_tasks: list[asyncio.Task] = []
     try:
-        ct_resp = await ai.call(
-            "/v1/claim_tree",
+        # ---- Step 1: parse OA → identify rejections (required) ----
+        parsed = await ai.call(
+            "/v1/parse_oa",
             {
-                "tenant_id": user.tenant_id,
-                "patent_no": req.target_patent_no,
+                "oa_text": redacted_oa,
+                "tenant_id": tenant,
+                "case_id": req.case_id,
+                "target_patent_no": req.target_patent_no,
+                "security_level": security_level,
             },
         )
-        claim_tree_nodes = [ClaimNode(**n) for n in ct_resp.get("claim_tree", [])]
-    except Exception:
-        # Trees are a presentation nicety — never let their absence break
-        # the analysis pipeline. Empty list = "front-end renders nothing"
-        # which is what `Field(default_factory=list)` was designed for.
-        claim_tree_nodes = []
-        fallback_steps.append("claim_tree")
+        oa_doc = OADocument(**parsed["oa"])
+        if parsed.get("output_unparseable"):
+            fallback_steps.append("parse")
 
-    # ---- Step 5c: claim-element comparison (Q15/Q16) ----
-    # Per rejection: chart the rejected independent claim(s) element by element
-    # against that rejection's grounded hits. Claim text is REDACTED before it
-    # leaves the gateway (invariant #3 — the decomposer may call the model);
-    # element text is un-masked below for the attorney. Presentation-level like
-    # the claim tree: a failure yields no table, never a failed analysis.
-    element_tables: list[ClaimElementTable] = []
-    if settings.CLAIM_ELEMENTS_ENABLED and claim_tree_nodes:
-        masked_claims = []
-        for node in claim_tree_nodes:
-            nd = node.model_dump()
-            nd["text"], _ = masking.redact(nd["text"], user.tenant_id)
-            masked_claims.append(nd)
-        et_tasks = [
+        # ---- Deadline (Q17): needs only the parse — starts now (required) ----
+        deadline_task = asyncio.create_task(
             ai.call(
-                "/v1/element_comparison",
+                "/v1/deadline",
                 {
-                    "tenant_id": user.tenant_id,
-                    "rejection": rej.model_dump(),
-                    "claims": masked_claims,
-                    "grounded_set": [
-                        h.model_dump() for h in hits_by_rejection.get(rej.rejection_id, [])
-                    ],
-                    "security_level": security_level_for_case(req.case_id),
-                    "target_patent_no": req.target_patent_no,
+                    "received_date_iso": oa_doc.received_date.isoformat(),
+                    "jurisdiction": case_jurisdiction,
+                    "calendar_version": settings.HOLIDAY_CALENDAR_VERSION,
+                    # Q16/Q17/Q19 deadline facts (optional; unknown -> earlier deadline)
+                    "applicant_domestic": req.applicant_domestic,
+                    "oa_sequence": req.oa_sequence,
+                    "service_date_iso": req.service_date,
+                    # redacted text only — for CN 第N次 / labelled 送達日 detection
+                    "oa_text": redacted_oa[:20_000],
                 },
             )
-            for rej in oa_doc.rejections
-        ]
-        for rej, et in zip(
-            oa_doc.rejections, await asyncio.gather(*et_tasks, return_exceptions=True), strict=True
-        ):
-            if isinstance(et, BaseException):
+        )
+
+        async def _element_tables(rej, hits: list[RetrievalHit]) -> list[ClaimElementTable]:
+            # Q15/Q16: chart the rejected independent claim(s) against THIS
+            # rejection's grounded hits. Runs alongside draft + verify.
+            _, masked_claims = await claims_task
+            if not masked_claims:
+                return []
+            try:
+                et = await ai.call(
+                    "/v1/element_comparison",
+                    {
+                        "tenant_id": tenant,
+                        "rejection": rej.model_dump(),
+                        "claims": masked_claims,
+                        "grounded_set": [h.model_dump() for h in hits],
+                        "security_level": security_level,
+                        "target_patent_no": req.target_patent_no,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "element comparison failed for rejection %s (%s) — no table",
                     rej.rejection_id,
-                    et.__class__.__name__,
+                    exc.__class__.__name__,
                 )
                 fallback_steps.append("element_comparison")
-                continue
+                return []
+            tables = []
             for t in et.get("tables", []):
                 try:
-                    table = ClaimElementTable(**t)
+                    tables.append(ClaimElementTable(**t))
                 except (TypeError, ValueError):
                     continue
-                for row in table.elements:
-                    row.text = masking.unmask(row.text, user.tenant_id)
-                element_tables.append(table)
+            return tables
 
-    # ---- Step 6: un-mask outbound for attorney's eyes ----
-    for d in drafts:
-        d.draft_text = masking.unmask(d.draft_text, user.tenant_id)
-        d.strategy = masking.unmask(d.strategy, user.tenant_id)
+        async def _pipeline(rej) -> dict[str, Any]:
+            """retrieve → draft → verify for ONE rejection (saga: a failure
+            degrades this rejection only)."""
+            calls: list[dict] = []  # successful AI-Engine replies, for cost
+            # -- retrieve (Q1+FU: a failed retrieval → empty grounded set) --
+            hits: list[RetrievalHit] = []
+            try:
+                ret = await ai.call(
+                    "/v1/retrieve_prior_art",
+                    {
+                        "tenant_id": tenant,
+                        "rejection": rej.model_dump(),
+                        "target_patent_no": req.target_patent_no,
+                        "top_k": 5,
+                        # Filing/priority date hard-excludes art published on
+                        # or after it (專利法 §22/§23); None = no date filter.
+                        "filing_date": req.filing_date,
+                    },
+                )
+                calls.append(ret)
+                hits = [RetrievalHit(**h) for h in ret["hits"]]
+                # [GROUNDED_REF_n] is numbered per rejection (1-based into
+                # THIS list); tag each hit so the SPA can resolve a citation
+                # pill once all rejections' hits are flattened.
+                for i, h in enumerate(hits):
+                    h.metadata = {**h.metadata, "rejection_id": rej.rejection_id, "ref_index": i + 1}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "saga: retrieval failed for rejection %s (%s) — proceeding with empty grounded set",
+                    rej.rejection_id,
+                    exc.__class__.__name__,
+                )
+                fallback_steps.append("retrieve")
+                hits = []
+
+            element_task = asyncio.create_task(_element_tables(rej, hits))
+            try:
+                # -- draft (Q14: only the grounded set may be cited) --
+                draft: DraftResponse | None = None
+                try:
+                    dr = await ai.call(
+                        "/v1/draft_response",
+                        {
+                            "tenant_id": tenant,
+                            "user_id": user.user_id,
+                            "case_id": req.case_id,
+                            "rejection": rej.model_dump(),
+                            "grounded_set": [h.model_dump() for h in hits],
+                            "user_hint": redacted_hint,
+                            "security_level": security_level,
+                            "circuit_open": circuit_open,
+                        },
+                    )
+                    calls.append(dr)
+                    if dr.get("output_unparseable"):
+                        fallback_steps.append("draft")
+                    draft = DraftResponse(**dr["draft"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    # Malformed AI Engine reply for this rejection.
+                    logger.warning(
+                        "saga: malformed draft payload for rejection %s (%s) — "
+                        "emitting degraded placeholder",
+                        rej.rejection_id,
+                        exc.__class__.__name__,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "saga: draft generation failed for rejection %s (%s) — "
+                        "emitting degraded placeholder",
+                        rej.rejection_id,
+                        exc.__class__.__name__,
+                    )
+
+                # -- verify (Q14 third defence) — only a draft that exists --
+                if draft is not None:
+                    try:
+                        v = await ai.call(
+                            "/v1/verify_citations",
+                            {
+                                "draft": draft.model_dump(),
+                                "grounded_set": [h.model_dump() for h in hits],
+                                "jurisdiction": case_jurisdiction,
+                                # The verifier sees the (redacted) draft too —
+                                # a confidential case stays local (invariant #7).
+                                "security_level": security_level,
+                            },
+                        )
+                        calls.append(v)
+                        # Verifier-cleaned text + transparency fields (what was
+                        # stripped, confidence, which model verified).
+                        draft.draft_text = v["cleaned_draft_text"]
+                        draft.grounded_citations = v["valid_citations"]
+                        draft.invalid_citations = v.get("invalid_citations", [])
+                        draft.verifier_confidence = v.get("verifier_confidence")
+                        draft.verifier_model = v.get("model_used")
+                        # Q14/Q17 sentence-level alignment (unsupported refs are
+                        # already [UNSUPPORTED_REF_n] in cleaned_draft_text).
+                        draft.alignment = [SentenceAlignment(**r) for r in v.get("alignment", [])]
+                        draft.unsupported_citations = v.get("unsupported_citations", [])
+                        draft.confidence = min(draft.confidence, v["verifier_confidence"])
+                    except Exception as exc:  # noqa: BLE001
+                        # Q14 hard wall: an unverified draft must NOT be served
+                        # with its (unvalidated) citations.
+                        logger.warning(
+                            "saga: citation verification failed for rejection %s (%s) — "
+                            "emitting degraded placeholder",
+                            rej.rejection_id,
+                            exc.__class__.__name__,
+                        )
+                        draft = None
+                tables = await element_task
+            finally:
+                if not element_task.done():
+                    element_task.cancel()
+            return {
+                "hits": hits,
+                "draft": draft if draft is not None else _degraded_draft(rej.rejection_id),
+                "tables": tables,
+                "calls": calls,
+            }
+
+        pipeline_tasks = [asyncio.create_task(_pipeline(r)) for r in oa_doc.rejections]
+        # Fail fast: the deadline is required — if it fails, stop the drafts
+        # now instead of letting them finish for an analysis that will 5xx.
+        # (Plain tasks, no gather(): a cancelled gather future carries an
+        # exception nobody retrieves — logged on every failed analysis.)
+        required = (deadline_task, *pipeline_tasks)
+        await asyncio.wait(required, return_when=asyncio.FIRST_EXCEPTION)
+        for t in required:
+            if t.done() and not t.cancelled() and t.exception() is not None:
+                t.result()  # re-raise the first failure
+        deadline_resp = deadline_task.result()
+        results = [t.result() for t in pipeline_tasks]
+        claim_tree_nodes, _ = await claims_task
+    except BaseException:
+        await _cancel_and_drain(claim_tree_task, claims_task, deadline_task, *pipeline_tasks)
+        raise
+
+    deadline = DeadlineInfo(**deadline_resp)
+    oa_doc.deadline = deadline.statutory_deadline
+
+    # Assemble in rejection order (the SPA and the citation numbering rely on it).
+    all_hits: list[RetrievalHit] = []
+    drafts: list[DraftResponse] = []
+    element_tables: list[ClaimElementTable] = []
+    pipeline_calls: list[dict] = []
+    for r in results:
+        all_hits.extend(r["hits"])
+        drafts.append(r["draft"])
+        element_tables.extend(r["tables"])
+        pipeline_calls.extend(r["calls"])
+
+    # ---- Un-mask outbound for the attorney's eyes (mapping store → thread) ----
+    t_unmask = time.monotonic()
+
+    def _unmask_all() -> None:
+        for table in element_tables:
+            for row in table.elements:
+                row.text = masking.unmask(row.text, tenant)
+        for d in drafts:
+            d.draft_text = masking.unmask(d.draft_text, tenant)
+            d.strategy = masking.unmask(d.strategy, tenant)
+
+    await asyncio.to_thread(_unmask_all)
+    ai.record("unmask", time.monotonic() - t_unmask)
 
     # ---- Aggregate cost ----
-    # Each AI engine response carries an Anthropic-style usage dict (also
-    # populated for mock/Ollama with zero cache fields). We aggregate by
-    # call, run estimate_cost() per call against its own model_used (parse
-    # and draft are typically the reasoning model; verify is the cheap
-    # verifier), then sum. This keeps cache-discount accuracy intact.
-    # Saga: some entries may be Exception objects (a sub-call failed). Filter
-    # them out — a failed call produced no billable usage and exposes no
-    # `.get`, so including it would crash the aggregation.
-    all_call_meta = [
-        r
-        for r in ([parsed] + list(retrieval_results) + list(draft_results) + list(verifications))
-        if isinstance(r, dict)
-    ]
+    # Each AI engine reply carries an Anthropic-style usage dict (zeros for
+    # mock / Ollama cache fields). estimate_cost() per call against its own
+    # model_used, then sum — keeps cache-discount accuracy intact. Only
+    # successful replies are here (a failed call produced no billable usage).
+    all_call_meta = [parsed, *pipeline_calls]
     total_prompt_tokens = sum(r.get("usage", {}).get("prompt_tokens", 0) for r in all_call_meta)
     total_completion_tokens = sum(
         r.get("usage", {}).get("completion_tokens", 0) for r in all_call_meta
@@ -522,8 +640,6 @@ async def orchestrate_analysis(
     # exact > fallback > mock (where "weakest" = least trustworthy for
     # billing). If any LLM call dispatched to a fallback-priced model, the
     # aggregate cost is suspect even if other calls were exact-priced.
-    # "mock" is preferred over "fallback" only when EVERY call was mock —
-    # a single fallback call means at least one real-money error path.
     _provenance_rank = {"exact": 0, "mock": 1, "fallback": 2}
     worst_provenance = "exact"
     for r in all_call_meta:
@@ -536,13 +652,9 @@ async def orchestrate_analysis(
         estimated_cost += call_cost
         prov = cost_provenance_for(model)
         # Spend metric per call, under that call's own model, and only for
-        # exact pricing: one label for the whole analysis booked Haiku
-        # verification as Sonnet, and local/dify/mock runs reported dollars
-        # for free on-prem tokens (review V-B7).
+        # exact pricing (review V-B7).
         if prov == "exact" and call_cost > 0:
-            metrics.LLM_COST_USD.inc(
-                {"tenant": user.tenant_id, "model": str(model)[:64]}, float(call_cost)
-            )
+            metrics.LLM_COST_USD.inc({"tenant": tenant, "model": str(model)[:64]}, float(call_cost))
         if _provenance_rank.get(prov, 99) > _provenance_rank.get(worst_provenance, -1):
             worst_provenance = prov
 
@@ -565,11 +677,8 @@ async def orchestrate_analysis(
         cost_provenance=worst_provenance,
     )
 
-    # CHUNK-8 trust band — surface the redaction count so the SPA can show
-    # "N entities masked" on THIS analysis. `mask_rules_triggered` is the
-    # list of rule ids that fired (one per match); we count distinct
-    # occurrences via length, and pass the de-duplicated rule ids so the
-    # tooltip can list the rule types without re-revealing values.
+    # CHUNK-8 trust band — "N entities masked" on THIS analysis; rule ids
+    # de-duplicated so the tooltip lists types without re-revealing values.
     redaction_summary = RedactionSummary(
         masked_entity_count=len(mask_rules_triggered),
         rules_triggered=sorted(set(mask_rules_triggered)),
@@ -587,8 +696,9 @@ async def orchestrate_analysis(
         redaction_summary=redaction_summary,
     )
 
+    duration_ms = int((time.monotonic() - started) * 1000)
     obs = {
-        "duration_ms": int((time.monotonic() - started) * 1000),
+        "duration_ms": duration_ms,
         "mask_rules": mask_rules_triggered,
         "model_used": cost_meta.model,
         "prompt_tokens": cost_meta.prompt_tokens,
@@ -601,6 +711,8 @@ async def orchestrate_analysis(
         # (FAILURE_LOG B-15, review V-B3).
         "degraded": is_degraded_response(response) or bool(fallback_steps),
         "fallback_steps": sorted(set(fallback_steps)),
+        # OBS-3: per-stage time (longest call per stage) for Server-Timing.
+        "stage_ms": {**ai.stage_ms(), "total": duration_ms},
     }
     return response, obs
 

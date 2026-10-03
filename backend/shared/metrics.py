@@ -186,7 +186,7 @@ REQUEST_LATENCY_BUCKETS: tuple[float, ...] = (
 # Paths that must not be timed as traffic: Docker's 15 s health probe and the
 # Prometheus scrape would otherwise dominate the request-rate and latency
 # series of a low-traffic on-prem deployment.
-UNTIMED_PATHS = frozenset({"/v1/health", "/metrics"})
+UNTIMED_PATHS = frozenset({"/v1/health", "/livez", "/readyz", "/metrics"})
 
 
 class Histogram:
@@ -400,6 +400,20 @@ HTTP_REQUEST_DURATION = REGISTRY.register(
         buckets=REQUEST_LATENCY_BUCKETS,
     )
 )
+# Where an analysis spends its time (OBS-3): one sample per AI-Engine call
+# (stage = parse | retrieve | draft | verify | deadline | claim_tree |
+# element_comparison) plus the gateway-local redact / unmask. backend = the
+# LLM mode; outcome = ok | error | timeout. Bounded labels only — no tenant,
+# case or user. With the DAG scheduler stages overlap, so this answers
+# "which step is slow", while http_request_duration_seconds is the total.
+ANALYZE_STAGE_DURATION = REGISTRY.register(
+    Histogram(
+        "analyze_stage_duration_seconds",
+        "Duration of one analysis stage call (gateway side), by stage, LLM mode and outcome.",
+        labels=("stage", "backend", "outcome"),
+        buckets=REQUEST_LATENCY_BUCKETS,
+    )
+)
 LLM_ERRORS = REGISTRY.register(
     Counter(
         "llm_errors_total",
@@ -452,6 +466,15 @@ CACHE_REQUESTS = REGISTRY.register(
         "cache_requests_total",
         "Response-cache lookups on the analyze path, by result (hit|miss) (Q9).",
         labels=("result",),
+    )
+)
+# Single-flight (BE-9): analyze requests answered by joining an identical
+# analysis already running (refresh / double submit) instead of a second
+# pipeline. Counted on top of the cache miss that preceded the join.
+ANALYZE_COALESCED = REGISTRY.register(
+    Counter(
+        "analyze_coalesced_total",
+        "Analyze requests served by an identical in-flight analysis (single-flight).",
     )
 )
 
@@ -711,6 +734,23 @@ TENANT_TOKEN_CAP = REGISTRY.register(
         "tenant_monthly_token_cap",
         "Configured monthly token cap per tenant (Q18 quota denominator).",
         collect=_tenant_token_cap_rows,
+    )
+)
+
+
+# OBS-9: the last /readyz evaluation per dependency (which one failed — the
+# unauthenticated /readyz itself only says ok / not ok).
+def _dependency_rows() -> Iterable[tuple[dict[str, str], float]]:
+    from backend.shared import readiness
+
+    return readiness.dependency_rows()
+
+
+DEPENDENCY_UP = REGISTRY.register(
+    Gauge(
+        "dependency_up",
+        "Last readiness check per dependency: 1 = usable, 0 = failing (OBS-9).",
+        collect=_dependency_rows,
     )
 )
 

@@ -159,6 +159,16 @@ class Settings:
     # degrades (labelled) instead of hanging — warm the model instead
     # (OLLAMA_KEEP_ALIVE, docs/research/09 BE-13).
     OLLAMA_TIMEOUT_SEC: int = int(os.getenv("OLLAMA_TIMEOUT_SEC", "300"))
+    # How long the AI Engine's start-up warm-up asks Ollama to keep the model
+    # resident (BE-13; backend/ai_engine/warmup.py). Set OLLAMA_KEEP_ALIVE on
+    # the Ollama server too — its OpenAI-compatible calls use the server value.
+    OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+    # Whole-analysis budget (BE-4): one absolute deadline per /v1/oa/analyze,
+    # passed to the AI Engine as X-Deadline; every inner wait (gateway per-call
+    # timeout, Ollama / Dify / Anthropic timeouts and retries) takes the time
+    # left. 390 s sits inside the SPA's 420 s and nginx's 450 s, so the
+    # gateway answers (504 or a labelled degraded step) before they give up.
+    ANALYZE_DEADLINE_SEC: float = float(os.getenv("ANALYZE_DEADLINE_SEC", "390"))
     # Local-mode citation verifier. Empty (default) = the deterministic
     # verifier, as in Dify mode; set to a DIFFERENT local model to get an
     # independent LLM second opinion (the same model as LLM_MODEL_LOCAL is
@@ -193,6 +203,11 @@ class Settings:
     # Cache (Q9)
     CACHE_BACKEND: str = os.getenv("CACHE_BACKEND", "memory")  # memory | redis
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    # BE-12: connect / read timeout for the cache and rate-limit Redis clients.
+    # Without one, a hung Redis held every analyze request (and its thread)
+    # indefinitely; with it the cache fails open (a miss) and the quota fails
+    # per RATE_LIMIT_REDIS_DEGRADE (closed by default).
+    REDIS_SOCKET_TIMEOUT_SEC: float = float(os.getenv("REDIS_SOCKET_TIMEOUT_SEC", "0.5"))
     # [H-5] session-token revocation store. `memory` is per-process (lost on
     # restart, not shared across replicas) — fine for a single-replica POC.
     # `redis` makes the logout kill switch durable + fleet-wide, with each jti

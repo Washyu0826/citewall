@@ -11,11 +11,15 @@ Boots a FastAPI service on :8000. Layers, in request order:
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextvars
+import functools
 import hmac
 import logging
 import re
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -30,6 +34,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -69,10 +74,9 @@ from backend.gateway.auth import (
 )
 from backend.gateway.orchestrator import (
     _jurisdiction_for_patent,
-    ai_call_timeout_sec,
     orchestrate_analysis,
 )
-from backend.shared import metrics
+from backend.shared import metrics, readiness
 from backend.shared.case_registry import is_confidential, security_level_for_case
 from backend.shared.config import settings
 from backend.shared.models import (
@@ -99,27 +103,18 @@ configure_logging("gateway")
 
 logger = logging.getLogger(__name__)
 
-# Timeouts must nest inside the browser's wait. Per-call budgets now do
-# (orchestrator.ai_call_timeout_sec), but an old .env (OLLAMA_TIMEOUT_SEC=600)
-# or Anthropic retries can still push one call past it — say so at startup
-# instead of failing as an unexplained client timeout (review V-B4). A
-# whole-request deadline passed down every hop is the real fix (research
-# 09 BE-4, wave 2).
+# Timeouts must nest inside the browser's wait. Every AI-Engine call and every
+# model wait behind it is capped by one analysis deadline (ANALYZE_DEADLINE_SEC,
+# sent down as X-Deadline — research 09 BE-4), so only that deadline has to
+# stay under the SPA's budget; say so at startup instead of failing as an
+# unexplained client timeout (review V-B4).
 _SPA_ANALYZE_BUDGET_SEC = 420  # frontend/src/api/client.js LLM_TIMEOUT_MS
-if ai_call_timeout_sec() >= _SPA_ANALYZE_BUDGET_SEC:
+if settings.ANALYZE_DEADLINE_SEC >= _SPA_ANALYZE_BUDGET_SEC:
     logger.warning(
-        "per-call AI wait %.0f s (LLM_MODE=%s) reaches the browser's %d s analyze "
-        "budget — lower OLLAMA_TIMEOUT_SEC / DIFY_TIMEOUT_SEC / LLM_REQUEST_TIMEOUT_SEC",
-        ai_call_timeout_sec(),
-        settings.LLM_MODE,
+        "ANALYZE_DEADLINE_SEC=%.0f reaches the browser's %d s analyze budget — the SPA "
+        "gives up before the gateway answers; keep it below (default 390)",
+        settings.ANALYZE_DEADLINE_SEC,
         _SPA_ANALYZE_BUDGET_SEC,
-    )
-if settings.LLM_MODE == "anthropic" and settings.LLM_MAX_RETRIES > 0:
-    logger.info(
-        "anthropic retries (%d x %.0f s) can outlast the gateway's per-call wait; "
-        "the gateway then degrades that step (deadline propagation pending)",
-        settings.LLM_MAX_RETRIES,
-        settings.LLM_REQUEST_TIMEOUT_SEC,
     )
 
 
@@ -165,6 +160,22 @@ def _safe_audit_write(**kwargs: Any) -> None:
         audit_outbox.enqueue(**kwargs)
     finally:
         metrics.AUDIT_WRITE_DURATION.observe(time.monotonic() - _audit_started)
+
+
+async def _audit_off_loop(**kwargs: Any) -> None:
+    """``_safe_audit_write`` in a worker thread (BE-6), cancellation-proof.
+
+    The write is SUBMITTED before the first await, so it runs to completion
+    even if this handler is cancelled (client gone, shutdown) — anyio
+    cancellation is level-triggered and would hit any later await in a
+    ``finally``, and ``run_in_threadpool`` checks for cancellation before it
+    submits. Invariant #4: the row is written whatever happens to the caller.
+    """
+    ctx = contextvars.copy_context()  # keep the bound request id in the logs
+    write = asyncio.get_running_loop().run_in_executor(
+        None, functools.partial(ctx.run, _safe_audit_write, **kwargs)
+    )
+    await write
 
 
 def _error_response_payload(error: BaseException) -> dict:
@@ -1002,6 +1013,56 @@ def health():
     }
 
 
+# ---- OBS-9: liveness vs readiness (backend/shared/readiness.py) ----
+_readiness_redis = None
+
+
+def _redis_ready() -> None:
+    global _readiness_redis
+    if _readiness_redis is None:
+        import redis
+
+        _readiness_redis = redis.Redis.from_url(
+            settings.REDIS_URL, socket_connect_timeout=1.0, socket_timeout=1.0
+        )
+    _readiness_redis.ping()
+
+
+def _readiness_checks() -> readiness.Checks:
+    checks: readiness.Checks = {
+        # Every request writes an audit row (invariant #4) and every analysis
+        # redacts through the mapping store (invariant #3).
+        "audit_db": lambda: audit.writer.ping(),
+        "mapping_store": lambda: masking._store.ping(),  # noqa: SLF001
+        # The engine's own readiness: warmed up, vector store / Ollama up.
+        "ai_engine": lambda: httpx.get(
+            f"{settings.AI_ENGINE_URL.rstrip('/')}/readyz", timeout=3.0
+        ).raise_for_status(),
+    }
+    if "redis" in {settings.CACHE_BACKEND, settings.RATE_LIMIT_BACKEND, settings.REVOCATION_BACKEND}:
+        checks["redis"] = _redis_ready
+    return checks
+
+
+_READINESS = readiness.ReadinessProbe(_readiness_checks)
+
+
+@app.get("/livez")
+def livez():
+    """The process answers — nothing else is checked (a liveness probe that
+    touches a dependency turns one slow dependency into a restart loop)."""
+    return {"ok": True}
+
+
+@app.get("/readyz")
+def readyz():
+    """This instance can serve an analysis now. Only ok / not ok — which
+    dependency failed is in the log and in dependency_up on /metrics; the
+    detailed (and tenant-revealing) /v1/health stays for compatibility."""
+    ready, _ = _READINESS.check()
+    return JSONResponse({"ok": ready}, status_code=200 if ready else 503)
+
+
 @app.get("/metrics")
 def metrics_endpoint(request: Request):
     """Prometheus scrape target (Q19 — four-layer dashboard).
@@ -1138,10 +1199,84 @@ def _analysis_cache_fingerprint() -> str:
     )
 
 
+_SERVER_TIMING_NAME = re.compile(r"[a-z_]{1,32}")
+
+
+def _server_timing(stage_ms: dict[str, int], *extra: str) -> str:
+    """OBS-3: per-stage time (ms) as a ``Server-Timing`` header, readable in the
+    browser's devtools — "which step was slow" without log access. Stage
+    names and durations only: no ids, no text."""
+    parts = [
+        f"{name};dur={int(ms)}"
+        for name, ms in stage_ms.items()
+        if _SERVER_TIMING_NAME.fullmatch(name)
+    ]
+    return ", ".join([*parts, *extra])
+
+
+# ---- Single-flight (BE-9) ----
+# An identical analysis already running (same tenant/user/case/inputs — the
+# response-cache key) is awaited instead of started again: a refresh or a
+# double click otherwise queues a second full pipeline on the same GPU. Per
+# process, like the memory cache: requests on different gateway replicas are
+# not merged.
+
+
+@dataclass(eq=False)
+class _Flight:
+    """One running analysis and how many requests are waiting for it."""
+
+    task: asyncio.Task
+    waiters: int = 0
+
+
+_inflight_analyses: dict[str, _Flight] = {}
+
+
+def _joinable_flight(key: str | None) -> _Flight | None:
+    flight = _inflight_analyses.get(key) if key else None
+    if flight is None or flight.task.cancelled() or flight.task.cancelling():
+        return None  # being cancelled — start afresh rather than inherit that
+    if flight.task.get_loop() is not asyncio.get_running_loop():
+        return None  # left over from another event loop (test runners)
+    return flight
+
+
+def _start_flight(key: str | None, coro) -> _Flight:
+    flight = _Flight(asyncio.create_task(coro))
+
+    def _done(task: asyncio.Task) -> None:
+        if not task.cancelled():
+            task.exception()  # mark retrieved — every waiter may be gone
+        if key and _inflight_analyses.get(key) is flight:
+            del _inflight_analyses[key]
+
+    flight.task.add_done_callback(_done)
+    if key:
+        _inflight_analyses[key] = flight
+    return flight
+
+
+async def _await_flight(flight: _Flight):
+    flight.waiters += 1
+    try:
+        # shield: one waiter going away must not cancel the analysis the
+        # others are still waiting for.
+        return await asyncio.shield(flight.task)
+    finally:
+        flight.waiters -= 1
+        if flight.waiters == 0 and not flight.task.done():
+            # Everyone waiting has gone (client disconnects, shutdown): stop
+            # the model work instead of finishing it for nobody — what
+            # cancelling the handler did before single-flight.
+            flight.task.cancel()
+
+
 @app.post("/v1/oa/analyze", response_model=AnalysisResponse)
 async def analyze_oa(
     body: AnalysisRequest,
     request: Request,
+    http_response: Response,  # carries Server-Timing (OBS-3)
     # H-6: role gate. ATTORNEY + PARALEGAL (paralegals assist attorneys —
     # core POC demo workflow). IT_ADMIN + AUDITOR are NOT permitted; they
     # have different concerns (connectors / dashboards / audit chain).
@@ -1157,10 +1292,12 @@ async def analyze_oa(
       1. RPM check
       2. Request size hard cap
       3. Estimate token need; quota check
-      4. Cache lookup (per Q9 namespacing)
-      5. Orchestrate via AI Engine
-      6. Record usage + circuit breaker check
-      7. Audit log
+      4. Redact once (handed to the orchestrator); cache lookup (Q9 namespacing)
+      5. Circuit breaker check
+      6. Join an identical running analysis (single-flight) or orchestrate
+         via the AI Engine under one deadline
+      7. Record usage, case summary, cache write
+      8. Audit log (finally — every path, cancellation included)
 
     The whole flow runs inside a try/finally so an audit row is written even
     when an exception fires partway through (H-7 fix — invariant #4 in
@@ -1182,6 +1319,7 @@ async def analyze_oa(
     }
     response: AnalysisResponse | None = None
     cached_payload: dict | None = None
+    served_by = "cache"  # or "coalesced" — the audit row's model_used when no model ran
     obs: dict = {}
     error: BaseException | None = None
     reserved_quota_tokens = 0
@@ -1218,8 +1356,9 @@ async def analyze_oa(
         #                    counters by (actual - reserved)
         #   - error       -> release in full (except-block below)
         estimated_tokens = max(1, len(body.oa_text) // 3)
-        reserved_quota_tokens = rate_limit.reserve_llm_budget(
-            user, estimated_tokens, policy_decisions
+        # Redis round trips — off the event loop (BE-6).
+        reserved_quota_tokens = await run_in_threadpool(
+            rate_limit.reserve_llm_budget, user, estimated_tokens, policy_decisions
         )
         quota_reservation_settled = False
 
@@ -1236,17 +1375,26 @@ async def analyze_oa(
         #       bump (new PII rule, tenant dictionary refresh) automatically
         #       invalidates pre-bump cached responses rather than serving
         #       them under the new policy.
-        # `masking.redact` is idempotent on placeholders (a `[EMAIL_XXXX]`
-        # token doesn't match the email regex) so re-running it inside the
-        # orchestrator is safe and keeps the orchestrator's own redaction
-        # invariant (Q3 + Q10) intact.
-        redacted_for_cache, _ = masking.redact(body.oa_text, user.tenant_id)
+        # The redaction done here is handed to the orchestrator (BE-7: it used
+        # to redact the same text a second time). Masking writes the mapping
+        # store, so it runs off the event loop (BE-6).
+        t_redact = time.monotonic()
+        pre_redacted = await run_in_threadpool(masking.redact, body.oa_text, user.tenant_id)
+        redacted_for_cache = pre_redacted[0]
         # Every input that changes the draft must be in the key — otherwise an
         # edited attorney hint / filing date is answered with the stale draft
         # for the whole CACHE_TTL_RESPONSE_SEC window.
-        redacted_hint_for_cache = (
-            masking.redact(body.user_hint, user.tenant_id)[0] if body.user_hint else ""
+        pre_redacted_hint = (
+            await run_in_threadpool(masking.redact, body.user_hint, user.tenant_id)
+            if body.user_hint
+            else None
         )
+        redacted_hint_for_cache = pre_redacted_hint[0] if pre_redacted_hint else ""
+        redact_sec = time.monotonic() - t_redact
+        metrics.ANALYZE_STAGE_DURATION.observe(
+            redact_sec, {"stage": "redact", "backend": settings.LLM_MODE, "outcome": "ok"}
+        )
+        redact_timing = {"redact": int(redact_sec * 1000)}
         prompt_hash = cache.hash_prompt(
             "".join(
                 [
@@ -1265,8 +1413,10 @@ async def analyze_oa(
         )
         # One key per request (one generation read) for both lookup and write;
         # None = cache bypassed because the generation could not be read.
-        cache_key = cache.response_key_for(user.tenant_id, user.user_id, body.case_id, prompt_hash)
-        cached = cache.get_response_at(cache_key, user.tenant_id)
+        cache_key = await run_in_threadpool(
+            cache.response_key_for, user.tenant_id, user.user_id, body.case_id, prompt_hash
+        )
+        cached = await run_in_threadpool(cache.get_response_at, cache_key, user.tenant_id)
         # Q19 系統 metric: cache effectiveness (hit ratio panel in Grafana).
         metrics.CACHE_REQUESTS.inc({"result": "hit" if cached else "miss"})
         if cached:
@@ -1275,8 +1425,11 @@ async def analyze_oa(
             # Cache hit does no LLM work — release the quota reservation in
             # full (delta = 0 - reserved), otherwise every hit silently burns
             # the user's daily quota.
-            rate_limit.record_usage(user, 0, 0, 0.0, reserved_tokens=reserved_quota_tokens)
+            await run_in_threadpool(
+                rate_limit.record_usage, user, 0, 0, 0.0, reserved_tokens=reserved_quota_tokens
+            )
             quota_reservation_settled = True
+            http_response.headers["Server-Timing"] = _server_timing(redact_timing, "cache;desc=hit")
             # T1: the cached copy carries the ORIGINAL run's gate outcomes —
             # overwrite with THIS request's decisions (auth/rpm/quota all
             # re-ran above; only the LLM work was skipped). Same for
@@ -1295,24 +1448,66 @@ async def analyze_oa(
 
         # 5. Circuit breaker
         # Per-tenant (M-12): another tenant's spend must not degrade this one.
-        if rate_limit.tenant_cost_circuit_state(user.tenant_id)["tripped"]:
+        circuit = await run_in_threadpool(rate_limit.tenant_cost_circuit_state, user.tenant_id)
+        if circuit["tripped"]:
             policy_decisions["circuit_open"] = True
             # POC behavior: still serve, but the LLM router will degrade to cheap model.
             # In production: optionally 503 here for graceful shedding.
 
-        # 6. Orchestrate — forward the circuit-breaker state so the AI Engine
-        # degrades the draft model to the cheap tier when the cost breaker
-        # has tripped (Q18 / invariant #8).
-        response, obs = await orchestrate_analysis(
-            user, body, circuit_open=policy_decisions.get("circuit_open", False)
+        # 6. Single-flight (BE-9), then orchestrate. No await between the
+        # lookup and the registration below, so two simultaneous requests
+        # cannot both become the leader.
+        flight = _joinable_flight(cache_key)
+        if flight is not None:
+            # Follower: no model work of its own — like a cache hit it
+            # releases its reservation in full, answers under its OWN request
+            # id and gate outcomes, and writes its own audit row. A leader
+            # failure (e.g. the 504 deadline) is this request's failure too.
+            shared_response, _ = await _await_flight(flight)
+            response = shared_response.model_copy(deep=True)
+            await run_in_threadpool(
+                rate_limit.record_usage, user, 0, 0, 0.0, reserved_tokens=reserved_quota_tokens
+            )
+            quota_reservation_settled = True
+            metrics.ANALYZE_COALESCED.inc()
+            policy_decisions["coalesced"] = True
+            response.policy_decisions = dict(policy_decisions)
+            response.cost_meta.cache_hit = True
+            rid = current_request_id()
+            if rid and len(rid) <= 128:
+                response.request_id = rid
+            served_by = "coalesced"
+            cached_payload = response.model_dump(mode="json")
+            http_response.headers["Server-Timing"] = _server_timing(redact_timing, "coalesced")
+            return response
+
+        # Leader. The forwarded circuit-breaker state makes the AI Engine
+        # degrade the draft model to the cheap tier when the cost breaker has
+        # tripped (Q18 / invariant #8).
+        flight = _start_flight(
+            cache_key,
+            orchestrate_analysis(
+                user,
+                body,
+                circuit_open=policy_decisions.get("circuit_open", False),
+                pre_redacted=pre_redacted,
+                pre_redacted_hint=pre_redacted_hint,
+            ),
         )
+        shared_response, obs = await _await_flight(flight)
+        # Followers copy the shared object; the leader answers with its own copy.
+        response = shared_response.model_copy(deep=True)
         # T1: surface the REAL gate outcomes to the SPA (same dict the audit
         # row records) — the trust chips must never be cosmetic constants.
         response.policy_decisions = dict(policy_decisions)
+        http_response.headers["Server-Timing"] = _server_timing(
+            {**redact_timing, **obs.get("stage_ms", {})}
+        )
 
         # 7. Record usage — reconcile against the step-3 reservation so the
         # counters reflect TRUE spend, not reservation + actual (P1-1).
-        rate_limit.record_usage(
+        await run_in_threadpool(
+            rate_limit.record_usage,
             user,
             prompt_tokens=obs["prompt_tokens"],
             completion_tokens=obs["completion_tokens"],
@@ -1325,7 +1520,8 @@ async def analyze_oa(
         # 7b. Case summary (dashboard / case list) — metadata only, no OA
         # text. A failure here must never fail the analysis the user waited for.
         try:
-            case_summary.record_analysis(
+            await run_in_threadpool(
+                case_summary.record_analysis,
                 user,
                 body.case_id,
                 body.target_patent_no,
@@ -1339,7 +1535,9 @@ async def analyze_oa(
         # placeholder): it would replay a short outage for the whole TTL, and
         # the attorney's retry would keep getting the placeholder (B-15).
         if not obs.get("degraded"):
-            cache.set_response_at(cache_key, user.tenant_id, response.model_dump(mode="json"))
+            await run_in_threadpool(
+                cache.set_response_at, cache_key, user.tenant_id, response.model_dump(mode="json")
+            )
 
         return response
     except BaseException as exc:  # noqa: BLE001 — must reach the finally
@@ -1383,7 +1581,7 @@ async def analyze_oa(
             pd = {**policy_decisions, "cache_hit": False}
         elif cached_payload is not None:
             response_payload = cached_payload
-            model_used = "cache"
+            model_used = served_by
             prompt_tokens = 0
             completion_tokens = 0
             masked_rules = []
@@ -1397,7 +1595,7 @@ async def analyze_oa(
             completion_tokens = obs.get("completion_tokens", 0)
             masked_rules = obs.get("mask_rules", [])
             pd = {**policy_decisions, "cache_hit": False}
-        _safe_audit_write(
+        await _audit_off_loop(
             user=user,
             case_id=body.case_id,
             endpoint="/v1/oa/analyze",
@@ -1536,8 +1734,8 @@ async def upload_oa(
         ai_url = f"{settings.AI_ENGINE_URL.rstrip('/')}/v1/ai/extract_text"
         async with httpx.AsyncClient(timeout=120.0) as client:
             # OCR over a 100-page scan can take ~60s through Haiku; 120 s is a
-            # fixed budget for this hop (the analyze hops follow
-            # orchestrator.ai_call_timeout_sec). Large scans should become
+            # fixed budget for this hop (the analyze hops follow the analysis
+            # deadline, ANALYZE_DEADLINE_SEC). Large scans should become
             # async jobs — docs/research/09 BE-16.
             try:
                 # Security Chunk A — C-2. AI Engine refuses requests lacking

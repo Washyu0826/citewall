@@ -10,10 +10,11 @@ import ErrorBanner from './ErrorBanner.jsx';
 import { Skeleton } from './Skeleton.jsx';
 
 // Gate outcomes recorded per request. For *_passed a true value is the good
-// outcome; cache_hit / circuit_open are informational and only worth a word
-// when they happened.
-const POLICY_KEYS = ['authz_passed', 'rate_limit_passed', 'quota_passed', 'cache_hit', 'circuit_open'];
-const INFORMATIONAL = new Set(['cache_hit', 'circuit_open']);
+// outcome; the others are informational and only worth a word when they
+// happened (coalesced = answered by an identical analysis already running;
+// error = the request failed — never a passed gate with a tick).
+const POLICY_KEYS = ['authz_passed', 'rate_limit_passed', 'quota_passed', 'cache_hit', 'coalesced', 'circuit_open', 'error'];
+const INFORMATIONAL = new Set(['cache_hit', 'coalesced', 'circuit_open', 'error']);
 
 /**
  * Append-only audit log + tamper-evident hash chain.

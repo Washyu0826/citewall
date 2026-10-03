@@ -34,9 +34,15 @@ from dataclasses import dataclass
 from datetime import UTC
 from typing import Any
 
+from backend.shared import time_budget
 from backend.shared.config import settings
+from backend.shared.observability import current_request_id
 
 logger = logging.getLogger(__name__)
+
+# A retry is only worth starting if this much time is left after its backoff
+# (seconds) — less cannot produce a draft before the gateway stops waiting.
+_MIN_RETRY_ATTEMPT_SEC = 10.0
 
 
 @dataclass
@@ -1878,8 +1884,17 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
     if max_retries is None:
         max_retries = settings.LLM_MAX_RETRIES
 
+    def _no_time_for(wait: float) -> bool:
+        # A retry needs its backoff plus a useful attempt inside the request's
+        # deadline; otherwise give up now (the gateway stopped waiting).
+        return not time_budget.can_afford(wait + _MIN_RETRY_ATTEMPT_SEC)
+
     for attempt in range(max_retries + 1):
         try:
+            # Each attempt's timeout is capped by the request's remaining time
+            # (BE-4); outside a request this is LLM_REQUEST_TIMEOUT_SEC.
+            if time_budget.current_deadline() is not None:
+                kwargs["timeout"] = time_budget.budget(settings.LLM_REQUEST_TIMEOUT_SEC)
             return await client.messages.create(**kwargs)
         except anthropic.RateLimitError as exc:
             if attempt == max_retries:
@@ -1892,6 +1907,8 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
                 pass
             retry_after = _parse_retry_after(hdr, default=None) if hdr else None
             wait = _backoff_seconds(attempt, retry_after=retry_after)
+            if _no_time_for(wait):
+                raise
             logger.warning(
                 "anthropic rate_limit (429) attempt %d/%d, sleeping %.2fs",
                 attempt + 1,
@@ -1903,6 +1920,8 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
             if attempt == max_retries:
                 raise
             wait = _backoff_seconds(attempt)
+            if _no_time_for(wait):
+                raise
             logger.warning(
                 "anthropic timeout attempt %d/%d, sleeping %.2fs: %s",
                 attempt + 1,
@@ -1915,6 +1934,8 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
             if attempt == max_retries:
                 raise
             wait = _backoff_seconds(attempt)
+            if _no_time_for(wait):
+                raise
             logger.warning(
                 "anthropic connection error attempt %d/%d, sleeping %.2fs: %s",
                 attempt + 1,
@@ -1930,6 +1951,8 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
             if status is None or status < 500 or attempt == max_retries:
                 raise
             wait = _backoff_seconds(attempt)
+            if _no_time_for(wait):
+                raise
             logger.warning(
                 "anthropic server error (%s) attempt %d/%d, sleeping %.2fs",
                 status,
@@ -2122,15 +2145,25 @@ class DifyLLM:
         body = {
             "inputs": {"intent": intent, "query": user},
             "response_mode": "blocking",
-            "user": "patentmind-ai-engine",
+            # Dify's "user" is its correlation field: the gateway's request id
+            # makes a Dify run log joinable to our logs (research 09 OBS-4).
+            "user": f"req-{current_request_id() or 'none'}"[:128],
         }
         headers = {"Authorization": f"Bearer {self._api_key}"}
 
         started = time.monotonic()
         try:
-            r = self._http_client().post(url, json=body, headers=headers)
+            r = self._http_client().post(
+                url,
+                json=body,
+                headers=headers,
+                # Capped by the request's remaining time (BE-4).
+                timeout=time_budget.budget(settings.DIFY_TIMEOUT_SEC),
+            )
             r.raise_for_status()
             payload = r.json()
+        except time_budget.BudgetExhausted as e:
+            return self._degrade(system, user, intent, model_hint, f"deadline: {e}")
         except httpx.HTTPError as e:
             return self._degrade(system, user, intent, model_hint, f"HTTP error: {e}")
         except ValueError as e:  # non-JSON body
@@ -2478,7 +2511,9 @@ def _real_ollama(system: str, user: str, model: str, intent: str) -> LLMResponse
         # for regex-based markdown-fence stripping in _safe_json on most calls.
         "response_format": {"type": "json_object"},
     }
-    resp = httpx.post(url, json=body, timeout=settings.OLLAMA_TIMEOUT_SEC)
+    # Capped by the request's remaining time (BE-4) — raises BudgetExhausted
+    # rather than start a generation that cannot finish in time.
+    resp = httpx.post(url, json=body, timeout=time_budget.budget(settings.OLLAMA_TIMEOUT_SEC))
     resp.raise_for_status()
     data = resp.json()
 

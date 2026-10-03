@@ -101,7 +101,16 @@ def _quota_redis():
     try:
         import redis as _redis_mod
 
-        _REDIS_CLIENT = _redis_mod.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        # BE-12: bounded waits — a hung Redis must fail this request through
+        # the degrade policy, not hold it forever. (A reply lost to the timeout
+        # after the server applied a reservation leaks that reservation until
+        # the bucket's TTL; refusing on a slow quota store is the ADR-02 choice.)
+        _REDIS_CLIENT = _redis_mod.Redis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=settings.REDIS_SOCKET_TIMEOUT_SEC,
+            socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SEC,
+        )
         return _REDIS_CLIENT
     except Exception as exc:  # noqa: BLE001 — boot must not crash on a bad URL
         logger.warning(

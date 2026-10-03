@@ -1049,24 +1049,56 @@ class MaskingStore:
         migrate_mapping_db(self._conn)
 
     def remember(self, tenant_id: str, placeholder: str, original: str, rule_id: str):
+        self.remember_many(tenant_id, [(placeholder, original, rule_id)])
+
+    def remember_many(self, tenant_id: str, entries: list[tuple[str, str, str]]) -> None:
+        """Store (placeholder, original, rule_id) rows in ONE transaction.
+
+        BE-7: one commit per redacted text, not one per entity — an OA with
+        thirty entities used to pay thirty journal syncs, under a lock every
+        concurrent analysis shares.
+        """
+        if not entries:
+            return
+        fernet = _tenant_fernet(tenant_id)
         # Encrypt the original under the tenant-derived key BEFORE it touches disk.
-        token = _tenant_fernet(tenant_id).encrypt(original.encode("utf-8"))
-        ciphertext = token.decode("ascii")  # urlsafe-b64 Fernet token, TEXT-safe
-        with self._lock:
-            self._conn.execute(
-                "INSERT OR IGNORE INTO mappings"
-                "(tenant_id, placeholder, original, rule_id, subject_hmac) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (tenant_id, placeholder, ciphertext, rule_id, subject_hmac(tenant_id, original)),
+        rows = [
+            (
+                tenant_id,
+                placeholder,
+                fernet.encrypt(original.encode("utf-8")).decode("ascii"),  # TEXT-safe token
+                rule_id,
+                subject_hmac(tenant_id, original),
             )
-            self._conn.commit()
+            for placeholder, original, rule_id in entries
+        ]
+        with self._lock:
+            try:
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO mappings"
+                    "(tenant_id, placeholder, original, rule_id, subject_hmac) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    rows,
+                )
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()  # no half batch left open on the shared connection
+                raise
+
+    def ping(self) -> None:
+        """Readiness (OBS-9): the mapping store answers — without it nothing
+        can be redacted, so nothing can be analysed."""
+        with self._lock:
+            self._conn.execute("SELECT 1 FROM mappings LIMIT 1").fetchall()
 
     def get_original(self, tenant_id: str, placeholder: str) -> str | None:
-        cur = self._conn.execute(
-            "SELECT original FROM mappings WHERE tenant_id = ? AND placeholder = ?",
-            (tenant_id, placeholder),
-        )
-        row = cur.fetchone()
+        # The connection is shared by every request thread (unmask now runs
+        # off the event loop) — one statement at a time.
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT original FROM mappings WHERE tenant_id = ? AND placeholder = ?",
+                (tenant_id, placeholder),
+            ).fetchone()
         if not row:
             return None
         stored = row[0]
@@ -1171,6 +1203,10 @@ def redact(text: str, tenant_id: str) -> tuple[str, list[str]]:
     # hard-coded fallback). Same merge order as before; the tenant layer-2 set
     # is now loaded + cached from data/tenant_dicts/<tenant_id>.json.
     rules = list(PII_RULES) + get_tenant_rules(tenant_id)
+    # placeholder → (original, rule_id); written in one transaction below,
+    # before the redacted text is returned (so before it can leave the
+    # gateway, and unmask always finds its mapping).
+    pending: dict[str, tuple[str, str]] = {}
 
     for rule in rules:
         # `rule=rule` binds the loop variable at definition time (B023). The
@@ -1180,7 +1216,7 @@ def redact(text: str, tenant_id: str) -> tuple[str, list[str]]:
             original = match.group(0)
             sid = _stable_id(original, salt=tenant_id)
             placeholder = f"[{rule.placeholder_prefix}_{sid}]"
-            _store.remember(tenant_id, placeholder, original, rule.rule_id)
+            pending.setdefault(placeholder, (original, rule.rule_id))
             if rule.rule_id not in triggered:
                 triggered.append(rule.rule_id)
             return placeholder
@@ -1195,11 +1231,14 @@ def redact(text: str, tenant_id: str) -> tuple[str, list[str]]:
         sid = _stable_id(original, salt=tenant_id)
         placeholder = f"[{label}_{sid}]"
         rule_id = _NER_RULE_IDS[label]
-        _store.remember(tenant_id, placeholder, original, rule_id)
+        pending.setdefault(placeholder, (original, rule_id))
         if rule_id not in triggered:
             triggered.append(rule_id)
         redacted = redacted[:start] + placeholder + redacted[end:]
 
+    _store.remember_many(
+        tenant_id, [(placeholder, original, rule_id) for placeholder, (original, rule_id) in pending.items()]
+    )
     return redacted, triggered
 
 

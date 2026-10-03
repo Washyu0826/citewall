@@ -40,10 +40,13 @@ default is the hand-rolled path the test-suite exercises.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `http_request_duration_seconds` | histogram | `endpoint`, `method`, `status` | request latency → p50/p95/p99 per route (both services). Buckets 0.05 s → 450 s with the SLO thresholds (25 / 30 / 90 s) as edges; `/v1/health` and `/metrics` are not timed. (Until 2026-10-03 the top bucket was 10 s, so every analysis fell in +Inf — FAILURE_LOG B-17.) |
+| `http_request_duration_seconds` | histogram | `endpoint`, `method`, `status` | request latency → p50/p95/p99 per route (both services). Buckets 0.05 s → 450 s with the SLO thresholds (25 / 30 / 90 s) as edges; `/v1/health`, `/livez`, `/readyz` and `/metrics` are not timed. (Until 2026-10-03 the top bucket was 10 s, so every analysis fell in +Inf — FAILURE_LOG B-17.) |
+| `analyze_stage_duration_seconds` | histogram | `stage`, `backend`, `outcome` | where an analysis spends its time (gateway side): one sample per AI-Engine call — `stage` = `parse` / `retrieve` / `draft` / `verify` / `deadline` / `claim_tree` / `element_comparison` — plus the gateway's own `redact` / `unmask`; `backend` = `LLM_MODE`; `outcome` = `ok` / `error` / `timeout`. Stages overlap (dependency-graph scheduling), so this answers "which step is slow"; the total is `http_request_duration_seconds`. The same numbers come back per request in the `Server-Timing` header (§1b). |
 | `audit_write_duration_seconds` | histogram | — | audit-row write latency. **SLO: p99 < 0.1s** (invariant #4). |
 | `llm_errors_total` | counter | `model` | LLM call errors per model. |
 | `cache_requests_total` | counter | `result` (`hit`/`miss`) | Q9 response-cache lookups on the analyze path → cache hit ratio. |
+| `analyze_coalesced_total` | counter | — | analyze requests answered by joining an identical analysis already running (single-flight: a refresh / double submit). Counted on top of the cache miss before the join. |
+| `dependency_up` | gauge | `dependency` | last `/readyz` evaluation per dependency, 1 = usable / 0 = failing (gateway: `audit_db`, `mapping_store`, `ai_engine`, `redis` when used; AI Engine: `warmup`, `qdrant` / `ollama` when used). `/readyz` itself only says ok / not ok. |
 | `cost_circuit_breaker_tripped` | gauge | — | Q18 breaker state: 1 = tripped (auto-degrade), 0 = closed. Bridged read-only from `rate_limit.cost_circuit_state()` at scrape time. |
 | `cost_circuit_breaker_daily_usd` | gauge | — | realised fleet-wide LLM spend today (the breaker's input). |
 | `cost_circuit_breaker_threshold_usd` | gauge | — | daily USD threshold at which the breaker trips (`COST_CIRCUIT_DAILY_USD`). |
@@ -74,6 +77,31 @@ default is the hand-rolled path the test-suite exercises.
 | `llm_route_total` | counter | `model` | which model the Q15 router picked (local↔cloud↔cheap mix). |
 | `tenant_monthly_tokens_used` | gauge | `tenant` | Q18 quota numerator: month-to-date tokens per tenant (read-only bridge from rate_limit). |
 | `tenant_monthly_token_cap` | gauge | `tenant` | Q18 quota denominator: configured monthly token cap per tenant. |
+
+### 1b. Per-request stage timing — `Server-Timing`
+
+`POST /v1/oa/analyze` answers with a `Server-Timing` header, readable in the
+browser's devtools (Network → Timing), e.g.
+`redact;dur=4, claim_tree;dur=12, parse;dur=8210, retrieve;dur=95, draft;dur=14650, verify;dur=310, deadline;dur=22, unmask;dur=3, total;dur=23540`
+(longest call per stage, ms). A cache hit says `cache;desc=hit`, a request that
+joined a running analysis says `coalesced`. Stage names and durations only —
+no ids, no text.
+
+### 1c. Liveness and readiness
+
+| Endpoint | Both services | Checks | Answer |
+|---|---|---|---|
+| `GET /livez` | ✅ | nothing — the process answers | `{"ok": true}` |
+| `GET /readyz` | ✅ | gateway: audit DB, mapping store, the AI Engine's `/readyz`, Redis (if any backend uses it). AI Engine: start-up warm-up finished, Qdrant / Ollama when the mode uses them | 200 `{"ok": true}` / 503 `{"ok": false}`, re-evaluated at most every 5 s |
+| `GET /v1/health` | ✅ | — | unchanged (detailed; kept for the SPA's stack lights and the smoke scripts) |
+
+Point liveness probes at `/livez`, never at `/readyz` — a liveness probe that
+touches a dependency turns one slow dependency into a restart loop. Which
+dependency failed is in the logs and in `dependency_up`, not in the
+unauthenticated answer. The AI Engine warms up in the background at start
+(Qwen3 embedder / reranker when configured; in `LLM_MODE=local` it asks Ollama
+to load the model, `OLLAMA_KEEP_ALIVE`) and reports not-ready until done; a
+failed warm-up step is logged and paid on first use, never keeps it unready.
 
 ### Cardinality discipline
 
@@ -106,8 +134,15 @@ client ──X-Request-ID?──▶ gateway ──X-Request-ID──▶ ai_engin
   inbound `X-Request-ID` back out, binds it, and echoes it — so its JSON log
   lines carry the **same** id as the gateway's.
 
-The id is sanitised before use (trimmed, length-capped at 200, control/newline
-chars stripped) so a forged header can't forge log lines.
+The id is sanitised before use (trimmed, length-capped at 128 — the
+`AnalysisResponse.request_id` limit, FAILURE_LOG B-22 — control/newline chars
+stripped) so a forged header can't forge log lines.
+
+The gateway → AI Engine calls also carry `X-Deadline` (absolute epoch
+seconds): one deadline per analysis (`ANALYZE_DEADLINE_SEC`, default 390 s,
+below the SPA's 420 s). The AI Engine binds it like the request id and caps
+every model wait — Ollama, Dify, each Anthropic attempt and retry backoff — by
+the time left, so no step outlives the request that asked for it.
 
 ### Propagation status
 
@@ -117,7 +152,7 @@ chars stripped) so a forged header can't forge log lines.
 | `orchestrator.AIEngineClient.call` (parse / retrieve / draft / verify / deadline / claim tree / elements) | ✅ `request_id_headers(_internal_headers())` |
 | Response body: `AnalysisResponse.request_id` | ✅ since 2026-10-03 the **same** bound id (it used to be a separate `uuid4`, so the id an attorney quoted was in no log — FAILURE_LOG B-14). A cache hit reports the hitting request's id. |
 | SPA | ✅ reads `X-Request-ID` into `ApiError.requestId`; error banners show it as 「參考編號」 |
-| AI Engine → Dify | ❌ Dify receives a constant `user`; follow-up in `docs/research/09` OBS-4 |
+| AI Engine → Dify | ✅ since 2026-10-04 Dify's `user` field is `req-<request id>`, so a Dify run log joins to ours |
 | Audit row | ❌ no `request_id` column yet (needs a hash-chain-aware migration); follow-up OBS-4 |
 
 Until the audit row carries the id, join an audit row to logs by tenant +

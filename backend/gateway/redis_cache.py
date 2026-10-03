@@ -103,7 +103,14 @@ class RedisCacheBackend:
         # decode_responses=False so we receive raw bytes from GET and can
         # apply json.loads ourselves — keeps the boundary explicit and avoids
         # surprises if a value is ever non-UTF-8.
-        self._client = redis.Redis.from_url(url, decode_responses=False)
+        # BE-12: bounded waits — a hung Redis reads as a miss (fail open) in
+        # well under a second instead of holding the request indefinitely.
+        self._client = redis.Redis.from_url(
+            url,
+            decode_responses=False,
+            socket_connect_timeout=settings.REDIS_SOCKET_TIMEOUT_SEC,
+            socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SEC,
+        )
         self._lock = threading.Lock()
         self._hits = 0
         self._misses = 0
