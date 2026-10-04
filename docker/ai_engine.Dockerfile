@@ -42,6 +42,10 @@ RUN chmod 0755 /usr/local/bin/seed-data \
  && mkdir -p /app/data && chown -R app:app /app/data
 USER app
 EXPOSE 8011
+# Deliberately /v1/health, not /readyz: docker-compose starts the gateway only
+# once this is healthy, and /readyz is not ready without Ollama or before the
+# warm-up finishes — the whole stack would refuse to start instead of serving
+# labelled degraded results (docs/observability §1c).
 HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=5 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8011/v1/health', timeout=4).status == 200 else 1)"
 ENTRYPOINT ["seed-data"]

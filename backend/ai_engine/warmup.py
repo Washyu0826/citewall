@@ -40,12 +40,10 @@ def _steps() -> list[tuple[str, object]]:
     from backend.ai_engine import rag
 
     steps: list[tuple[str, object]] = []
-    embedder = rag._embedder  # noqa: SLF001 — warm the module's own instance
-    if embedder.backend in ("bge-m3", "qwen3"):
-        steps.append(("embedder", lambda: embedder.dim))  # .dim loads the model
-    reranker = rag._reranker  # noqa: SLF001
-    if reranker.enabled:
-        steps.append(("reranker", lambda: reranker.score("warm-up", ["warm-up"])))
+    # Ollama FIRST: the embedder / reranker pick cuda only when enough VRAM is
+    # free at load time (rag.pick_device). Loading them first could take the
+    # card from the LLM, which then only partly fits and generates far slower
+    # (review W2-B5); this way they see what the LLM left and go to CPU.
     if settings.LLM_MODE == "local":
         # Native API: a generate with no prompt only loads the model, and
         # keep_alive keeps it resident (also set OLLAMA_KEEP_ALIVE on the
@@ -60,6 +58,12 @@ def _steps() -> list[tuple[str, object]]:
                 ).raise_for_status(),
             )
         )
+    embedder = rag._embedder  # noqa: SLF001 — warm the module's own instance
+    if embedder.backend in ("bge-m3", "qwen3"):
+        steps.append(("embedder", lambda: embedder.dim))  # .dim loads the model
+    reranker = rag._reranker  # noqa: SLF001
+    if reranker.enabled:
+        steps.append(("reranker", reranker.ensure_loaded))
     return steps
 
 

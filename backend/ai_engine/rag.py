@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import re
+import threading
 import uuid
 import zlib
 from dataclasses import dataclass, field
@@ -564,34 +565,45 @@ class Reranker:
         self._model = None
         self._tok = None
         self._device = "cpu"
+        # One load at a time: the start-up warm-up and an early request used
+        # to load the 4B model twice on the 8 GB card (review W2-B3).
+        self._load_lock = threading.Lock()
 
     @property
     def enabled(self) -> bool:
         return self.backend != "none"
 
-    def _load(self) -> None:
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-
-        self._device = pick_device(settings.RERANKER_DEVICE, _QWEN3_RERANK_NEED_GB)
-        dtype = torch.float16 if self._device == "cuda" else torch.float32
-        name = settings.RERANKER_MODEL
-        logger.info("loading reranker %s on %s", name, self._device)
-        self._tok = AutoTokenizer.from_pretrained(name, padding_side="left")
-        model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype)
-        self._model = model.to(self._device).eval()
-        self._yes = self._tok.convert_tokens_to_ids("yes")
-        self._no = self._tok.convert_tokens_to_ids("no")
-        self._prefix = (
-            "<|im_start|>system\nJudge whether the Document meets the requirements "
-            "based on the Query and the Instruct provided. Note that the answer can "
-            'only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
-        )
-        self._suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
-
-    def score(self, query: str, docs: list[str], batch_size: int = 8) -> list[float]:
+    def ensure_loaded(self) -> None:
         if self._model is None:
             self._load()
+
+    def _load(self) -> None:
+        with self._load_lock:
+            if self._model is not None:
+                return  # another thread loaded it while we waited
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+
+            self._device = pick_device(settings.RERANKER_DEVICE, _QWEN3_RERANK_NEED_GB)
+            dtype = torch.float16 if self._device == "cuda" else torch.float32
+            name = settings.RERANKER_MODEL
+            logger.info("loading reranker %s on %s", name, self._device)
+            self._tok = AutoTokenizer.from_pretrained(name, padding_side="left")
+            model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype)
+            self._yes = self._tok.convert_tokens_to_ids("yes")
+            self._no = self._tok.convert_tokens_to_ids("no")
+            self._prefix = (
+                "<|im_start|>system\nJudge whether the Document meets the requirements "
+                "based on the Query and the Instruct provided. Note that the answer can "
+                'only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
+            )
+            self._suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            # Last: score() reads _model unlocked, so it must never see a model
+            # whose tokenizer ids / prompt parts are not set yet.
+            self._model = model.to(self._device).eval()
+
+    def score(self, query: str, docs: list[str], batch_size: int = 8) -> list[float]:
+        self.ensure_loaded()
         import torch
 
         out: list[float] = []
@@ -659,12 +671,19 @@ class Embedder:
     def __init__(self, backend: str | None = None):
         self.backend = backend or settings.EMBEDDING_BACKEND
         self._st_model = None
+        # One load at a time (warm-up vs an early request — review W2-B3).
+        self._load_lock = threading.Lock()
         if self.backend == "bge-m3":
             self._load_st()  # eager load: surfaces missing model / dep at boot
         # qwen3 is LAZY: a 4B model must not load at import (tests, mock
         # deployments, and the 8GB card all pay for an eager load).
 
     def _load_st(self):
+        with self._load_lock:
+            if self._st_model is None:  # another thread may have loaded it
+                self._st_model = self._build_st()
+
+    def _build_st(self):
         from sentence_transformers import SentenceTransformer
 
         if self.backend == "qwen3":
@@ -683,10 +702,10 @@ class Embedder:
             # trip. Boot must not depend on huggingface.co reachability —
             # air-gapped / proxied on-prem deployments (Q3 posture); the
             # online adapter-config probe is a known flake behind firewalls.
-            self._st_model = SentenceTransformer(model_name, local_files_only=True, **kwargs)
+            return SentenceTransformer(model_name, local_files_only=True, **kwargs)
         except Exception:
             # Model not cached yet — fall back to a normal downloading load.
-            self._st_model = SentenceTransformer(model_name, **kwargs)
+            return SentenceTransformer(model_name, **kwargs)
 
     @property
     def dim(self) -> int:

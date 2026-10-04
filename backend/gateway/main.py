@@ -105,7 +105,7 @@ logger = logging.getLogger(__name__)
 
 # Timeouts must nest inside the browser's wait. Every AI-Engine call and every
 # model wait behind it is capped by one analysis deadline (ANALYZE_DEADLINE_SEC,
-# sent down as X-Deadline — research 09 BE-4), so only that deadline has to
+# its seconds left sent down as X-Time-Budget — research 09 BE-4), so only that deadline has to
 # stay under the SPA's budget; say so at startup instead of failing as an
 # unexplained client timeout (review V-B4).
 _SPA_ANALYZE_BUDGET_SEC = 420  # frontend/src/api/client.js LLM_TIMEOUT_MS
@@ -162,20 +162,57 @@ def _safe_audit_write(**kwargs: Any) -> None:
         metrics.AUDIT_WRITE_DURATION.observe(time.monotonic() - _audit_started)
 
 
-async def _audit_off_loop(**kwargs: Any) -> None:
-    """``_safe_audit_write`` in a worker thread (BE-6), cancellation-proof.
+def _submit(fn, /, *args: Any, **kwargs: Any) -> asyncio.Future:
+    """Start ``fn`` in a worker thread NOW (BE-6); return a future to await.
 
-    The write is SUBMITTED before the first await, so it runs to completion
-    even if this handler is cancelled (client gone, shutdown) — anyio
-    cancellation is level-triggered and would hit any later await in a
-    ``finally``, and ``run_in_threadpool`` checks for cancellation before it
-    submits. Invariant #4: the row is written whatever happens to the caller.
+    For side effects that must happen exactly once whatever happens to the
+    request — the audit row (invariant #4), quota settlement. Two traps:
+    ``run_in_threadpool`` checks for cancellation BEFORE it submits, and an
+    unshielded ``run_in_executor`` future, when its awaiter is cancelled,
+    cancels the job if no worker has picked it up yet. anyio cancellation is
+    level-triggered (it re-cancels at every await of a cancelled scope) and
+    uvicorn cancels request tasks at shutdown, so either trap dropped rows
+    (review W2-A1: 28 of 30 under an anyio cancel). Here the job is submitted
+    synchronously and the returned future is shielded: cancelling the
+    awaiter never cancels the job. Callers that hand over ownership (quota)
+    mark it settled between ``_submit`` and the ``await``.
     """
     ctx = contextvars.copy_context()  # keep the bound request id in the logs
-    write = asyncio.get_running_loop().run_in_executor(
-        None, functools.partial(ctx.run, _safe_audit_write, **kwargs)
+    job = asyncio.get_running_loop().run_in_executor(None, functools.partial(ctx.run, fn, *args, **kwargs))
+    return asyncio.shield(job)
+
+
+async def _reserve(user: User, estimated_tokens: int, policy_decisions: dict[str, bool]) -> int:
+    """``rate_limit.reserve_llm_budget`` off the event loop (Redis round
+    trips). If this request is cancelled while the reservation is being made,
+    the reservation still completes in its thread — give it back then instead
+    of leaving it reserved until the bucket expires."""
+    ctx = contextvars.copy_context()
+    loop = asyncio.get_running_loop()
+    job = loop.run_in_executor(
+        None, functools.partial(ctx.run, rate_limit.reserve_llm_budget, user, estimated_tokens, policy_decisions)
     )
-    await write
+    try:
+        return await asyncio.shield(job)
+    except asyncio.CancelledError:
+
+        def _give_back(done: asyncio.Future) -> None:
+            if not done.cancelled() and done.exception() is None:
+                loop.run_in_executor(None, _release_reservation, user, done.result())
+
+        job.add_done_callback(_give_back)
+        raise
+
+
+def _release_reservation(user: User, reserved_tokens: int) -> None:
+    """Give a quota reservation back in full; never raises (it runs on error
+    paths, where it must not mask the original failure)."""
+    if not reserved_tokens:
+        return
+    try:
+        rate_limit.record_usage(user, 0, 0, 0.0, reserved_tokens=reserved_tokens)
+    except Exception:  # noqa: BLE001
+        logger.exception("quota reservation release failed")
 
 
 def _error_response_payload(error: BaseException) -> dict:
@@ -1048,18 +1085,21 @@ _READINESS = readiness.ReadinessProbe(_readiness_checks)
 
 
 @app.get("/livez")
-def livez():
-    """The process answers — nothing else is checked (a liveness probe that
-    touches a dependency turns one slow dependency into a restart loop)."""
+async def livez():
+    """The event loop answers — nothing else is checked (a liveness probe
+    that touches a dependency turns one slow dependency into a restart loop).
+    ``async`` on purpose: a sync handler needs a free worker thread, so a
+    saturated pool would fail liveness (review W2-B2)."""
     return {"ok": True}
 
 
 @app.get("/readyz")
-def readyz():
+async def readyz():
     """This instance can serve an analysis now. Only ok / not ok — which
     dependency failed is in the log and in dependency_up on /metrics; the
-    detailed (and tenant-revealing) /v1/health stays for compatibility."""
-    ready, _ = _READINESS.check()
+    detailed (and tenant-revealing) /v1/health stays for compatibility. The
+    checks run on the loop's default executor, not the request threadpool."""
+    ready, _ = await asyncio.to_thread(_READINESS.check)
     return JSONResponse({"ok": ready}, status_code=200 if ready else 503)
 
 
@@ -1266,10 +1306,91 @@ async def _await_flight(flight: _Flight):
     finally:
         flight.waiters -= 1
         if flight.waiters == 0 and not flight.task.done():
-            # Everyone waiting has gone (client disconnects, shutdown): stop
-            # the model work instead of finishing it for nobody — what
-            # cancelling the handler did before single-flight.
+            # Every request waiting for it was cancelled (shutdown, or a
+            # future per-request timeout — a plain client disconnect does not
+            # cancel the handler in this stack): stop the model work instead
+            # of finishing it for nobody, as cancelling the handler did
+            # before single-flight.
             flight.task.cancel()
+
+
+async def _run_and_settle(
+    user: User,
+    body: AnalysisRequest,
+    *,
+    circuit_open: bool,
+    pre_redacted: tuple[str, list[str]],
+    pre_redacted_hint: tuple[str, list[str]] | None,
+    cache_key: str | None,
+    reserved_tokens: int,
+) -> tuple[AnalysisResponse, dict]:
+    """The single-flight task: orchestrate, then settle what it cost.
+
+    Settled HERE, not in the request that started it: if that request is
+    cancelled while a follower still waits, the follower is served — and the
+    starter used to refund its reservation while the follower refunded its
+    own, an analysis nobody paid for (review W2-A2/B1). This task owns the
+    starter's reservation from the moment it exists: charged at the true usage
+    when the analysis completes, released in full when it fails or is
+    cancelled. Usage, the business metric, case summary and cache write
+    happen once per analysis however many requests share it.
+    """
+    try:
+        response, obs = await orchestrate_analysis(
+            user,
+            body,
+            circuit_open=circuit_open,
+            pre_redacted=pre_redacted,
+            pre_redacted_hint=pre_redacted_hint,
+        )
+    except BaseException:
+        # No result to charge. Submitted before any await: a cancellation
+        # cannot skip it.
+        await _submit(_release_reservation, user, reserved_tokens)
+        raise
+
+    # Reconcile against the reservation so the counters reflect TRUE spend,
+    # not reservation + actual (P1-1). (llm_cost_usd_total is written per call
+    # in the orchestrator.)
+    try:
+        await _submit(
+            rate_limit.record_usage,
+            user,
+            prompt_tokens=obs["prompt_tokens"],
+            completion_tokens=obs["completion_tokens"],
+            cost_usd=obs["estimated_cost_usd"],
+            reserved_tokens=reserved_tokens,
+        )
+    except Exception:
+        # The quota store refused the charge: release instead of leaving the
+        # reservation stranded, and fail like before (an uncharged result is
+        # not served).
+        await _submit(_release_reservation, user, reserved_tokens)
+        raise
+    # Q19 業務 metric: one analysed OA (not cache hits, joins or errors).
+    metrics.OA_ANALYZED.inc({"tenant": user.tenant_id})
+
+    # Case summary (dashboard / case list) — metadata only, no OA text. A
+    # failure here must never fail the analysis the user waited for.
+    try:
+        await _submit(
+            case_summary.record_analysis,
+            user,
+            body.case_id,
+            body.target_patent_no,
+            _jurisdiction_for_patent(body.target_patent_no),
+            response,
+        )
+    except Exception:  # noqa: BLE001 — convenience data, never fatal
+        logger.exception("case summary write failed for case=%s", body.case_id)
+
+    # Cache write — never for a degraded result (mock fallback or saga
+    # placeholder): it would replay a short outage for the whole TTL, and the
+    # attorney's retry would keep getting the placeholder (B-15). Hits replace
+    # the stored request id and gate outcomes with their own.
+    if not obs.get("degraded"):
+        await _submit(cache.set_response_at, cache_key, user.tenant_id, response.model_dump(mode="json"))
+    return response, obs
 
 
 @app.post("/v1/oa/analyze", response_model=AnalysisResponse)
@@ -1356,10 +1477,8 @@ async def analyze_oa(
         #                    counters by (actual - reserved)
         #   - error       -> release in full (except-block below)
         estimated_tokens = max(1, len(body.oa_text) // 3)
-        # Redis round trips — off the event loop (BE-6).
-        reserved_quota_tokens = await run_in_threadpool(
-            rate_limit.reserve_llm_budget, user, estimated_tokens, policy_decisions
-        )
+        # Redis round trips — off the event loop (BE-6), cancellation-safe.
+        reserved_quota_tokens = await _reserve(user, estimated_tokens, policy_decisions)
         quota_reservation_settled = False
 
         # 4. Cache (Q9) — M-7 fix: hash POST-redaction text, not raw input.
@@ -1425,10 +1544,9 @@ async def analyze_oa(
             # Cache hit does no LLM work — release the quota reservation in
             # full (delta = 0 - reserved), otherwise every hit silently burns
             # the user's daily quota.
-            await run_in_threadpool(
-                rate_limit.record_usage, user, 0, 0, 0.0, reserved_tokens=reserved_quota_tokens
-            )
-            quota_reservation_settled = True
+            release = _submit(_release_reservation, user, reserved_quota_tokens)
+            quota_reservation_settled = True  # owned by the submitted job now
+            await release
             http_response.headers["Server-Timing"] = _server_timing(redact_timing, "cache;desc=hit")
             # T1: the cached copy carries the ORIGINAL run's gate outcomes —
             # overwrite with THIS request's decisions (auth/rpm/quota all
@@ -1465,10 +1583,9 @@ async def analyze_oa(
             # failure (e.g. the 504 deadline) is this request's failure too.
             shared_response, _ = await _await_flight(flight)
             response = shared_response.model_copy(deep=True)
-            await run_in_threadpool(
-                rate_limit.record_usage, user, 0, 0, 0.0, reserved_tokens=reserved_quota_tokens
-            )
-            quota_reservation_settled = True
+            release = _submit(_release_reservation, user, reserved_quota_tokens)
+            quota_reservation_settled = True  # owned by the submitted job now
+            await release
             metrics.ANALYZE_COALESCED.inc()
             policy_decisions["coalesced"] = True
             response.policy_decisions = dict(policy_decisions)
@@ -1483,17 +1600,23 @@ async def analyze_oa(
 
         # Leader. The forwarded circuit-breaker state makes the AI Engine
         # degrade the draft model to the cheap tier when the cost breaker has
-        # tripped (Q18 / invariant #8).
+        # tripped (Q18 / invariant #8). Usage, case summary and cache write
+        # happen in the flight task (_run_and_settle), which also takes over
+        # this request's quota reservation — settled there even if this
+        # request is cancelled while a follower is still waiting.
         flight = _start_flight(
             cache_key,
-            orchestrate_analysis(
+            _run_and_settle(
                 user,
                 body,
                 circuit_open=policy_decisions.get("circuit_open", False),
                 pre_redacted=pre_redacted,
                 pre_redacted_hint=pre_redacted_hint,
+                cache_key=cache_key,
+                reserved_tokens=reserved_quota_tokens,
             ),
         )
+        quota_reservation_settled = True  # owned by the flight task now
         shared_response, obs = await _await_flight(flight)
         # Followers copy the shared object; the leader answers with its own copy.
         response = shared_response.model_copy(deep=True)
@@ -1503,55 +1626,18 @@ async def analyze_oa(
         http_response.headers["Server-Timing"] = _server_timing(
             {**redact_timing, **obs.get("stage_ms", {})}
         )
-
-        # 7. Record usage — reconcile against the step-3 reservation so the
-        # counters reflect TRUE spend, not reservation + actual (P1-1).
-        await run_in_threadpool(
-            rate_limit.record_usage,
-            user,
-            prompt_tokens=obs["prompt_tokens"],
-            completion_tokens=obs["completion_tokens"],
-            cost_usd=obs["estimated_cost_usd"],
-            reserved_tokens=reserved_quota_tokens,
-        )
-        quota_reservation_settled = True
-        # (llm_cost_usd_total is written per call in the orchestrator.)
-
-        # 7b. Case summary (dashboard / case list) — metadata only, no OA
-        # text. A failure here must never fail the analysis the user waited for.
-        try:
-            await run_in_threadpool(
-                case_summary.record_analysis,
-                user,
-                body.case_id,
-                body.target_patent_no,
-                _jurisdiction_for_patent(body.target_patent_no),
-                response,
-            )
-        except Exception:  # noqa: BLE001 — convenience data, never fatal
-            logger.exception("case summary write failed for case=%s", body.case_id)
-
-        # 8. Cache write — never for a degraded result (mock fallback or saga
-        # placeholder): it would replay a short outage for the whole TTL, and
-        # the attorney's retry would keep getting the placeholder (B-15).
-        if not obs.get("degraded"):
-            await run_in_threadpool(
-                cache.set_response_at, cache_key, user.tenant_id, response.model_dump(mode="json")
-            )
-
         return response
     except BaseException as exc:  # noqa: BLE001 — must reach the finally
         error = exc
         policy_decisions["error"] = True
         # A failed request must not strand its quota reservation (P1-1):
-        # release in full so quota doesn't silently drain on errors. Wrapped
-        # defensively — releasing must never mask the original exception.
-        if reserved_quota_tokens and not quota_reservation_settled:
-            try:
-                rate_limit.record_usage(user, 0, 0, 0.0, reserved_tokens=reserved_quota_tokens)
-                quota_reservation_settled = True
-            except Exception:  # noqa: BLE001
-                logger.exception("quota reservation release failed")
+        # release in full so quota doesn't silently drain on errors. Never
+        # masks the original exception (_release_reservation does not raise;
+        # only a second cancellation can interrupt the wait, not the job).
+        if not quota_reservation_settled:
+            release = _submit(_release_reservation, user, reserved_quota_tokens)
+            quota_reservation_settled = True
+            await release
         raise
     finally:
         elapsed = time.monotonic() - started
@@ -1567,10 +1653,8 @@ async def analyze_oa(
             elapsed,
             {"endpoint": "/v1/oa/analyze", "method": "POST", "status": str(status_code)},
         )
-        # Q19 業務 metric: count a successfully-analyzed OA (not cache hits,
-        # not errors — cache hits already counted on their original analyze).
-        if error is None and cached_payload is None:
-            metrics.OA_ANALYZED.inc({"tenant": user.tenant_id})
+        # (oa_analyzed_total is counted once per completed analysis, in
+        # _run_and_settle — not per request sharing it.)
         # Pick the right audit shape based on which path the request took.
         if error is not None:
             response_payload = _error_response_payload(error)
@@ -1595,7 +1679,9 @@ async def analyze_oa(
             completion_tokens = obs.get("completion_tokens", 0)
             masked_rules = obs.get("mask_rules", [])
             pd = {**policy_decisions, "cache_hit": False}
-        await _audit_off_loop(
+        # Invariant #4 — exactly one row, cancellation included (see _submit).
+        await _submit(
+            _safe_audit_write,
             user=user,
             case_id=body.case_id,
             endpoint="/v1/oa/analyze",

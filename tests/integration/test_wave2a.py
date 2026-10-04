@@ -11,7 +11,10 @@ Engine (mock LLM).
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import gc
+import inspect
+import json
 import logging
 import re
 import sqlite3
@@ -209,6 +212,232 @@ async def test_an_engine_call_that_times_out_is_a_504_and_counted(monkeypatch):
     assert _stage_count("parse", "timeout") == before + 1
 
 
+def test_the_engine_running_out_of_time_in_a_required_step_is_a_504(
+    monkeypatch, gateway_client, alice_token, patched_ai_engine
+):
+    """W2-A6/B4: BudgetExhausted inside the engine used to escape as a 500
+    (anthropic) or turn into labelled mock text (local / dify)."""
+    from backend.ai_engine import oa_analyzer
+
+    def spent(*args, **kwargs):
+        raise time_budget.BudgetExhausted("request deadline leaves 0.4s")
+
+    monkeypatch.setattr(oa_analyzer, "parse_oa", spent)
+    errors_before = _counter_total(metrics.LLM_ERRORS)
+    timeouts_before = _stage_count("parse", "timeout")
+    resp = _analyze(gateway_client, alice_token)
+    assert resp.status_code == 504, resp.text
+    assert _stage_count("parse", "timeout") == timeouts_before + 1
+    assert _counter_total(metrics.LLM_ERRORS) == errors_before  # a deadline, not a model failure
+
+
+def test_the_engine_running_out_of_time_in_a_draft_degrades_that_rejection(
+    monkeypatch, gateway_client, alice_token, patched_ai_engine
+):
+    from backend.ai_engine import oa_analyzer
+
+    def spent(*args, **kwargs):
+        raise time_budget.BudgetExhausted("request deadline leaves 0.4s")
+
+    monkeypatch.setattr(oa_analyzer, "draft_response", spent)
+    resp = _analyze(gateway_client, alice_token)
+    assert resp.status_code == 200, resp.text
+    drafts = resp.json()["drafts"]
+    assert drafts and all(d["draft_text"] == orch._DEGRADED_NOTE for d in drafts)
+    again = _analyze(gateway_client, alice_token)
+    assert again.json()["cost_meta"]["cache_hit"] is False  # degraded: never cached
+
+
+def _in_context(fn):
+    """Run ``fn`` in a copy of the current context, so request-id / deadline
+    bindings made inside never leak into later tests."""
+    return contextvars.copy_context().run(fn)
+
+
+def _ollama_reply(url):
+    body = {"choices": [{"message": {"content": "{}"}}], "usage": {}}
+    return httpx.Response(200, json=body, request=httpx.Request("POST", url))
+
+
+def test_local_model_waits_take_the_time_left(monkeypatch):
+    from backend.ai_engine import llm_client
+
+    timeouts = []
+
+    def fake_post(url, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return _ollama_reply(url)
+
+    monkeypatch.setattr(settings, "LLM_MODE", "local")
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    def call():
+        time_budget.bind_deadline(time.time() + 12)
+        return llm_client.chat(system="s", user="u", intent="parse_oa", security_level="public")
+
+    reply = _in_context(call)
+    assert 9 <= timeouts[0] <= 10
+    assert "DEGRADED" not in reply.model
+
+
+def test_local_mode_out_of_time_raises_instead_of_answering_with_mock_text(monkeypatch):
+    from backend.ai_engine import llm_client
+
+    def capped_wait_fires(url, **kwargs):
+        time_budget.bind_deadline(time.time() + 2.5)  # the capped wait used the budget up
+        raise httpx.ReadTimeout("no reply", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(settings, "LLM_MODE", "local")
+    monkeypatch.setattr(httpx, "post", capped_wait_fires)
+
+    def spent_before_the_call():
+        time_budget.bind_deadline(time.time() + 2.5)
+        return llm_client.chat(system="s", user="u", intent="parse_oa", security_level="public")
+
+    def spent_during_the_call():
+        time_budget.bind_deadline(time.time() + 60)
+        return llm_client.chat(system="s", user="u", intent="parse_oa", security_level="public")
+
+    with pytest.raises(time_budget.BudgetExhausted):
+        _in_context(spent_before_the_call)
+    with pytest.raises(time_budget.BudgetExhausted):
+        _in_context(spent_during_the_call)
+
+
+def test_local_mode_still_degrades_when_ollama_is_slow_within_its_own_timeout(monkeypatch):
+    from backend.ai_engine import llm_client
+
+    def slow(url, **kwargs):
+        raise httpx.ReadTimeout("no reply", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(settings, "LLM_MODE", "local")
+    monkeypatch.setattr(httpx, "post", slow)
+
+    def call():
+        time_budget.bind_deadline(time.time() + 300)
+        return llm_client.chat(system="s", user="u", intent="parse_oa", security_level="public")
+
+    assert "-DEGRADED-" in _in_context(call).model
+
+
+class _FakeDify:
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.calls: list[dict] = []
+
+    def post(self, url, json, headers, timeout):
+        self.calls.append({"user": json["user"], "timeout": timeout})
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return httpx.Response(200, json=self.outcome, request=httpx.Request("POST", url))
+
+
+def test_dify_calls_take_the_time_left_and_never_send_the_raw_request_id():
+    from backend.ai_engine import llm_client
+
+    dify = _FakeDify({"data": {"status": "succeeded", "outputs": {"text": "{}"}}})
+    llm = llm_client.DifyLLM(api_url="http://dify.test", api_key="k", client=dify)
+
+    def call():
+        obs.bind_request_id("trace-陳小華-0912")
+        time_budget.bind_deadline(time.time() + 12)
+        return llm.chat("s", "u", "parse_oa", "m")
+
+    reply = _in_context(call)
+    assert "DEGRADED" not in reply.model
+    sent = dify.calls[0]
+    assert 9 <= sent["timeout"] <= 10
+    assert sent["user"] == llm_client.dify_user_for("trace-陳小華-0912")
+    assert "陳" not in sent["user"] and "0912" not in sent["user"] and "trace" not in sent["user"]
+    assert llm_client.dify_user_for("trace-other") != sent["user"]
+    assert llm_client.dify_user_for(None) == "citewall-gateway"
+
+
+def test_dify_out_of_time_raises_instead_of_answering_with_mock_text():
+    from backend.ai_engine import llm_client
+
+    llm = llm_client.DifyLLM(api_url="http://dify.test", api_key="k", client=_FakeDify({}))
+
+    def call():
+        time_budget.bind_deadline(time.time() + 2.5)
+        return llm.chat("s", "u", "parse_oa", "m")
+
+    with pytest.raises(time_budget.BudgetExhausted):
+        _in_context(call)
+
+
+async def test_anthropic_stops_retrying_when_no_attempt_fits_in_the_deadline():
+    import anthropic
+
+    from backend.ai_engine import llm_client
+
+    attempts = []
+
+    class _Messages:
+        async def create(self, **kwargs):
+            attempts.append(kwargs.get("timeout"))
+            raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.test"))
+
+    class _Client:
+        messages = _Messages()
+
+    time_budget.bind_deadline(time.time() + 8)
+    try:
+        with pytest.raises(time_budget.BudgetExhausted):
+            await llm_client._call_with_retry(_Client(), max_retries=3, model="m")
+    finally:
+        time_budget.bind_deadline(None)
+    assert len(attempts) == 1, "retried although no attempt could finish in time"
+    assert attempts[0] <= 6  # the attempt's own timeout was capped by the deadline
+
+
+def _mock_engine(monkeypatch, handler):
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        orch.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)
+    )
+
+
+async def test_a_stopped_call_is_counted_as_cancelled_not_as_an_error(monkeypatch):
+    """W2-A7: when the analysis fails elsewhere, the calls it stops are not
+    this step's errors — they inflated the error panel."""
+
+    async def slow(request):
+        await asyncio.sleep(30)
+
+    _mock_engine(monkeypatch, slow)
+    client = orch.AIEngineClient("http://engine.test", deadline=time.time() + 60)
+    errors_before, cancelled_before = _stage_count("draft", "error"), _stage_count("draft", "cancelled")
+    task = asyncio.create_task(client.call("/v1/draft_response", {"rejection": {}}))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _stage_count("draft", "cancelled") == cancelled_before + 1
+    assert _stage_count("draft", "error") == errors_before
+
+
+async def test_a_call_with_no_time_left_is_counted_as_a_timeout(monkeypatch):
+    _mock_engine(monkeypatch, lambda request: pytest.fail("a call started with no time left"))
+    client = orch.AIEngineClient("http://engine.test", deadline=time.time() + 1)
+    before = _stage_count("verify", "timeout")
+    with pytest.raises(orch.AnalysisTimeout):
+        await client.call("/v1/verify_citations", {"draft": {}})
+    assert _stage_count("verify", "timeout") == before + 1
+
+
+async def test_the_engine_gets_seconds_left_not_a_clock_time(monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["budget"] = request.headers.get("X-Time-Budget")
+        return httpx.Response(200, json={})
+
+    _mock_engine(monkeypatch, handler)
+    await orch.AIEngineClient("http://engine.test", deadline=time.time() + 40).call("/v1/deadline", {})
+    assert 38 <= float(seen["budget"]) <= 40
+
+
 def test_a_call_never_waits_past_the_deadline():
     client = orch.AIEngineClient("http://engine.test", deadline=time.time() + 30)
     assert client._timeout("/v1/parse_oa") <= 30
@@ -229,12 +458,18 @@ def test_model_waits_take_the_time_left(monkeypatch):
     assert time_budget.budget(300) == 300  # no request deadline → own default
 
 
-def test_a_nonsense_deadline_header_is_ignored():
-    now = time.time()
-    assert time_budget.parse_deadline("garbage", now=now) is None
-    assert time_budget.parse_deadline(str(now + 7200), now=now) is None
-    assert time_budget.parse_deadline(str(now - 600), now=now) is None
-    assert time_budget.parse_deadline(str(now + 100), now=now) == pytest.approx(now + 100)
+def test_the_budget_travels_as_seconds_left_not_a_clock_time():
+    """Relative on the wire, so the two hosts' clocks need not agree (W2-B6)."""
+    now = 1_000_000.0
+    assert time_budget.format_budget(now + 42.5, now=now) == "42.500"
+    assert time_budget.format_budget(now - 5, now=now) == "0.000"
+    # The engine turns it into a deadline on ITS clock.
+    assert time_budget.parse_budget("42.5", now=5.0) == pytest.approx(47.5)
+    # Spent budgets stay spent — never "no deadline".
+    assert time_budget.parse_budget("0", now=5.0) == pytest.approx(5.0)
+    assert time_budget.parse_budget("-3", now=5.0) == pytest.approx(5.0)
+    for nonsense in ("garbage", "nan", "inf", "7200", ""):
+        assert time_budget.parse_budget(nonsense, now=5.0) is None, nonsense
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +637,143 @@ def test_a_leader_failure_is_the_followers_failure_with_its_quota_back(
     assert not gw_main._inflight_analyses
 
 
+def _asgi_analyze(app, token: str, request_id: str, sink: list) -> asyncio.Task:
+    """Drive the gateway app directly, so the request task can be cancelled
+    natively (what uvicorn does to in-flight requests at shutdown)."""
+    body = json.dumps(
+        {"oa_text": _OA, "case_id": "CASE-2025-001", "target_patent_no": "US17123456"}
+    ).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/oa/analyze",
+        "raw_path": b"/v1/oa/analyze",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+            (b"authorization", f"Bearer {token}".encode()),
+            (obs.REQUEST_ID_HEADER.lower().encode(), request_id.encode()),
+        ],
+        "client": ("127.0.0.1", 1234),
+        "server": ("testserver", 80),
+    }
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        sink.append(message)
+
+    return asyncio.create_task(app(scope, receive, send))
+
+
+async def _until(pred, timeout: float = 10.0) -> None:
+    end = time.monotonic() + timeout
+    while not pred():
+        assert time.monotonic() < end, "condition never became true"
+        await asyncio.sleep(0.01)
+
+
+async def test_a_cancelled_leader_still_pays_for_the_analysis_its_follower_gets(
+    monkeypatch, gateway_app, patched_ai_engine
+):
+    """W2-A2/B1: the leader refunded its reservation on cancellation and the
+    follower refunded its own — the analysis the follower received was paid by
+    nobody, repeatable at will (send twice, drop the first)."""
+    from backend.gateway.auth import issue_token
+
+    release = asyncio.Event()
+    real = gw_main.orchestrate_analysis
+
+    async def held(*args, **kwargs):
+        await release.wait()
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(gw_main, "orchestrate_analysis", held)
+    usage = _spy_usage(monkeypatch)
+    analysed_before = _counter_total(metrics.OA_ANALYZED)
+    token = issue_token("alice")
+
+    leader_sink, follower_sink = [], []
+    leader = _asgi_analyze(gateway_app, token, "sf-gone-leader", leader_sink)
+    await _until(lambda: len(gw_main._inflight_analyses) == 1)
+    flight = next(iter(gw_main._inflight_analyses.values()))
+    follower = _asgi_analyze(gateway_app, token, "sf-gone-follower", follower_sink)
+    await _until(lambda: flight.waiters == 2)
+    leader.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leader
+    release.set()
+    await asyncio.wait_for(follower, 30)
+    await _until(lambda: flight.task.done())
+
+    status = next(m["status"] for m in follower_sink if m["type"] == "http.response.start")
+    assert status == 200
+    charged = [k for _, k in usage if k.get("prompt_tokens")]
+    assert len(charged) == 1, f"the analysis was charged {len(charged)} times: {usage}"
+    assert charged[0]["reserved_tokens"] > 0  # the leader's reservation, settled at true usage
+    assert sum(1 for args, _ in usage if args == (0, 0, 0.0)) == 1  # only the follower's refund
+    assert _counter_total(metrics.OA_ANALYZED) == analysed_before + 1
+    rows = {m for m, _ in _last_analyze_audit_rows(2)}
+    assert rows == {None, "coalesced"}  # the cancelled leader's error row + the follower's
+    # The shared task also wrote the cache although its starter was gone.
+    third_sink = []
+    await asyncio.wait_for(_asgi_analyze(gateway_app, token, "sf-gone-third", third_sink), 30)
+    third = json.loads(b"".join(m.get("body", b"") for m in third_sink if m["type"] == "http.response.body"))
+    assert third["cost_meta"]["cache_hit"] is True
+
+
+async def test_a_pipeline_cancelled_mid_draft_leaves_no_unread_task_error(monkeypatch, caplog, patched_ai_engine):
+    """W2-A5: claim masking fails, one rejection fails fast, the other is
+    cancelled while drafting — its element-comparison task had already failed
+    and nobody read the exception."""
+    from backend.shared.models import AnalysisRequest, User, UserRole
+
+    real_call = orch.AIEngineClient.call
+    drafts: list[int] = []
+
+    async def call(self, path, payload):
+        if path == "/v1/claim_tree":
+            return {"claim_tree": [{"claim_no": 1, "text": "A widget comprising a gear.", "is_independent": True}]}
+        if path == "/v1/draft_response":
+            drafts.append(1)
+            if len(drafts) == 1:
+                await asyncio.sleep(5)  # the first rejection drafts slowly
+        return await real_call(self, path, payload)
+
+    real_redact = masking.redact
+
+    def redact(text, tenant):
+        if "widget" in text:
+            raise RuntimeError("mapping store down")
+        return real_redact(text, tenant)
+
+    monkeypatch.setattr(orch.AIEngineClient, "call", call)
+    monkeypatch.setattr(masking, "redact", redact)
+    user = User(user_id="alice", tenant_id="tenant_a", role=UserRole.ATTORNEY, display_name="A")
+    req = AnalysisRequest(oa_text=_OA, case_id="CASE-2025-001", target_patent_no="US17123456")
+    with caplog.at_level(logging.ERROR, logger="asyncio"):
+        with pytest.raises(RuntimeError, match="mapping store down"):
+            await orch.orchestrate_analysis(user, req)
+        await asyncio.sleep(0.1)
+        gc.collect()
+        await asyncio.sleep(0.1)
+    assert len(drafts) >= 2, "the scenario needs two rejections"
+    leaked = [r.getMessage() for r in caplog.records if "never retrieved" in r.getMessage()]
+    assert not leaked, leaked
+
+
 async def test_one_waiter_leaving_does_not_cancel_the_shared_analysis():
     gate = asyncio.Event()
 
@@ -448,55 +820,132 @@ async def test_the_analysis_stops_when_every_waiter_has_gone():
 # ---------------------------------------------------------------------------
 # BE-6: the audit row survives a cancelled handler
 # ---------------------------------------------------------------------------
-async def test_a_cancelled_handler_still_writes_its_audit_row(monkeypatch):
-    written = threading.Event()
-
-    def slow_write(**kwargs):
-        time.sleep(0.2)
-        written.set()
-
-    monkeypatch.setattr(gw_main, "_safe_audit_write", slow_write)
-
+def _audit_finally_handler():
     async def handler():
         try:
             await asyncio.sleep(30)
         finally:
-            await gw_main._audit_off_loop(endpoint="/v1/oa/analyze")
+            await gw_main._submit(gw_main._safe_audit_write, endpoint="/v1/oa/analyze")
 
-    task = asyncio.create_task(handler())
+    return handler
+
+
+@pytest.mark.parametrize("busy_workers", [0, 8])
+async def test_an_anyio_cancelled_handler_still_writes_its_audit_row(monkeypatch, busy_workers):
+    """W2-A1: anyio re-cancels at every await of a cancelled scope. The first
+    version awaited an unshielded executor future — cancelling it cancelled
+    the queued job, and 28 of 30 rows were lost (5 of 5 with busy workers)."""
+    import anyio
+
+    written = []
+    monkeypatch.setattr(gw_main, "_safe_audit_write", lambda **kw: written.append(1))
+    loop = asyncio.get_running_loop()
+    gate = threading.Event()
+    blockers = [loop.run_in_executor(None, gate.wait, 5) for _ in range(busy_workers)]
+    rounds = 20
+    try:
+        for _ in range(rounds):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(_audit_finally_handler())
+                await asyncio.sleep(0.01)
+                tg.cancel_scope.cancel()  # what BaseHTTPMiddleware's task group does
+    finally:
+        gate.set()
+        await asyncio.gather(*blockers)
+    deadline = time.monotonic() + 5
+    while len(written) < rounds and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    assert len(written) == rounds, f"dropped {rounds - len(written)} of {rounds} audit rows"
+
+
+async def test_a_natively_cancelled_handler_still_writes_its_audit_row(monkeypatch):
+    """uvicorn cancels request tasks at shutdown; cancelled twice in a row,
+    with no pause for a worker thread to pick the job up."""
+    written = threading.Event()
+    monkeypatch.setattr(gw_main, "_safe_audit_write", lambda **kw: written.set())
+    task = asyncio.create_task(_audit_finally_handler()())
     await asyncio.sleep(0)
-    task.cancel()  # client gone …
-    await asyncio.sleep(0)
-    task.cancel()  # … and cancelled again inside the finally (anyio is level-triggered)
+    task.cancel()
+    await asyncio.sleep(0)  # the finally submits the write and awaits it …
+    task.cancel()  # … and is cancelled again at once
     with pytest.raises(asyncio.CancelledError):
         await task
     assert written.wait(2.0), "the audit row was dropped with the cancelled request"
 
 
+async def test_a_reservation_made_after_cancellation_is_given_back(monkeypatch):
+    """The thread finishes the reservation even if the request was cancelled
+    meanwhile — it must be released, not left reserved until the bucket
+    expires."""
+    released = threading.Event()
+    seen = {}
+
+    def slow_reserve(user, tokens, decisions):
+        time.sleep(0.2)
+        return 321
+
+    def record_usage(user, *args, **kwargs):
+        seen.update(args=args, kwargs=kwargs)
+        released.set()
+
+    monkeypatch.setattr(rate_limit, "reserve_llm_budget", slow_reserve)
+    monkeypatch.setattr(rate_limit, "record_usage", record_usage)
+    task = asyncio.create_task(gw_main._reserve(object(), 1000, {}))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await asyncio.to_thread(released.wait, 3.0)
+    assert seen["args"] == (0, 0, 0.0) and seen["kwargs"]["reserved_tokens"] == 321
+
+
 # ---------------------------------------------------------------------------
 # M-13: audit reads have their own read-only connection
 # ---------------------------------------------------------------------------
-def test_audit_reads_are_read_only_and_do_not_queue_behind_writes(tmp_path):
+def _write_row(writer, i: int) -> None:
+    from backend.shared.models import User, UserRole
+
+    writer.write(
+        user=User(user_id="alice", tenant_id="tenant_a", role=UserRole.ATTORNEY, display_name="alice"),
+        case_id=f"case-{i}",
+        endpoint="/v1/oa/analyze",
+        request_payload={"q": i},
+        response_payload={"a": i},
+        masked_rules=[],
+        model_used="mock",
+        prompt_tokens=1,
+        completion_tokens=1,
+        latency_ms=1,
+        policy_decisions={},
+    )
+
+
+def test_audit_reads_are_read_only(tmp_path):
     writer = audit.AuditWriter(path=tmp_path / "audit.db")
     try:
         with pytest.raises(sqlite3.OperationalError):
             writer._read_conn.execute("CREATE TABLE intruder(a)")
-        holding, release = threading.Event(), threading.Event()
-
-        def hold_write_lock():
-            with writer._lock:
-                holding.set()
-                release.wait(5)
-
-        t = threading.Thread(target=hold_write_lock)
-        t.start()
-        assert holding.wait(2)
-        started = time.monotonic()
-        writer._fetchall("SELECT COUNT(*) FROM audit")
-        assert time.monotonic() - started < 1.0
-        release.set()
-        t.join()
         writer.ping()
+    finally:
+        writer.close()
+
+
+def test_an_open_audit_read_does_not_hold_up_audit_writes(tmp_path):
+    """W2-A3: with the separate read connection and a rollback journal, an
+    in-progress read (a chain verify) made every audit COMMIT wait for it —
+    3 s of read, 3.05 s of write. WAL lets them run side by side."""
+    writer = audit.AuditWriter(path=tmp_path / "audit.db")
+    try:
+        assert writer._conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        for i in range(5):
+            _write_row(writer, i)
+        cursor = writer._read_conn.execute("SELECT * FROM audit")
+        cursor.fetchone()  # the read is now open, holding its snapshot
+        started = time.monotonic()
+        _write_row(writer, 99)
+        assert time.monotonic() - started < 1.0, "the audit write waited for a reader"
+        cursor.fetchall()
+        assert writer._fetchall("SELECT COUNT(*) FROM audit")[0][0] == 6
     finally:
         writer.close()
 
@@ -531,10 +980,31 @@ def _fake_get(status_code: int):
     return get
 
 
-def test_gateway_liveness_touches_nothing(monkeypatch, gateway_client):
-    monkeypatch.setattr(gw_main, "_readiness_checks", lambda: pytest.fail("liveness ran a check"))
+class _ExplodingProbe:
+    def check(self):
+        raise AssertionError("liveness ran a readiness check")
+
+
+def test_liveness_touches_nothing(monkeypatch, gateway_client, ai_engine_app):
+    from backend.ai_engine import main as ai_main
+
+    # Replace the probe objects themselves (the first version patched the
+    # check factory, which the probe had already captured — W2 test review).
+    monkeypatch.setattr(gw_main, "_READINESS", _ExplodingProbe())
+    monkeypatch.setattr(ai_main, "_READINESS", _ExplodingProbe())
     resp = gateway_client.get("/livez")
     assert resp.status_code == 200 and resp.json() == {"ok": True}
+    with TestClient(ai_engine_app) as engine:
+        assert engine.get("/livez").json() == {"ok": True}
+
+
+def test_liveness_needs_no_worker_thread():
+    """A sync handler waits for a free threadpool worker; the AI Engine's
+    sync inference endpoints hold them for minutes (W2-B2)."""
+    from backend.ai_engine import main as ai_main
+
+    for handler in (gw_main.livez, gw_main.readyz, ai_main.livez, ai_main.readyz):
+        assert inspect.iscoroutinefunction(handler), handler
 
 
 def test_gateway_readiness_says_only_ok_or_not(monkeypatch, gateway_client):
@@ -572,16 +1042,79 @@ def test_engine_liveness_and_readiness_need_no_internal_token(monkeypatch, ai_en
         assert client.post("/v1/deadline", json={}).status_code == 401
 
 
-def test_engine_is_not_ready_until_warm_up_finished(monkeypatch, ai_engine_app):
-    from backend.ai_engine import main as ai_main
+@pytest.fixture()
+def fresh_warmup(monkeypatch):
+    """Warm-up state is per process; give the test its own (W2 test review:
+    whichever test first started the engine decided it for the session)."""
     from backend.ai_engine import warmup
 
-    monkeypatch.setattr(warmup, "start_background", lambda: None)
-    monkeypatch.setattr(warmup, "is_done", lambda: False)
-    monkeypatch.setattr(ai_main, "_READINESS", readiness.ReadinessProbe(ai_main._readiness_checks))
-    with TestClient(ai_engine_app) as client:
-        resp = client.get("/readyz")
-    assert resp.status_code == 503 and resp.json() == {"ok": False}
+    monkeypatch.setattr(warmup, "_done", threading.Event())
+    monkeypatch.setattr(warmup, "_started", False)
+    return warmup
+
+
+def test_engine_is_not_ready_until_the_real_warm_up_finished(monkeypatch, fresh_warmup, ai_engine_app):
+    from backend.ai_engine import main as ai_main
+
+    release = threading.Event()
+
+    def slow_preload(url, **kwargs):  # Ollama loading the model
+        release.wait(10)
+        return httpx.Response(200, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(settings, "LLM_MODE", "local")
+    monkeypatch.setattr(fresh_warmup.httpx, "post", slow_preload)
+    monkeypatch.setattr(ai_main.httpx, "get", _fake_get(200))  # Ollama itself answers
+    probe = readiness.ReadinessProbe(ai_main._readiness_checks, ttl_sec=0)
+    monkeypatch.setattr(ai_main, "_READINESS", probe)
+    try:
+        with TestClient(ai_engine_app) as client:  # lifespan starts the warm-up
+            warming = client.get("/readyz")
+            release.set()
+            assert _wait_until(fresh_warmup.is_done)
+            warm = client.get("/readyz")
+    finally:
+        release.set()
+    assert warming.status_code == 503 and warming.json() == {"ok": False}
+    assert warm.status_code == 200 and warm.json() == {"ok": True}
+
+
+def test_warm_up_loads_the_llm_before_the_embedding_models(monkeypatch, fresh_warmup):
+    """The embedder / reranker take the GPU only if enough VRAM is free when
+    they load; loading them first could starve the LLM (W2-B5)."""
+    from backend.ai_engine import rag
+
+    monkeypatch.setattr(settings, "LLM_MODE", "local")
+    monkeypatch.setattr(rag._embedder, "backend", "qwen3")
+    monkeypatch.setattr(rag._reranker, "backend", "qwen3-4b")
+    assert [name for name, _ in fresh_warmup._steps()] == ["ollama", "embedder", "reranker"]
+
+
+def test_a_model_is_loaded_once_when_warm_up_and_a_request_race(monkeypatch):
+    """W2-B3: the start-up warm-up and the first request each loaded the 4B
+    embedder — two copies on the 8 GB card."""
+    from backend.ai_engine import rag
+
+    loads = []
+
+    class _Model:
+        def get_sentence_embedding_dimension(self):
+            return 8
+
+    def slow_build():
+        loads.append(threading.current_thread().name)
+        time.sleep(0.2)
+        return _Model()
+
+    emb = rag.Embedder(backend="mock")
+    emb.backend = "qwen3"
+    monkeypatch.setattr(emb, "_build_st", slow_build)
+    threads = [threading.Thread(target=lambda: emb.dim, name=f"t{i}") for i in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(loads) == 1 and emb.dim == 8
 
 
 def test_local_mode_warm_up_preloads_the_model(monkeypatch):

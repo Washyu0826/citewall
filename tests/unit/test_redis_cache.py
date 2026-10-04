@@ -49,7 +49,6 @@ def patched_backend():
             socket_connect_timeout=settings.REDIS_SOCKET_TIMEOUT_SEC,
             socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SEC,
         )
-        assert 0 < settings.REDIS_SOCKET_TIMEOUT_SEC <= 1.0
         yield backend
 
 

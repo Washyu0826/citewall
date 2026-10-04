@@ -1,8 +1,10 @@
 """Whole-request time budget, passed down every hop (research 09 BE-4).
 
-The gateway fixes ONE absolute deadline per analysis (wall-clock epoch
-seconds, so it survives the process boundary) and sends it to the AI Engine
-as ``X-Deadline``. Each inner wait — the gateway's per-call HTTP timeout, the
+The gateway fixes ONE deadline per analysis and sends the AI Engine the
+SECONDS LEFT in ``X-Time-Budget`` (relative, like gRPC's ``grpc-timeout``:
+an absolute epoch would make every hop depend on the two hosts' clocks
+agreeing — review W2-B6). The engine turns it back into a deadline on its own
+clock on arrival. Each inner wait — the gateway's per-call HTTP timeout, the
 AI Engine's Ollama / Dify / Anthropic timeouts and Anthropic's retry loop —
 takes ``min(its own budget, time left)``. Before this, timeouts only nested
 per hop: three sequential 330 s steps could add up far past the browser's
@@ -19,13 +21,13 @@ caller's own default — no behaviour change.
 from __future__ import annotations
 
 import contextvars
+import math
 import time
 
-DEADLINE_HEADER = "X-Deadline"
+BUDGET_HEADER = "X-Time-Budget"  # seconds left in the request's budget
 
-# Never trust a deadline further out than this (a forged / skewed header must
-# not extend a call beyond its configured budget — budget() takes the min
-# anyway, this only rejects nonsense values).
+# Never trust a budget larger than this (budget() takes the min with each
+# call's own timeout anyway; this only rejects nonsense values).
 _MAX_AHEAD_SEC = 3600.0
 
 _deadline_var: contextvars.ContextVar[float | None] = contextvars.ContextVar(
@@ -37,18 +39,26 @@ class BudgetExhausted(TimeoutError):
     """The request's deadline leaves no useful time for this step."""
 
 
-def parse_deadline(raw: str | None, *, now: float | None = None) -> float | None:
-    """A sane absolute deadline from a header value, else None."""
+def format_budget(deadline: float, *, now: float | None = None) -> str:
+    """The ``X-Time-Budget`` value for an absolute local deadline."""
+    left = deadline - (time.time() if now is None else now)
+    return f"{max(0.0, left):.3f}"
+
+
+def parse_budget(raw: str | None, *, now: float | None = None) -> float | None:
+    """A local absolute deadline from an ``X-Time-Budget`` value, else None.
+
+    A zero or negative budget is a deadline that has already passed (every
+    wait then raises BudgetExhausted) — never "no deadline"."""
     if not raw:
         return None
     try:
-        value = float(raw)
+        left = float(raw)
     except (TypeError, ValueError):
         return None
-    now = time.time() if now is None else now
-    if not (now - 60.0 < value < now + _MAX_AHEAD_SEC):
+    if math.isnan(left) or left > _MAX_AHEAD_SEC:
         return None
-    return value
+    return (time.time() if now is None else now) + max(0.0, left)
 
 
 def bind_deadline(deadline: float | None) -> None:
@@ -86,3 +96,11 @@ def can_afford(seconds: float, *, margin: float = 2.0) -> bool:
     """Whether ``seconds`` more (e.g. a retry backoff plus an attempt) fit."""
     left = remaining_sec()
     return left is None or left - margin >= seconds
+
+
+def out_of_time(*, margin: float = 2.0, minimum: float = 1.0) -> bool:
+    """True when the request's deadline leaves no useful time — e.g. to tell
+    a timeout caused by the deadline-capped wait (raise BudgetExhausted → 504)
+    from a backend that is merely slow within its own timeout (degrade)."""
+    left = remaining_sec()
+    return left is not None and left - margin < minimum

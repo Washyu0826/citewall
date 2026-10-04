@@ -14,6 +14,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hmac
 import time
@@ -143,9 +144,10 @@ async def _internal_token_middleware(request: Request, call_next):
 @app.middleware("http")
 async def _observability_middleware(request: Request, call_next):
     rid = bind_request_id(request.headers.get(REQUEST_ID_HEADER))
-    # The gateway's whole-request deadline (BE-4): every model wait inside
+    # The gateway's whole-request budget (BE-4), sent as seconds left and
+    # turned into a deadline on THIS host's clock: every model wait inside
     # this request is capped by the time left (backend/shared/time_budget.py).
-    time_budget.bind_deadline(time_budget.parse_deadline(request.headers.get(time_budget.DEADLINE_HEADER)))
+    time_budget.bind_deadline(time_budget.parse_budget(request.headers.get(time_budget.BUDGET_HEADER)))
     started = time.monotonic()
     status_code = 500
     try:
@@ -168,7 +170,10 @@ async def _observability_middleware(request: Request, call_next):
         # "-DEGRADED-" label, so without this llm_errors_total stayed at 0
         # through a full outage (review V-B2). The label is the LLM mode —
         # the failed call has no model label to report.
-        if status_code >= 500 and endpoint in _INFERENCE_ENDPOINTS:
+        # A 504 is the analysis deadline running out (counted on the gateway
+        # as analyze_stage_duration_seconds{outcome="timeout"}), not a model
+        # failure.
+        if status_code >= 500 and status_code != 504 and endpoint in _INFERENCE_ENDPOINTS:
             metrics.LLM_ERRORS.inc({"model": f"{settings.LLM_MODE}:request-failed"})
         # Echo the correlation id so a caller / proxy can stitch the trace. The
         # `response` local may be unset if call_next raised — guard for that.
@@ -311,18 +316,31 @@ _READINESS = readiness.ReadinessProbe(_readiness_checks)
 
 
 @app.get("/livez")
-def livez():
-    """The process answers — nothing else is checked (a liveness probe that
-    touches a dependency turns one slow dependency into a restart loop)."""
+async def livez():
+    """The event loop answers — nothing else is checked (a liveness probe
+    that touches a dependency turns one slow dependency into a restart loop).
+    ``async`` on purpose: the inference endpoints are sync and hold worker
+    threads for minutes, so a sync /livez failed under load (review W2-B2)."""
     return {"ok": True}
 
 
 @app.get("/readyz")
-def readyz():
+async def readyz():
     """Warm-up finished and the dependencies this mode needs answer. Only
-    ok / not ok here; which one failed is in the log and dependency_up."""
-    ready, _ = _READINESS.check()
+    ok / not ok here; which one failed is in the log and dependency_up. The
+    checks run on the loop's default executor, not the request threadpool
+    the inference endpoints occupy."""
+    ready, _ = await asyncio.to_thread(_READINESS.check)
     return JSONResponse({"ok": ready}, status_code=200 if ready else 503)
+
+
+@app.exception_handler(time_budget.BudgetExhausted)
+async def _deadline_reached(request: Request, exc: time_budget.BudgetExhausted):
+    """The gateway's analysis deadline left no time for this step: a 504 the
+    gateway maps to its own timeout handling (a required step fails the
+    analysis with 504, an optional one degrades) — not a 500, and not a mock
+    answer dressed up as a result (review W2-A6/B4)."""
+    return JSONResponse(status_code=504, content={"detail": "analysis deadline reached"})
 
 
 @app.get("/metrics")

@@ -812,6 +812,16 @@ class AuditWriter(_BaseAuditWriter):
         # timeout = how long a writer waits for another process's write lock
         # (BEGIN IMMEDIATE below) before raising "database is locked".
         self._conn = sqlite3.connect(path, check_same_thread=False, timeout=30.0)
+        # WAL: readers and the writer no longer block each other. With the
+        # separate read connection below (M-13) and the default rollback
+        # journal, a long chain verify held a SHARED lock that made every
+        # request's audit COMMIT wait — a 3 s read stalled a write 3.05 s, and
+        # past 30 s the row went to the outbox (review W2-A3). Commits stay
+        # fsync'd (synchronous=FULL, the default). WAL needs a local
+        # filesystem (not NFS / SMB); production audit runs on Postgres.
+        mode = self._conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        if str(mode).lower() != "wal":
+            logger.warning("audit db %s: WAL unavailable (journal_mode=%s) — reads can delay writes", path, mode)
         self._conn.executescript(_DDL)
         _sqlite_migrate(self._conn)
         self._conn.commit()
@@ -926,6 +936,10 @@ class PostgresAuditWriter(_BaseAuditWriter):
         # invariant #4) queued behind it.
         self._read_lock = threading.Lock()
         self._read_conn = psycopg.connect(dsn, autocommit=False)
+        # Every transaction on it starts READ ONLY (psycopg sends BEGIN READ
+        # ONLY), so the read path cannot write even through a bug — parity
+        # with the SQLite reader's mode=ro (review W2-B: it was read-write).
+        self._read_conn.read_only = True
         with self._read_conn.cursor() as cur:
             cur.execute(f'SET search_path TO "{schema}"')
         self._read_conn.commit()

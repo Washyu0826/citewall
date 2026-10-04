@@ -442,7 +442,10 @@ def drill(now_iso: str | None = None) -> dict:
             try:
                 chain_report = verifier.verify_global_chain()
             finally:
-                verifier._conn.close()
+                # Both connections: the read one (M-13) also holds the file,
+                # and on Windows an open file survives rmtree(ignore_errors)
+                # — the restored audit.db was left in %TEMP% (review W2-A4).
+                verifier.close()
             broken = chain_report.get("broken", [])
             rows = int(chain_report.get("verified", 0))
             chain_intact = (len(broken) == 0) and rows >= 0

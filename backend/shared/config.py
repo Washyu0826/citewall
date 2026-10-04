@@ -163,10 +163,10 @@ class Settings:
     # resident (BE-13; backend/ai_engine/warmup.py). Set OLLAMA_KEEP_ALIVE on
     # the Ollama server too — its OpenAI-compatible calls use the server value.
     OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
-    # Whole-analysis budget (BE-4): one absolute deadline per /v1/oa/analyze,
-    # passed to the AI Engine as X-Deadline; every inner wait (gateway per-call
-    # timeout, Ollama / Dify / Anthropic timeouts and retries) takes the time
-    # left. 390 s sits inside the SPA's 420 s and nginx's 450 s, so the
+    # Whole-analysis budget (BE-4): one deadline per /v1/oa/analyze; the AI
+    # Engine gets the seconds left as X-Time-Budget. Every model wait (gateway
+    # per-call timeout, Ollama / Dify / Anthropic timeouts and retries) takes
+    # the time left. 390 s sits inside the SPA's 420 s and nginx's 450 s, so the
     # gateway answers (504 or a labelled degraded step) before they give up.
     ANALYZE_DEADLINE_SEC: float = float(os.getenv("ANALYZE_DEADLINE_SEC", "390"))
     # Local-mode citation verifier. Empty (default) = the deterministic

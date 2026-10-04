@@ -26,6 +26,8 @@ async def test_request_id_propagates_to_ai_engine():
         captured = {}
 
         class _FakeResp:
+            status_code = 200  # the client checks for an engine 504 (deadline) first
+
             def raise_for_status(self):  # noqa: D401
                 return None
 
@@ -63,6 +65,8 @@ async def test_request_id_minted_when_none_bound():
     captured = {}
 
     class _FakeResp:
+        status_code = 200
+
         def raise_for_status(self):
             return None
 

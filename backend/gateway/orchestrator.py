@@ -163,8 +163,9 @@ def ai_call_timeout_sec() -> float:
     while Ollama kept generating for nobody (FAILURE_LOG B-13).
 
     The SPA allows 420 s per analysis (frontend/src/api/client.js), so inner
-    budgets stay at ~300 s. A whole-request deadline passed down to every hop
-    (X-Deadline) is the follow-up — see docs/research/09 BE-4.
+    budgets stay at ~300 s. Since BE-4 every call is ALSO capped by the
+    analysis deadline (AIEngineClient._timeout; the AI Engine gets the seconds
+    left as X-Time-Budget) — this is only the per-call ceiling.
     """
     mode = settings.LLM_MODE
     if mode == "dify":
@@ -248,29 +249,43 @@ class AIEngineClient:
         # have been redacted upstream. Fail closed if redaction escaped.
         _assert_no_raw_pii(path, payload)
         stage = _STAGE_FOR_PATH.get(path, path.rsplit("/", 1)[-1])
-        timeout = self._timeout(path)
         started = time.monotonic()
+        # ok | error | timeout (incl. "no time left to start", recorded at
+        # ~0 s) | cancelled (the analysis failed elsewhere and stopped this
+        # call — not this step's error; review W2-A7).
         outcome = "error"
         try:
+            try:
+                timeout = self._timeout(path)
+            except AnalysisTimeout:
+                outcome = "timeout"
+                raise
             # The per-call wait outlives the slowest model path in every mode
             # (ai_call_timeout_sec) but never the analysis deadline.
             async with httpx.AsyncClient(timeout=timeout) as client:
                 # C-2: the AI Engine refuses non-health requests without
                 # X-Internal-Token (server-side only, never the SPA's).
                 # request_id_headers adds the bound X-Request-ID so both
-                # services' logs carry the same id; X-Deadline lets the AI
-                # Engine cap its own model waits by the time left.
+                # services' logs carry the same id; X-Time-Budget (seconds
+                # left) lets the AI Engine cap its own model waits.
                 headers = request_id_headers(_internal_headers())
                 if self.deadline is not None:
-                    headers[time_budget.DEADLINE_HEADER] = f"{self.deadline:.3f}"
+                    headers[time_budget.BUDGET_HEADER] = time_budget.format_budget(self.deadline)
                 try:
                     r = await client.post(url, json=payload, headers=headers)
                 except httpx.TimeoutException as exc:
                     outcome = "timeout"
                     raise AnalysisTimeout(f"{stage} step timed out") from exc
+                if r.status_code == 504:
+                    # The AI Engine ran out of the budget we sent it.
+                    outcome = "timeout"
+                    raise AnalysisTimeout(f"{stage} step ran out of the analysis deadline")
                 r.raise_for_status()
                 outcome = "ok"
                 return r.json()
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
         finally:
             self.record(stage, time.monotonic() - started, outcome)
 
@@ -570,8 +585,10 @@ async def orchestrate_analysis(
                         draft = None
                 tables = await element_task
             finally:
-                if not element_task.done():
-                    element_task.cancel()
+                # Cancelled mid-draft (the analysis failed elsewhere): stop the
+                # element comparison too, and read its outcome even if it had
+                # already failed — no "exception never retrieved" (W2-A5).
+                await _cancel_and_drain(element_task)
             return {
                 "hits": hits,
                 "draft": draft if draft is not None else _degraded_draft(rej.rejection_id),

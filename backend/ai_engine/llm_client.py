@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -1908,7 +1910,9 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
             retry_after = _parse_retry_after(hdr, default=None) if hdr else None
             wait = _backoff_seconds(attempt, retry_after=retry_after)
             if _no_time_for(wait):
-                raise
+                # No time for a retry inside the deadline: a timeout (504),
+                # not this attempt's API error (500) — review W2-A6/B4.
+                raise time_budget.BudgetExhausted("no time left in the deadline to retry") from exc
             logger.warning(
                 "anthropic rate_limit (429) attempt %d/%d, sleeping %.2fs",
                 attempt + 1,
@@ -1917,11 +1921,16 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
             )
             await asyncio.sleep(wait)
         except anthropic.APITimeoutError as exc:
+            if time_budget.out_of_time():
+                # The attempt timeout the deadline capped has fired.
+                raise time_budget.BudgetExhausted("analysis deadline reached during the model call") from exc
             if attempt == max_retries:
                 raise
             wait = _backoff_seconds(attempt)
             if _no_time_for(wait):
-                raise
+                # No time for a retry inside the deadline: a timeout (504),
+                # not this attempt's API error (500) — review W2-A6/B4.
+                raise time_budget.BudgetExhausted("no time left in the deadline to retry") from exc
             logger.warning(
                 "anthropic timeout attempt %d/%d, sleeping %.2fs: %s",
                 attempt + 1,
@@ -1935,7 +1944,9 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
                 raise
             wait = _backoff_seconds(attempt)
             if _no_time_for(wait):
-                raise
+                # No time for a retry inside the deadline: a timeout (504),
+                # not this attempt's API error (500) — review W2-A6/B4.
+                raise time_budget.BudgetExhausted("no time left in the deadline to retry") from exc
             logger.warning(
                 "anthropic connection error attempt %d/%d, sleeping %.2fs: %s",
                 attempt + 1,
@@ -1952,7 +1963,9 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
                 raise
             wait = _backoff_seconds(attempt)
             if _no_time_for(wait):
-                raise
+                # No time for a retry inside the deadline: a timeout (504),
+                # not this attempt's API error (500) — review W2-A6/B4.
+                raise time_budget.BudgetExhausted("no time left in the deadline to retry") from exc
             logger.warning(
                 "anthropic server error (%s) attempt %d/%d, sleeping %.2fs",
                 status,
@@ -2145,9 +2158,10 @@ class DifyLLM:
         body = {
             "inputs": {"intent": intent, "query": user},
             "response_mode": "blocking",
-            # Dify's "user" is its correlation field: the gateway's request id
-            # makes a Dify run log joinable to our logs (research 09 OBS-4).
-            "user": f"req-{current_request_id() or 'none'}"[:128],
+            # Dify's "user" is its correlation field (research 09 OBS-4) —
+            # a keyed hash of the request id, never the id itself (see
+            # dify_user_for).
+            "user": dify_user_for(current_request_id()),
         }
         headers = {"Authorization": f"Bearer {self._api_key}"}
 
@@ -2162,8 +2176,14 @@ class DifyLLM:
             )
             r.raise_for_status()
             payload = r.json()
-        except time_budget.BudgetExhausted as e:
-            return self._degrade(system, user, intent, model_hint, f"deadline: {e}")
+        except time_budget.BudgetExhausted:
+            # Out of time is a timeout (the engine answers 504), not a Dify
+            # failure to paper over with mock text (review W2-A6/B4).
+            raise
+        except httpx.TimeoutException as e:
+            if time_budget.out_of_time():  # our deadline-capped wait fired
+                raise time_budget.BudgetExhausted("analysis deadline reached during the Dify call") from e
+            return self._degrade(system, user, intent, model_hint, f"HTTP error: {e}")
         except httpx.HTTPError as e:
             return self._degrade(system, user, intent, model_hint, f"HTTP error: {e}")
         except ValueError as e:  # non-JSON body
@@ -2387,6 +2407,13 @@ def chat(
         try:
             return _real_ollama(hardened_system, user, model, intent)
         except Exception as e:
+            # Out of time is a timeout (the engine answers 504), not an Ollama
+            # failure to paper over with mock text (review W2-A6/B4).
+            hit = _deadline_hit(e)
+            if hit is e:
+                raise
+            if hit is not None:
+                raise hit from e
             # Fallback 到 mock 保證 demo 不掛 — but NEVER silently: a mock
             # draft must not pass as a real local-model draft. Same contract as
             # DifyLLM._degrade: loud ERROR log + a "-DEGRADED-mock" model label
@@ -2485,6 +2512,31 @@ async def vision_ocr(
 
     # mock (default)
     return await _mock.vision_ocr(image_bytes, mime)
+
+
+def _deadline_hit(exc: BaseException) -> BaseException | None:
+    """The deadline-shaped failure to re-raise instead of degrading, else None:
+    the budget was already spent, or the timeout that fired was the one the
+    deadline capped (as opposed to a backend slow within its own timeout)."""
+    if isinstance(exc, time_budget.BudgetExhausted):
+        return exc
+    import httpx
+
+    if isinstance(exc, httpx.TimeoutException) and time_budget.out_of_time():
+        return time_budget.BudgetExhausted("analysis deadline reached during the model call")
+    return None
+
+
+def dify_user_for(request_id: str | None) -> str:
+    """Dify's ``user`` field for a request: ``req-`` + a keyed hash of the
+    request id. Joinable to our logs (whoever holds INTERNAL_TOKEN recomputes
+    it from a request id), but the id itself — which a client may set via
+    X-Request-ID, and which Dify stores in its end-user table — never reaches
+    Dify (review W2-B7). One Dify end-user row per analysis."""
+    if not request_id:
+        return "citewall-gateway"
+    key = (settings.INTERNAL_TOKEN or "citewall-dify-user").encode("utf-8")
+    return "req-" + hmac.new(key, request_id.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
 
 
 def _real_ollama(system: str, user: str, model: str, intent: str) -> LLMResponse:
