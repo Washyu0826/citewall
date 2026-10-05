@@ -366,7 +366,42 @@ def test_dify_out_of_time_raises_instead_of_answering_with_mock_text():
         _in_context(call)
 
 
-async def test_anthropic_stops_retrying_when_no_attempt_fits_in_the_deadline():
+def _anthropic_client(error):
+    attempts = []
+
+    class _Messages:
+        async def create(self, **kwargs):
+            attempts.append(kwargs.get("timeout"))
+            raise error
+
+    class _Client:
+        messages = _Messages()
+
+    return _Client(), attempts
+
+
+async def test_anthropic_stops_retrying_when_no_attempt_fits_but_keeps_the_real_error():
+    """No retry fits in the deadline: give up at once — with the provider's
+    error (a 500 counted in llm_errors_total), not a deadline 504 that would
+    hide an outage late in an analysis (review W2-C5)."""
+    import anthropic
+
+    from backend.ai_engine import llm_client
+
+    client, attempts = _anthropic_client(
+        anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.test"))
+    )
+    time_budget.bind_deadline(time.time() + 8)
+    try:
+        with pytest.raises(anthropic.APIConnectionError):
+            await llm_client._call_with_retry(client, max_retries=3, model="m")
+    finally:
+        time_budget.bind_deadline(None)
+    assert len(attempts) == 1, "retried although no attempt could finish in time"
+    assert attempts[0] <= 6  # the attempt's own timeout was capped by the deadline
+
+
+async def test_anthropic_timeout_capped_by_the_deadline_is_a_deadline():
     import anthropic
 
     from backend.ai_engine import llm_client
@@ -375,20 +410,56 @@ async def test_anthropic_stops_retrying_when_no_attempt_fits_in_the_deadline():
 
     class _Messages:
         async def create(self, **kwargs):
-            attempts.append(kwargs.get("timeout"))
-            raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.test"))
+            attempts.append(kwargs["timeout"])
+            time_budget.bind_deadline(time.time() + 2.5)  # the capped wait used the budget up
+            raise anthropic.APITimeoutError(request=httpx.Request("POST", "https://api.test"))
 
     class _Client:
         messages = _Messages()
 
-    time_budget.bind_deadline(time.time() + 8)
+    time_budget.bind_deadline(time.time() + 60)
     try:
         with pytest.raises(time_budget.BudgetExhausted):
             await llm_client._call_with_retry(_Client(), max_retries=3, model="m")
     finally:
         time_budget.bind_deadline(None)
-    assert len(attempts) == 1, "retried although no attempt could finish in time"
-    assert attempts[0] <= 6  # the attempt's own timeout was capped by the deadline
+    assert len(attempts) == 1
+
+
+def test_local_verifier_out_of_time_uses_the_default_verifier_not_a_counted_failure(monkeypatch):
+    """With LOCAL_VERIFIER_MODEL set, running out of time used to be logged
+    and counted as a model failure (-verifier-fallback) — W2-C6."""
+    from backend.ai_engine import llm_client
+
+    monkeypatch.setattr(settings, "LLM_MODE", "local")
+    monkeypatch.setattr(settings, "LOCAL_VERIFIER_MODEL", "some-other-local-model")
+
+    def capped_wait_fires(url, **kwargs):
+        time_budget.bind_deadline(time.time() + 2.5)
+        raise httpx.ReadTimeout("no reply", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", capped_wait_fires)
+
+    def call():
+        time_budget.bind_deadline(time.time() + 60)
+        return llm_client.chat(system="s", user="u", intent="verify_citations", security_level="public")
+
+    assert _in_context(call).model == "local-verifier-mock"
+
+
+def test_claim_decomposition_out_of_time_is_not_served_as_a_rule_split(monkeypatch):
+    """A rule split served on a deadline would be cached as if the LLM
+    decomposer had run; out of time must surface (→ 504 → degraded, not
+    cached) — W2-C6."""
+    from backend.ai_engine import claim_elements, llm_client
+
+    def spent(**kwargs):
+        raise time_budget.BudgetExhausted("request deadline leaves 0.4s")
+
+    monkeypatch.setattr(claim_elements, "_llm_enabled", lambda: True)
+    monkeypatch.setattr(llm_client, "chat", spent)
+    with pytest.raises(time_budget.BudgetExhausted):
+        claim_elements.decompose("A widget comprising a gear and a shaft.", security_level="public")
 
 
 def _mock_engine(monkeypatch, handler):
@@ -774,6 +845,56 @@ async def test_a_pipeline_cancelled_mid_draft_leaves_no_unread_task_error(monkey
     assert not leaked, leaked
 
 
+async def test_a_flight_cancelled_before_it_starts_releases_the_reservation(monkeypatch):
+    """asyncio.run cancels every task at shutdown; a task cancelled before its
+    first step never runs its body, so _run_and_settle's own release never
+    ran and the starter's reservation leaked (review W2-C4)."""
+    from backend.shared.models import AnalysisRequest, User, UserRole
+
+    released = []
+    monkeypatch.setattr(rate_limit, "record_usage", lambda user, *a, **k: released.append((a, k)))
+    user = User(user_id="alice", tenant_id="tenant_a", role=UserRole.ATTORNEY, display_name="A")
+    body = AnalysisRequest(oa_text=_OA, case_id="CASE-2025-001", target_patent_no="US17123456")
+    progress = {"started": False}
+
+    def release_if_never_started():
+        if not progress["started"]:
+            gw_main._release_reservation(user, 77)
+
+    flight = gw_main._start_flight(
+        None,
+        gw_main._run_and_settle(
+            user,
+            body,
+            circuit_open=False,
+            pre_redacted=("x", []),
+            pre_redacted_hint=None,
+            cache_key=None,
+            reserved_tokens=77,
+            progress=progress,
+        ),
+        on_cancelled=release_if_never_started,
+    )
+    flight.task.cancel()  # before its first step
+    with pytest.raises(asyncio.CancelledError):
+        await flight.task
+    await asyncio.sleep(0)  # done callbacks
+    assert progress["started"] is False
+    assert released == [((0, 0, 0.0), {"reserved_tokens": 77})]
+
+
+def test_a_failed_cache_write_does_not_fail_a_paid_analysis(monkeypatch, gateway_client, alice_token, patched_ai_engine):
+    """It now runs in the shared task, so a failure would fail the leader AND
+    every follower — after the analysis was charged (review W2-C8)."""
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("cache backend exploded")
+
+    monkeypatch.setattr(cache_mod, "set_response_at", broken)
+    resp = _analyze(gateway_client, alice_token)
+    assert resp.status_code == 200, resp.text
+
+
 async def test_one_waiter_leaving_does_not_cancel_the_shared_analysis():
     gate = asyncio.Event()
 
@@ -830,18 +951,25 @@ def _audit_finally_handler():
     return handler
 
 
-@pytest.mark.parametrize("busy_workers", [0, 8])
-async def test_an_anyio_cancelled_handler_still_writes_its_audit_row(monkeypatch, busy_workers):
+@pytest.mark.parametrize("busy", [False, True])
+async def test_an_anyio_cancelled_handler_still_writes_its_audit_row(monkeypatch, busy):
     """W2-A1: anyio re-cancels at every await of a cancelled scope. The first
     version awaited an unshielded executor future — cancelling it cancelled
-    the queued job, and 28 of 30 rows were lost (5 of 5 with busy workers)."""
+    the queued job, and 28 of 30 rows were lost (5 of 5 with busy workers).
+    ``busy``: the only worker is occupied, so every write is still queued
+    when the cancel lands."""
+    from concurrent.futures import ThreadPoolExecutor
+
     import anyio
 
     written = []
     monkeypatch.setattr(gw_main, "_safe_audit_write", lambda **kw: written.append(1))
     loop = asyncio.get_running_loop()
     gate = threading.Event()
-    blockers = [loop.run_in_executor(None, gate.wait, 5) for _ in range(busy_workers)]
+    blockers = []
+    if busy:
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        blockers.append(loop.run_in_executor(None, gate.wait, 5))
     rounds = 20
     try:
         for _ in range(rounds):
@@ -859,18 +987,29 @@ async def test_an_anyio_cancelled_handler_still_writes_its_audit_row(monkeypatch
 
 
 async def test_a_natively_cancelled_handler_still_writes_its_audit_row(monkeypatch):
-    """uvicorn cancels request tasks at shutdown; cancelled twice in a row,
-    with no pause for a worker thread to pick the job up."""
+    """uvicorn cancels request tasks at shutdown. The write must survive a
+    second cancel that lands while it is still QUEUED — the first version of
+    this test let a fresh pool start the job before the second cancel, and
+    passed with the unshielded code too (review W2-C2). One worker, kept busy,
+    makes the queued state certain."""
+    from concurrent.futures import ThreadPoolExecutor
+
     written = threading.Event()
     monkeypatch.setattr(gw_main, "_safe_audit_write", lambda **kw: written.set())
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    gate = threading.Event()
+    blocker = loop.run_in_executor(None, gate.wait, 5)  # occupies the only worker
     task = asyncio.create_task(_audit_finally_handler()())
     await asyncio.sleep(0)
     task.cancel()
-    await asyncio.sleep(0)  # the finally submits the write and awaits it …
-    task.cancel()  # … and is cancelled again at once
+    await asyncio.sleep(0)  # the finally submits the write (queued) and awaits it …
+    task.cancel()  # … and is cancelled again while the job is still queued
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert written.wait(2.0), "the audit row was dropped with the cancelled request"
+    gate.set()
+    await blocker
+    assert await asyncio.to_thread(written.wait, 2.0), "the audit row was dropped with the cancelled request"
 
 
 async def test_a_reservation_made_after_cancellation_is_given_back(monkeypatch):
@@ -918,6 +1057,48 @@ def _write_row(writer, i: int) -> None:
         latency_ms=1,
         policy_decisions={},
     )
+
+
+def test_a_restore_is_not_undone_by_a_crashed_instances_wal(tmp_path, monkeypatch):
+    """W2-C1: the audit db runs in WAL mode. A crashed gateway leaves
+    audit.db-wal next to the db; restoring a backup into that folder and
+    restarting let SQLite replay the stale WAL over the restored file — 5
+    backed-up rows came back as 12, and restore() reported ok."""
+    import shutil
+
+    from backend.gateway import backup
+    from backend.shared import config
+
+    live = tmp_path / "live"
+    live.mkdir()
+    monkeypatch.setattr(config, "AUDIT_DB_PATH", live / "audit.db")
+    monkeypatch.setattr(config, "MAPPING_DB_PATH", live / "mapping.db")
+    monkeypatch.setattr(config, "PATENT_DB_PATH", live / "patent.db")
+    monkeypatch.setattr(config, "AUDIT_ARCHIVE_DIR", tmp_path / "archive")
+    monkeypatch.setattr(config, "BACKUP_DIR", tmp_path / "backups")
+    writer = audit.AuditWriter(path=live / "audit.db")
+    for i in range(5):
+        _write_row(writer, i)
+    snap = backup.snapshot()
+    for i in range(5, 12):
+        _write_row(writer, i)
+    # "Crash": the data folder as a killed process leaves it — db + live WAL.
+    crashed = tmp_path / "crashed"
+    crashed.mkdir()
+    for name in ("audit.db", "audit.db-wal", "audit.db-shm"):
+        if (live / name).exists():
+            shutil.copy2(live / name, crashed / name)
+    writer.close()
+    assert (crashed / "audit.db-wal").exists(), "the scenario needs a stale WAL"
+
+    result = backup.restore(snap["backup_id"], crashed)
+    assert result["ok"]
+    assert "audit.db-wal" in result["removed_journals"]
+    conn = sqlite3.connect(crashed / "audit.db")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM audit").fetchone()[0] == 5
+    finally:
+        conn.close()
 
 
 def test_audit_reads_are_read_only(tmp_path):
@@ -1023,6 +1204,15 @@ def test_gateway_readiness_says_only_ok_or_not(monkeypatch, gateway_client):
     assert 'dependency_up{dependency="audit_db"} 1' in rendered
 
 
+async def test_readiness_checks_run_on_their_own_threads():
+    """Not the request threadpool and not the default executor that carries
+    the gateway's audit writes and quota settlements (review W2-C7)."""
+    seen = []
+    probe = readiness.ReadinessProbe(lambda: {"dep": lambda: seen.append(threading.current_thread().name)})
+    ready, _ = await probe.check_async()
+    assert ready and seen[0].startswith("readiness")
+
+
 def test_readiness_is_evaluated_at_most_once_per_ttl():
     runs = []
     probe = readiness.ReadinessProbe(lambda: {"dep": lambda: runs.append(1)}, ttl_sec=60)
@@ -1115,6 +1305,89 @@ def test_a_model_is_loaded_once_when_warm_up_and_a_request_race(monkeypatch):
     for t in threads:
         t.join()
     assert len(loads) == 1 and emb.dim == 8
+
+
+def test_the_reranker_is_loaded_once_and_published_complete(monkeypatch):
+    """Same race for the reranker; and score() reads _model without the
+    lock, so _model must be set only after the tokenizer ids and prompt
+    parts (review W2-B3; the lock had no test — W2-C)."""
+    import sys
+    import types
+
+    from backend.ai_engine import rag
+
+    loads = []
+
+    class _Tok:
+        def convert_tokens_to_ids(self, token):
+            return 1 if token == "yes" else 0
+
+    class _Model:
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    class _AutoTokenizer:
+        @staticmethod
+        def from_pretrained(name, **kwargs):
+            return _Tok()
+
+    class _AutoModel:
+        @staticmethod
+        def from_pretrained(name, **kwargs):
+            loads.append(name)
+            time.sleep(0.2)
+            return _Model()
+
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(float16="f16", float32="f32"))
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        types.SimpleNamespace(AutoTokenizer=_AutoTokenizer, AutoModelForCausalLM=_AutoModel),
+    )
+    monkeypatch.setattr(rag, "pick_device", lambda preference, need_gb: "cpu")
+    reranker = rag.Reranker(backend="qwen3-4b")
+    seen_incomplete = []
+
+    def use():
+        reranker.ensure_loaded()
+        if not hasattr(reranker, "_suffix") or not hasattr(reranker, "_yes"):
+            seen_incomplete.append(1)
+
+    threads = [threading.Thread(target=use) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(loads) == 1
+    assert not seen_incomplete
+
+
+def test_token_checks_against_a_redis_revocation_store_leave_the_event_loop(
+    monkeypatch, gateway_client, alice_token
+):
+    """With REVOCATION_BACKEND=redis every authenticated request did a Redis
+    round trip on the event loop (review W2-C, research 09 BE-6)."""
+    from backend.gateway import auth
+
+    on_loop = []
+    real = auth.verify_token
+
+    def spy(token):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(token)
+
+    monkeypatch.setattr(auth, "verify_token", spy)
+    monkeypatch.setattr(settings, "REVOCATION_BACKEND", "redis")
+    resp = gateway_client.get("/v1/quota", headers={"Authorization": f"Bearer {alice_token}"})
+    assert resp.status_code == 200, resp.text
+    assert on_loop == [False]
 
 
 def test_local_mode_warm_up_preloads_the_model(monkeypatch):

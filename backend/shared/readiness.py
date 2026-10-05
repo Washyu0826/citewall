@@ -11,18 +11,27 @@ an unauthenticated caller.
 
 Each check is a callable that returns normally when the dependency is usable
 and raises (or returns ``False``) when not. Checks must bound their own waits
-(about a second); they run in FastAPI's threadpool, never on the event loop.
+(about a second). They run on a small executor of their own
+(``check_async``) — not the request threadpool, and not the loop's default
+executor, which carries the gateway's audit writes and quota settlements: a
+probe stuck behind a slow dependency must not hold a thread those need
+(review W2-C7).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import threading
 import time
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
+
+# Two threads: concurrent probes share one evaluation anyway (the probe lock).
+_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="readiness")
 
 # Latest result per dependency (1 = up, 0 = down), read by the gauge.
 _LAST: dict[str, float] = {}
@@ -66,6 +75,10 @@ class ReadinessProbe:
             self._result = (all(results.values()), results)
             self._checked_at = time.monotonic()
             return self._result
+
+    async def check_async(self) -> tuple[bool, dict[str, bool]]:
+        """``check()`` on the readiness executor (see module doc)."""
+        return await asyncio.get_running_loop().run_in_executor(_EXECUTOR, self.check)
 
     def reset(self) -> None:
         """Forget the cached result (tests)."""

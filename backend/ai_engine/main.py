@@ -14,7 +14,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import hmac
 import time
@@ -328,9 +327,9 @@ async def livez():
 async def readyz():
     """Warm-up finished and the dependencies this mode needs answer. Only
     ok / not ok here; which one failed is in the log and dependency_up. The
-    checks run on the loop's default executor, not the request threadpool
+    checks run on readiness's own small executor, not the request threadpool
     the inference endpoints occupy."""
-    ready, _ = await asyncio.to_thread(_READINESS.check)
+    ready, _ = await _READINESS.check_async()
     return JSONResponse({"ok": ready}, status_code=200 if ready else 503)
 
 

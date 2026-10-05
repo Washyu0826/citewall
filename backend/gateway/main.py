@@ -18,6 +18,7 @@ import functools
 import hmac
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -178,29 +179,52 @@ def _submit(fn, /, *args: Any, **kwargs: Any) -> asyncio.Future:
     mark it settled between ``_submit`` and the ``await``.
     """
     ctx = contextvars.copy_context()  # keep the bound request id in the logs
-    job = asyncio.get_running_loop().run_in_executor(None, functools.partial(ctx.run, fn, *args, **kwargs))
+    call = functools.partial(ctx.run, fn, *args, **kwargs)
+    loop = asyncio.get_running_loop()
+    try:
+        job = loop.run_in_executor(None, call)
+    except RuntimeError:
+        # The executor no longer takes work (process shutdown): run it here
+        # rather than drop an audit row or a settlement (review W2-C3).
+        job = loop.create_future()
+        try:
+            job.set_result(call())
+        except Exception as exc:  # noqa: BLE001 — surfaced to the awaiter
+            job.set_exception(exc)
     return asyncio.shield(job)
 
 
 async def _reserve(user: User, estimated_tokens: int, policy_decisions: dict[str, bool]) -> int:
     """``rate_limit.reserve_llm_budget`` off the event loop (Redis round
     trips). If this request is cancelled while the reservation is being made,
-    the reservation still completes in its thread — give it back then instead
-    of leaving it reserved until the bucket expires."""
+    the reservation still completes in its thread — and is given back there,
+    in the same thread, instead of staying reserved until the bucket expires.
+    (Handing the give-back to a loop callback failed at shutdown, when the
+    executor no longer accepts work — review W2-C3.)"""
+    lock = threading.Lock()
+    state: dict[str, Any] = {"cancelled": False, "reserved": None}
+
+    def reserve() -> int:
+        reserved = rate_limit.reserve_llm_budget(user, estimated_tokens, policy_decisions)
+        with lock:
+            state["reserved"] = reserved
+            give_back = state["cancelled"]
+        if give_back:
+            _release_reservation(user, reserved)
+        return reserved
+
     ctx = contextvars.copy_context()
-    loop = asyncio.get_running_loop()
-    job = loop.run_in_executor(
-        None, functools.partial(ctx.run, rate_limit.reserve_llm_budget, user, estimated_tokens, policy_decisions)
-    )
+    job = asyncio.get_running_loop().run_in_executor(None, functools.partial(ctx.run, reserve))
     try:
         return await asyncio.shield(job)
     except asyncio.CancelledError:
-
-        def _give_back(done: asyncio.Future) -> None:
-            if not done.cancelled() and done.exception() is None:
-                loop.run_in_executor(None, _release_reservation, user, done.result())
-
-        job.add_done_callback(_give_back)
+        with lock:
+            state["cancelled"] = True
+            finished = state["reserved"]
+        if finished is not None:
+            # The thread reserved before it could see the cancel: give it
+            # back here (the thread will not).
+            _release_reservation(user, finished)
         raise
 
 
@@ -1098,8 +1122,9 @@ async def readyz():
     """This instance can serve an analysis now. Only ok / not ok — which
     dependency failed is in the log and in dependency_up on /metrics; the
     detailed (and tenant-revealing) /v1/health stays for compatibility. The
-    checks run on the loop's default executor, not the request threadpool."""
-    ready, _ = await asyncio.to_thread(_READINESS.check)
+    checks run on readiness's own small executor — not the request
+    threadpool, nor the default executor the audit writes need."""
+    ready, _ = await _READINESS.check_async()
     return JSONResponse({"ok": ready}, status_code=200 if ready else 503)
 
 
@@ -1282,11 +1307,18 @@ def _joinable_flight(key: str | None) -> _Flight | None:
     return flight
 
 
-def _start_flight(key: str | None, coro) -> _Flight:
+def _start_flight(key: str | None, coro, *, on_cancelled=None) -> _Flight:
+    """``on_cancelled`` runs if the task ends cancelled — e.g. to settle what
+    the coroutine would have settled had it ever started (a task cancelled
+    before its first step never runs its body, so its try/except never runs
+    either; asyncio.run cancels everything at shutdown — review W2-C4)."""
     flight = _Flight(asyncio.create_task(coro))
 
     def _done(task: asyncio.Task) -> None:
-        if not task.cancelled():
+        if task.cancelled():
+            if on_cancelled is not None:
+                on_cancelled()
+        else:
             task.exception()  # mark retrieved — every waiter may be gone
         if key and _inflight_analyses.get(key) is flight:
             del _inflight_analyses[key]
@@ -1323,8 +1355,13 @@ async def _run_and_settle(
     pre_redacted_hint: tuple[str, list[str]] | None,
     cache_key: str | None,
     reserved_tokens: int,
+    progress: dict[str, bool],
 ) -> tuple[AnalysisResponse, dict]:
     """The single-flight task: orchestrate, then settle what it cost.
+
+    ``progress["started"]`` is set before anything else: if the task is
+    cancelled before its first step, the starter's ``on_cancelled`` sees it
+    unset and releases the reservation itself.
 
     Settled HERE, not in the request that started it: if that request is
     cancelled while a follower still waits, the follower is served — and the
@@ -1333,8 +1370,12 @@ async def _run_and_settle(
     starter's reservation from the moment it exists: charged at the true usage
     when the analysis completes, released in full when it fails or is
     cancelled. Usage, the business metric, case summary and cache write
-    happen once per analysis however many requests share it.
+    happen once per analysis however many requests share it. A failed charge
+    fails every request sharing the analysis (quota fails closed, ADR-02 — an
+    uncharged result is not served); a failed cache or case-summary write
+    fails none.
     """
+    progress["started"] = True
     try:
         response, obs = await orchestrate_analysis(
             user,
@@ -1389,7 +1430,10 @@ async def _run_and_settle(
     # attorney's retry would keep getting the placeholder (B-15). Hits replace
     # the stored request id and gate outcomes with their own.
     if not obs.get("degraded"):
-        await _submit(cache.set_response_at, cache_key, user.tenant_id, response.model_dump(mode="json"))
+        try:
+            await _submit(cache.set_response_at, cache_key, user.tenant_id, response.model_dump(mode="json"))
+        except Exception:  # noqa: BLE001 — a cache is never worth failing a paid analysis
+            logger.exception("analysis cache write failed for case=%s", body.case_id)
     return response, obs
 
 
@@ -1604,6 +1648,13 @@ async def analyze_oa(
         # happen in the flight task (_run_and_settle), which also takes over
         # this request's quota reservation — settled there even if this
         # request is cancelled while a follower is still waiting.
+        progress = {"started": False}
+        reserved_for_task = reserved_quota_tokens
+
+        def _release_if_never_started() -> None:
+            if not progress["started"]:
+                _release_reservation(user, reserved_for_task)
+
         flight = _start_flight(
             cache_key,
             _run_and_settle(
@@ -1614,7 +1665,9 @@ async def analyze_oa(
                 pre_redacted_hint=pre_redacted_hint,
                 cache_key=cache_key,
                 reserved_tokens=reserved_quota_tokens,
+                progress=progress,
             ),
+            on_cancelled=_release_if_never_started,
         )
         quota_reservation_settled = True  # owned by the flight task now
         shared_response, obs = await _await_flight(flight)

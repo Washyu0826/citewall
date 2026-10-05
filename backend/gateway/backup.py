@@ -342,14 +342,18 @@ def restore(backup_id: str, target_dir: str | Path) -> dict:
     Any missing file or hash mismatch is reported as an anomaly (bit-rot /
     tamper detection) — we never silently restore a corrupted backup.
 
-    Returns ``{backup_id, target_dir, files_verified, ok, anomalies:[...]}``.
-    ``ok`` is True only when every file was present and hash-matched.
+    Returns ``{backup_id, target_dir, files_verified, ok, anomalies:[...],
+    removed_journals:[...]}``. ``ok`` is True only when every file was present
+    and hash-matched. ``removed_journals`` lists stale SQLite -wal / -shm /
+    -journal files deleted next to restored databases (stop the service
+    before restoring — a running instance would recreate them).
     """
     manifest, backup_root = _load_manifest(backup_id)
     target = Path(target_dir)
     target.mkdir(parents=True, exist_ok=True)
 
     anomalies: list[dict[str, Any]] = []
+    removed_journals: list[str] = []
     files_verified = 0
 
     for entry in manifest.get("files", []):
@@ -361,6 +365,16 @@ def restore(backup_id: str, target_dir: str | Path) -> dict:
             continue
         dst = target / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.suffix == ".db":
+            # A crashed instance leaves -wal / -shm (WAL, e.g. the audit db)
+            # or a hot -journal next to its database. SQLite would replay them
+            # over the restored file on the next open — silently undoing the
+            # restore while this report says ok (review W2-C1).
+            for side in ("-wal", "-shm", "-journal"):
+                stale = dst.with_name(dst.name + side)
+                if stale.exists():
+                    stale.unlink()
+                    removed_journals.append(f"{rel}{side}")
         shutil.copy2(src, dst)
 
         actual = _sha256_file(dst)
@@ -382,6 +396,7 @@ def restore(backup_id: str, target_dir: str | Path) -> dict:
         "files_verified": files_verified,
         "ok": len(anomalies) == 0,
         "anomalies": anomalies,
+        "removed_journals": removed_journals,
     }
 
 

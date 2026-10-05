@@ -93,7 +93,7 @@ no ids, no text.
 | Endpoint | Both services | Checks | Answer |
 |---|---|---|---|
 | `GET /livez` | ✅ | nothing — the event loop answers (an `async` handler: it needs no worker thread, so a pool saturated by long inference calls cannot fail it) | `{"ok": true}` |
-| `GET /readyz` | ✅ | gateway: audit DB, mapping store, the AI Engine's `/readyz`, Redis (if any backend uses it). AI Engine: start-up warm-up finished, Qdrant / Ollama when the mode uses them. Checks run on the event loop's default executor, not the request threadpool | 200 `{"ok": true}` / 503 `{"ok": false}`, re-evaluated at most every 5 s |
+| `GET /readyz` | ✅ | gateway: audit DB, mapping store, the AI Engine's `/readyz`, Redis (if any backend uses it). AI Engine: start-up warm-up finished, Qdrant / Ollama when the mode uses them. Checks run on two threads of their own — not the request threadpool, nor the default executor the gateway's audit writes use | 200 `{"ok": true}` / 503 `{"ok": false}`, re-evaluated at most every 5 s |
 | `GET /v1/health` | ✅ | — | unchanged (detailed; kept for the SPA's stack lights, the smoke scripts and the Docker healthchecks) |
 
 Point liveness probes at `/livez`, never at `/readyz` — a liveness probe that
@@ -109,8 +109,9 @@ serves labelled degraded results instead.
 
 The AI Engine warms up in the background at start: in `LLM_MODE=local` it
 first asks Ollama to load the model (`OLLAMA_KEEP_ALIVE`), then loads the
-Qwen3 embedder / reranker when configured — in that order, so they only take
-the GPU if the LLM left room. It reports not-ready until done; a failed step is
+Qwen3 embedder / reranker when configured and runs one inference on each (the
+first forward pass is part of the cold start) — in that order, so they only
+take the GPU if the LLM left room. It reports not-ready until done; a failed step is
 logged and paid on first use, never keeps it unready. A request that arrives
 mid-warm-up waits for the same load (one lock per model) instead of loading a
 second copy.
@@ -159,8 +160,14 @@ Dify, each Anthropic attempt and retry backoff — by the time left. Out of time
 the AI Engine answers 504: a required step (parse, deadline) then fails the
 analysis with 504; an optional one (retrieval, draft, verify, claim tree,
 element comparison) is marked degraded and the result is not cached.
-Not capped: CPU/GPU work inside retrieval (embedding, reranking, vector
-search) runs to completion once started.
+Exceptions:
+* CPU/GPU work inside retrieval (embedding, reranking, vector search) is not
+  capped — it runs to completion once started.
+* Anthropic with no time left to retry gives up with the provider's own error
+  (a 500 counted in `llm_errors_total`) — a late outage must not hide as a
+  deadline.
+* With `LOCAL_VERIFIER_MODEL` set, a verify that runs out of time uses the
+  default deterministic verifier (`local-verifier-mock`; not degraded, cached).
 
 ### Propagation status
 

@@ -58,12 +58,14 @@ def _steps() -> list[tuple[str, object]]:
                 ).raise_for_status(),
             )
         )
+    # One real inference each, not just the load: the first forward pass
+    # (CUDA kernels, allocator) is the other half of the cold-start cost.
     embedder = rag._embedder  # noqa: SLF001 — warm the module's own instance
     if embedder.backend in ("bge-m3", "qwen3"):
-        steps.append(("embedder", lambda: embedder.dim))  # .dim loads the model
+        steps.append(("embedder", lambda: embedder.embed_one("warm-up", is_query=True)))
     reranker = rag._reranker  # noqa: SLF001
     if reranker.enabled:
-        steps.append(("reranker", reranker.ensure_loaded))
+        steps.append(("reranker", lambda: reranker.score("warm-up", ["warm-up"])))
     return steps
 
 

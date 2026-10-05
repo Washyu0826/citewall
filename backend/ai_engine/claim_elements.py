@@ -44,6 +44,7 @@ from typing import Any
 
 from backend.ai_engine import alignment, llm_client
 from backend.ai_engine.prompt_loader import render_system
+from backend.shared import time_budget
 from backend.shared.config import settings
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,11 @@ def decompose(claim_text: str, *, security_level: str) -> tuple[list[str], str, 
                 if _llm_split_is_faithful(claim_text, elements):
                     return elements[:MAX_ELEMENTS], "llm", resp.model
                 logger.warning("claim_elements: LLM split rejected as unfaithful; using rules")
+        except time_budget.BudgetExhausted:
+            # Out of time: a 504 — the gateway marks the element comparison
+            # degraded and does not cache it. A rule split served here would
+            # be cached as if the LLM decomposer had run (review W2-C6).
+            raise
         except Exception as exc:  # noqa: BLE001 — deterministic fallback below
             logger.warning(
                 "claim_elements: LLM decomposition failed (%s); using rules",

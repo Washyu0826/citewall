@@ -1910,9 +1910,11 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
             retry_after = _parse_retry_after(hdr, default=None) if hdr else None
             wait = _backoff_seconds(attempt, retry_after=retry_after)
             if _no_time_for(wait):
-                # No time for a retry inside the deadline: a timeout (504),
-                # not this attempt's API error (500) — review W2-A6/B4.
-                raise time_budget.BudgetExhausted("no time left in the deadline to retry") from exc
+                # No time left in the deadline for a retry: give up with THIS
+                # error — a provider failure (429 / 5xx / connection) stays a
+                # 500 counted in llm_errors_total, not a deadline 504 that
+                # would hide an outage (review W2-C5).
+                raise
             logger.warning(
                 "anthropic rate_limit (429) attempt %d/%d, sleeping %.2fs",
                 attempt + 1,
@@ -1928,9 +1930,11 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
                 raise
             wait = _backoff_seconds(attempt)
             if _no_time_for(wait):
-                # No time for a retry inside the deadline: a timeout (504),
-                # not this attempt's API error (500) — review W2-A6/B4.
-                raise time_budget.BudgetExhausted("no time left in the deadline to retry") from exc
+                # No time left in the deadline for a retry: give up with THIS
+                # error — a provider failure (429 / 5xx / connection) stays a
+                # 500 counted in llm_errors_total, not a deadline 504 that
+                # would hide an outage (review W2-C5).
+                raise
             logger.warning(
                 "anthropic timeout attempt %d/%d, sleeping %.2fs: %s",
                 attempt + 1,
@@ -1944,9 +1948,11 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
                 raise
             wait = _backoff_seconds(attempt)
             if _no_time_for(wait):
-                # No time for a retry inside the deadline: a timeout (504),
-                # not this attempt's API error (500) — review W2-A6/B4.
-                raise time_budget.BudgetExhausted("no time left in the deadline to retry") from exc
+                # No time left in the deadline for a retry: give up with THIS
+                # error — a provider failure (429 / 5xx / connection) stays a
+                # 500 counted in llm_errors_total, not a deadline 504 that
+                # would hide an outage (review W2-C5).
+                raise
             logger.warning(
                 "anthropic connection error attempt %d/%d, sleeping %.2fs: %s",
                 attempt + 1,
@@ -1963,9 +1969,11 @@ async def _call_with_retry(client: Any, *, max_retries: int | None = None, **kwa
                 raise
             wait = _backoff_seconds(attempt)
             if _no_time_for(wait):
-                # No time for a retry inside the deadline: a timeout (504),
-                # not this attempt's API error (500) — review W2-A6/B4.
-                raise time_budget.BudgetExhausted("no time left in the deadline to retry") from exc
+                # No time left in the deadline for a retry: give up with THIS
+                # error — a provider failure (429 / 5xx / connection) stays a
+                # 500 counted in llm_errors_total, not a deadline 504 that
+                # would hide an outage (review W2-C5).
+                raise
             logger.warning(
                 "anthropic server error (%s) attempt %d/%d, sleeping %.2fs",
                 status,
@@ -2395,6 +2403,12 @@ def chat(
         try:
             return _real_ollama(hardened_system, user, verifier_model, intent)
         except Exception as e:  # noqa: BLE001
+            if _deadline_hit(e) is not None:
+                # Out of time: the deterministic verifier IS the default
+                # verifier (instant, not degraded) — use it as such, not as a
+                # model failure counted in llm_errors_total (review W2-C6).
+                logger.warning("LOCAL_VERIFIER_MODEL: deadline reached — deterministic verifier")
+                return _deterministic("local-verifier-mock")
             logger.error(
                 "LOCAL_VERIFIER_MODEL %r failed (%s: %s) — using the deterministic verifier",
                 verifier_model,

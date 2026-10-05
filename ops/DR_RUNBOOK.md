@@ -88,6 +88,13 @@ manifest. The result reports `ok` (True only when every file present + hash
 matched) and any `anomalies` (`sha256_mismatch` = bit-rot/tamper,
 `missing_backup_file`). **Never** promote a restore with `ok=false` to primary.
 
+Restoring over a data folder that a crashed instance left behind is safe:
+`restore` deletes stale SQLite `-wal` / `-shm` / `-journal` files next to each
+restored `.db` (listed in `removed_journals`). Otherwise SQLite would replay
+them over the restored file on the next open — the audit db runs in WAL mode —
+silently undoing the restore. Always stop the service first; a running
+instance recreates them.
+
 Cut-over (POC: stop service, swap files, restart):
 
 ```bash

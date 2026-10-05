@@ -98,6 +98,7 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi import HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
 
 from backend.gateway import revocation
 from backend.shared.config import _parse_trusted_ips, settings
@@ -1396,7 +1397,13 @@ async def auth_dependency(request: Request) -> User:
         if not auth_header.startswith("Bearer "):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
         token = auth_header[7:]
-        user = verify_token(token)
+        if settings.REVOCATION_BACKEND == "redis":
+            # The jti revocation check is a Redis round trip on every request:
+            # keep it off the event loop (research 09 BE-6, review W2-C).
+            # The in-memory store needs no thread hop.
+            user = await run_in_threadpool(verify_token, token)
+        else:
+            user = verify_token(token)
         _client_ip = request.client.host if request.client else None
         logger.info(
             "upstream-auth: user=%s tenant=%s role=%s client=%s auth_source=jwt",
