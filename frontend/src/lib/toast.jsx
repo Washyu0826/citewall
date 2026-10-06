@@ -37,6 +37,11 @@ export const toast = {
   error: (msg, opts) => show('error', msg, opts),
   info: (msg, opts) => show('info', msg, opts),
   dismiss: (id) => drop(id),
+  // Tests: the store is module-level, so a toast would outlive its test.
+  clear: () => {
+    items = [];
+    emit();
+  },
 };
 
 const KIND_CLASSES = {

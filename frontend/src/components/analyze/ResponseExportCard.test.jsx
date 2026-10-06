@@ -58,7 +58,17 @@ describe('ResponseExportCard — leaving the page during an export', () => {
     fireEvent.click(screen.getByTestId('response-export-confirm'));
     await act(async () => fireEvent.click(screen.getByTestId('response-export-submit')));
     expect(onExported).toHaveBeenCalledWith(RECEIPT);
-    expect(error).toHaveBeenCalledWith(`${i18n.t('response_export.download_failed')}: bad base64`);
+    expect(error).toHaveBeenCalledWith(`${i18n.t('response_export.download_failed')}: bad base64`, { duration: 0 });
+  });
+
+  it('"Download again" that fails says so instead of throwing (review W2b-U5)', () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => {});
+    downloadBase64.mockImplementationOnce(() => {
+      throw new Error('bad base64');
+    });
+    mount({ savedResult: RECEIPT });
+    fireEvent.click(screen.getByText(i18n.t('response_export.download_again')));
+    expect(error).toHaveBeenCalledWith(`${i18n.t('response_export.download_failed')}: bad base64`, { duration: 0 });
   });
 
   it('a card mounted while an export is in flight cannot start another', () => {

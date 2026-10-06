@@ -217,7 +217,8 @@ export default function DraftEditor({
       const kept = report.onReceipt?.({ draft: initialDraft, exportResult: res, exportedLines: sentLines });
       // Refused (the analysis was replaced meanwhile): the sign-off happened,
       // but it is not shown anywhere — say so instead of "done" (W2b-T2).
-      if (kept === false) toast.info(t('signoff.export_superseded'));
+      // The only notice that this sign-off happened: it stays until closed.
+      if (kept === false) toast.info(t('signoff.export_superseded'), { duration: 0 });
       else toast.success(t('signoff.export_success'));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {

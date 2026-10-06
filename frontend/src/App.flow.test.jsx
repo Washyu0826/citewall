@@ -47,9 +47,8 @@ beforeEach(() => {
   // One gate per export call: releaseExport(i) lets the i-th one answer.
   const exportResolvers = [];
   releaseExport = (i = 0) => exportResolvers[i]();
-  const responseExportGate = new Promise((resolve) => {
-    releaseResponseExport = resolve;
-  });
+  const responseExportResolvers = [];
+  releaseResponseExport = (i = 0) => responseExportResolvers[i]();
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url, init = {}) => {
@@ -65,7 +64,7 @@ beforeEach(() => {
       }
       if (path === '/v1/oa/export_response') {
         responseExportCalls += 1;
-        await responseExportGate;
+        await new Promise((resolve) => responseExportResolvers.push(resolve));
         return json({ docx_base64: 'AA==', filename: 'r.docx', content_sha256: 'b'.repeat(64), signed_off_by: 'alice' });
       }
       if (path === '/v1/oa/export') {
@@ -241,5 +240,34 @@ describe('App workspace flows', () => {
     // The current export is still out: no second sign-off.
     expect(await screen.findByTestId('signoff-export', {}, { timeout: 5000 })).toBeDisabled();
     expect(exportCalls).toBe(2);
+  });
+
+  it("an earlier analysis's whole-response export landing late does not unlock the current one (W2b-U2, wiring)", async () => {
+    fireEvent.click(await loginAndOpenWorkspace());
+    releaseAnalyze();
+    fireEvent.click(await screen.findByTestId('signoff-accept-all', {}, { timeout: 5000 }));
+    fireEvent.click(screen.getByTestId('response-export-confirm'));
+    fireEvent.click(screen.getByTestId('response-export-submit'));
+    await waitFor(() => expect(responseExportCalls).toBe(1));
+
+    // Re-analyse, review again and export the whole response again while the first is still out.
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('workspace.edit_input') }));
+    fireEvent.click(await screen.findByTestId('analyze-submit'));
+    fireEvent.click(await screen.findByTestId('discard-confirm'));
+    await waitFor(() => expect(analyzeCalls).toBe(2));
+    fireEvent.click(await screen.findByTestId('signoff-accept-all', {}, { timeout: 5000 }));
+    fireEvent.click(screen.getByTestId('response-export-confirm'));
+    fireEvent.click(screen.getByTestId('response-export-submit'));
+    await waitFor(() => expect(responseExportCalls).toBe(2));
+
+    releaseResponseExport(0); // the FIRST analysis's export lands now
+    await screen.findByText(i18n.t('response_export.done_superseded'), {}, { timeout: 5000 });
+    fireEvent.click(screen.getByTestId('nav-home'));
+    await screen.findByTestId('home-new-analysis', {}, { timeout: 5000 });
+    fireEvent.click(screen.getByTestId('nav-analyze'));
+    fireEvent.click(await screen.findByTestId('response-export-confirm', {}, { timeout: 5000 }));
+    // The current export is still out: no second sign-off.
+    expect(screen.getByTestId('response-export-submit')).toBeDisabled();
+    expect(responseExportCalls).toBe(2);
   });
 });

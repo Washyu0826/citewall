@@ -58,6 +58,19 @@ export default function ResponseExportCard({
   else if (pending > 0) blocker = t('response_export.pending', { count: pending });
   else if (accepted === 0) blocker = t('response_export.nothing_accepted');
 
+  // Saving the file is local and can fail — the same way again on a retry
+  // (a bad payload). The sign-off stands either way: say exactly that, and
+  // keep the notice up until closed (review W2b-T3, U5).
+  function saveFile(res) {
+    try {
+      downloadBase64(res.docx_base64, res.filename, DOCX_MIME);
+      return true;
+    } catch (e) {
+      toast.error(`${t('response_export.download_failed')}: ${e.message}`, { duration: 0 });
+      return false;
+    }
+  }
+
   async function doExport() {
     if (!ready || !confirmed || !isAttorney || degraded || busy || inFlight) return;
     setBusy(true);
@@ -72,17 +85,11 @@ export default function ResponseExportCard({
       // download) can fail, or a return to the page invites a second
       // sign-off (review W2b-S6).
       const kept = onExported?.(res) !== false;
-      try {
-        downloadBase64(res.docx_base64, res.filename, DOCX_MIME);
-      } catch (e) {
-        // Signed off all the same — not "export failed" (W2b-T3).
-        toast.error(`${t('response_export.download_failed')}: ${e.message}`);
-        return;
-      }
+      if (!saveFile(res)) return; // signed off all the same — not "export failed"
       // Refused (the analysis was replaced meanwhile): downloaded, but not
       // shown in the current review (W2b-T2).
       if (kept) toast.success(t('response_export.done'));
-      else toast.info(t('response_export.done_superseded'));
+      else toast.info(t('response_export.done_superseded'), { duration: 0 });
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) toast.error(t('signoff.signoff_required'));
       else toast.error(`${t('response_export.failed')}: ${e.message}`);
@@ -140,7 +147,7 @@ export default function ResponseExportCard({
             <Button
               variant="outline"
               size="xs"
-              onClick={() => downloadBase64(result.docx_base64, result.filename, DOCX_MIME)}
+              onClick={() => saveFile(result)}
             >
               <Download className="h-3.5 w-3.5" aria-hidden="true" />
               {t('response_export.download_again')}
