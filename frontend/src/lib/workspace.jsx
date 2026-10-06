@@ -129,9 +129,14 @@ export function WorkspaceProvider({ children }) {
     open?.resolve(ok);
   }, []);
 
-  /** Resolves true when it is fine to throw the current result away. */
+  /** Resolves true when it is fine to throw the current result away. Logging
+   * out also abandons a running analysis — asked about too (review W2b-R4). */
   const confirmDiscard = useCallback(
-    (kind) => (hasUnsavedDecisions(fieldsRef.current) ? ask(kind) : Promise.resolve(true)),
+    (kind) => {
+      if (hasUnsavedDecisions(fieldsRef.current)) return ask(kind);
+      if (kind === 'logout' && runRef.current) return ask('logout_running');
+      return Promise.resolve(true);
+    },
     [ask]
   );
 
@@ -146,6 +151,10 @@ export function WorkspaceProvider({ children }) {
       // Runs in the same event as the switch, so the old case's result is
       // never rendered under the new case (review W2b-D8).
       onSwitch: (next) => {
+        // Now, not at the next commit: a late answer for the old case that
+        // arrives between the switch and the render must already be refused
+        // by setCaseBound (review W2b-R3).
+        caseRef.current = next;
         setFields(dropCaseBound);
         if (runRef.current && runRef.current.caseId !== next) {
           // The analysis belongs to the case being left: stop waiting for it

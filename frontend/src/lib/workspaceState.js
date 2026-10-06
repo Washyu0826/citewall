@@ -17,6 +17,7 @@ export const CASE_BOUND_FIELDS = [
   'progress',
   'editors',
   'responseExport',
+  'exportsInFlight',
   'activeRejectionId',
 ];
 
@@ -48,4 +49,20 @@ export function hasUnsavedDecisions(fields) {
     const exportedInResponse = responseLines != null && responseLines[rid] === e.lines;
     return !(exportedAlone || exportedInResponse);
   });
+}
+
+/**
+ * A per-rejection export receipt, merged into the editors map (review
+ * W2b-R1): only the receipt and the sentences it covered are set on the
+ * CURRENT entry — sentences the attorney changed while the export ran stay,
+ * and count as unsaved (they are not the exported array). An entry for a
+ * different draft (or none) is replaced by what was exported.
+ */
+export function mergeReceipt(editors, rejectionId, { draft, exportResult, exportedLines }) {
+  const cur = editors?.[rejectionId];
+  const merged =
+    cur && cur.draft === draft
+      ? { ...cur, exportResult, exportedLines }
+      : { draft, lines: exportedLines, reviewed: true, exportResult, exportedLines };
+  return { ...(editors ?? {}), [rejectionId]: merged };
 }

@@ -9,11 +9,12 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
 // Budgets in KB of gzip. Raise them deliberately, in review, never silently.
-// Measured 2026-10-06 after lazy-loading every page: initial JS 183.4 KB
-// (was ~213 KB with every page in the entry chunk), CSS 11.9 KB, largest lazy
-// chunk (Analyze) 22.7 KB. What remains up front is what the shell itself
-// uses: React, router, i18n strings, TanStack Query, the Radix menus/dialogs,
-// tailwind-merge.
+// Around 2026-10-06, after lazy-loading every page: initial JS ~184 KB (was
+// ~213 KB with every page in the entry chunk), CSS ~12 KB, largest lazy chunk
+// (Analyze) ~23 KB. The exact current values are in every CI log of this
+// step — deliberately not repeated here, where they would go stale (P-13).
+// What remains up front is what the shell itself uses: React, router, i18n
+// strings, TanStack Query, the Radix menus/dialogs, tailwind-merge.
 export const BUDGET_KB = {
   initialJs: 190,
   initialCss: 16,

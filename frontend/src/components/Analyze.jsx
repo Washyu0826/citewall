@@ -12,6 +12,7 @@ import { normalizeRedactionPreview } from '../lib/normalize.js';
 import { toast } from '../lib/toast.jsx';
 import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { useWorkspace, useWorkspaceField } from '../lib/workspace.jsx';
+import { mergeReceipt } from '../lib/workspaceState.js';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from './ui/overlay.jsx';
 import { Page, PageHeader } from './ui/page.jsx';
@@ -157,6 +158,33 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
         rejections.map((r) => [
           r.rejection_id,
           (state) => setCaseBound(caseId, 'editors', (prev) => ({ ...(prev ?? {}), [r.rejection_id]: state })),
+        ])
+      ),
+    [rejections, setCaseBound, caseId]
+  );
+
+  // A per-rejection export's receipt, merged into the CURRENT entry (the
+  // editor that started it may be gone, and sentences changed meanwhile must
+  // survive — review W2b-R1), and its in-flight flag, which a remounted editor
+  // reads so it cannot start a second sign-off (W2b-R2). Both case-bound.
+  const receiptHandlers = useMemo(
+    () =>
+      Object.fromEntries(
+        rejections.map((r) => [
+          r.rejection_id,
+          (receipt) => setCaseBound(caseId, 'editors', (prev) => mergeReceipt(prev, r.rejection_id, receipt)),
+        ])
+      ),
+    [rejections, setCaseBound, caseId]
+  );
+  const [exportsInFlight] = useWorkspaceField('exportsInFlight', {});
+  const exportStateHandlers = useMemo(
+    () =>
+      Object.fromEntries(
+        rejections.map((r) => [
+          r.rejection_id,
+          (busy) =>
+            setCaseBound(caseId, 'exportsInFlight', (prev) => ({ ...(prev ?? {}), [r.rejection_id]: busy })),
         ])
       ),
     [rejections, setCaseBound, caseId]
@@ -327,6 +355,9 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
                     onProgress={progressHandlers[r.rejection_id]}
                     savedReview={editors[r.rejection_id]}
                     onSaveReview={saveHandlers[r.rejection_id]}
+                    onReceipt={receiptHandlers[r.rejection_id]}
+                    exportInFlight={exportsInFlight[r.rejection_id] === true}
+                    onExportState={exportStateHandlers[r.rejection_id]}
                     onShowReferences={isWide ? null : () => setRefsOpen(true)}
                   />
                 </div>
@@ -338,6 +369,10 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
                 progress={progress}
                 degraded={isDegraded}
                 savedResult={responseExport?.result}
+                inFlight={exportsInFlight.response === true}
+                onExportState={(busy) =>
+                  setCaseBound(caseId, 'exportsInFlight', (prev) => ({ ...(prev ?? {}), response: busy }))
+                }
                 onExported={(res) =>
                   setCaseBound(caseId, 'responseExport', {
                     result: res,

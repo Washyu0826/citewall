@@ -47,6 +47,9 @@ export default function DraftEditor({
   onProgress,
   saved,
   onSave,
+  onReceipt,
+  exportInFlight = false,
+  onExportState,
 }) {
   const { t } = useTranslation();
   const isParalegal = role === 'paralegal';
@@ -65,10 +68,25 @@ export default function DraftEditor({
   // a new array, so the workspace can tell exported work from unsaved work.
   const [exportedLines, setExportedLines] = useState(() => restored?.exportedLines ?? null);
   const [showOriginalIdx, setShowOriginalIdx] = useState(null);
-  const onSaveRef = useRef(onSave);
+  // An export started by an EARLIER mount of this editor (the attorney left
+  // and came back) still reports through the workspace: the receipt and the
+  // in-flight flag live there (review W2b-R2).
+  const callbacksRef = useRef({ onReceipt, onExportState });
   useEffect(() => {
-    onSaveRef.current = onSave;
-  }, [onSave]);
+    callbacksRef.current = { onReceipt, onExportState };
+  }, [onReceipt, onExportState]);
+  const savedReceipt = saved && saved.draft === initialDraft ? (saved.exportResult ?? null) : null;
+  const savedExportedLines = saved && saved.draft === initialDraft ? (saved.exportedLines ?? null) : null;
+  useEffect(() => {
+    // A receipt that landed after this editor mounted: adopt it, so the
+    // export button does not invite a second sign-off and the next change
+    // here does not save the receipt away.
+    if (savedReceipt && savedReceipt !== exportResult) {
+      setExportResult(savedReceipt);
+      setExportedLines(savedExportedLines);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- react to a NEW receipt only
+  }, [savedReceipt]);
 
   // A NEW draft resets the review. Not on mount: that would wipe what was
   // just restored.
@@ -170,7 +188,7 @@ export default function DraftEditor({
   }
 
   async function doExport() {
-    if (!reviewed || !canExport || !token || !caseId || pendingCount > 0 || degraded) return;
+    if (!reviewed || !canExport || !token || !caseId || pendingCount > 0 || degraded || exporting || exportInFlight) return;
     const segments = lines.map((l) => ({
       segment_id: l.segment_id,
       text: l.text,
@@ -179,6 +197,7 @@ export default function DraftEditor({
     }));
     const sentLines = lines;
     setExporting(true);
+    callbacksRef.current.onExportState?.(true);
     try {
       const res = await api.exportDraft(token, {
         case_id: caseId,
@@ -188,17 +207,13 @@ export default function DraftEditor({
       });
       setExportResult(res);
       setExportedLines(sentLines);
-      // Saved directly too: if the attorney left the page while the export
+      // Reported directly too: if the attorney left the page while the export
       // ran, this editor is gone and its effect will not report the receipt —
       // the sign-off happened on the server, so the workspace must know
-      // (review W2b-D3; otherwise a second, duplicate sign-off follows).
-      onSaveRef.current?.({
-        draft: initialDraft,
-        lines: sentLines,
-        reviewed: true,
-        exportResult: res,
-        exportedLines: sentLines,
-      });
+      // (review W2b-D3). Only the receipt: the workspace merges it into the
+      // CURRENT entry, so sentences changed during the export are kept (and
+      // count as unsaved — they differ from `sentLines`) (review W2b-R1).
+      callbacksRef.current.onReceipt?.({ draft: initialDraft, exportResult: res, exportedLines: sentLines });
       toast.success(t('signoff.export_success'));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -208,6 +223,7 @@ export default function DraftEditor({
       }
     } finally {
       setExporting(false);
+      callbacksRef.current.onExportState?.(false);
     }
   }
 
@@ -433,11 +449,11 @@ export default function DraftEditor({
             <Button
               type="button"
               variant="primary"
-              disabled={!reviewed || exporting || acceptedCount === 0 || pendingCount > 0 || degraded}
+              disabled={!reviewed || exporting || exportInFlight || acceptedCount === 0 || pendingCount > 0 || degraded}
               onClick={doExport}
               data-testid="signoff-export"
             >
-              {exporting ? t('signoff.exporting') : t('signoff.export')}
+              {exporting || exportInFlight ? t('signoff.exporting') : t('signoff.export')}
             </Button>
           </div>
         </div>

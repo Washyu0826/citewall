@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { CASE_BOUND_FIELDS, dropCaseBound, hasUnsavedDecisions } from './workspaceState.js';
+import { CASE_BOUND_FIELDS, dropCaseBound, hasUnsavedDecisions, mergeReceipt } from './workspaceState.js';
 
 const line = (status, source = 'ai_generated') => ({ segment_id: 's', text: 't', status, source });
 
@@ -63,5 +63,36 @@ describe('dropCaseBound', () => {
     const f = { oaText: 'OA' };
     expect(dropCaseBound(f)).toBe(f);
     expect(CASE_BOUND_FIELDS).toContain('editors');
+  });
+});
+
+describe('mergeReceipt (review W2b-R1)', () => {
+  const base = { result: { drafts: [] } };
+  const receipt = (exportedLines) => ({ draft: 'D', exportResult: { document: 'doc' }, exportedLines });
+
+  it('marks exactly the exported sentences as saved', () => {
+    const lines = [line('accepted')];
+    const editors = mergeReceipt({ r1: { draft: 'D', lines, reviewed: true } }, 'r1', receipt(lines));
+    expect(editors.r1).toMatchObject({ lines, reviewed: true, exportResult: { document: 'doc' }, exportedLines: lines });
+    expect(hasUnsavedDecisions({ ...base, editors })).toBe(false);
+  });
+
+  it('keeps sentences changed while the export ran — and they stay unsaved', () => {
+    const sent = [line('accepted')];
+    const changed = [line('excluded')];
+    const other = { draft: 'X', lines: [line('pending')] };
+    const editors = mergeReceipt({ r1: { draft: 'D', lines: changed }, r2: other }, 'r1', receipt(sent));
+    expect(editors.r1.lines).toBe(changed);
+    expect(editors.r1.exportedLines).toBe(sent);
+    expect(editors.r2).toBe(other);
+    expect(hasUnsavedDecisions({ ...base, editors })).toBe(true);
+  });
+
+  it('replaces an entry for another draft (or none) with what was exported', () => {
+    const sent = [line('accepted')];
+    for (const editors of [undefined, {}, { r1: { draft: 'OTHER', lines: [line('excluded')] } }]) {
+      const next = mergeReceipt(editors, 'r1', receipt(sent));
+      expect(next.r1).toEqual({ draft: 'D', lines: sent, reviewed: true, exportResult: { document: 'doc' }, exportedLines: sent });
+    }
   });
 });

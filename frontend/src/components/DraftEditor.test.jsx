@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { api } from '../api/client.js';
 import '../lib/i18n.js';
+import { mergeReceipt } from '../lib/workspaceState.js';
 import DraftEditor from './DraftEditor.jsx';
+
+afterEach(() => vi.restoreAllMocks());
 
 function renderEditor(draft) {
   render(
@@ -111,21 +114,80 @@ describe('DraftEditor review state survives leaving the page (research 09 FE-L1)
     expect(screen.getAllByTestId('draft-line')[0]).toHaveAttribute('data-status', 'pending');
   });
 
-  it('an export that finishes after the page was left is still saved (review W2b-D3)', async () => {
-    let finish;
-    const exportSpy = vi.spyOn(api, 'exportDraft').mockImplementation(() => new Promise((resolve) => (finish = resolve)));
-    let saved;
-    const view = mount({ initialDraft: '第一句。', onSave: (s) => (saved = s) });
-    fireEvent.keyDown(screen.getAllByTestId('draft-line')[0], { key: 'a' });
+  // A stand-in for the workspace's editors map (Analyze wires the same calls).
+  function workspaceStore() {
+    const store = { editors: {}, inFlight: false };
+    return {
+      store,
+      props: () => ({
+        saved: store.editors.R1,
+        onSave: (s) => (store.editors = { ...store.editors, R1: s }),
+        onReceipt: (r) => (store.editors = mergeReceipt(store.editors, 'R1', r)),
+        exportInFlight: store.inFlight,
+        onExportState: (busy) => (store.inFlight = busy),
+      }),
+    };
+  }
+
+  function startExport() {
     fireEvent.click(screen.getByTestId('signoff-checkbox'));
     fireEvent.click(screen.getByTestId('signoff-export'));
-    expect(exportSpy).toHaveBeenCalled();
-    const sent = saved.lines;
+  }
+
+  it('an export that finishes after the page was left is still recorded (review W2b-D3)', async () => {
+    let finish;
+    vi.spyOn(api, 'exportDraft').mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+    const ws = workspaceStore();
+    const view = mount({ initialDraft: '第一句。', ...ws.props() });
+    fireEvent.keyDown(screen.getAllByTestId('draft-line')[0], { key: 'a' });
+    startExport();
+    const sent = ws.store.editors.R1.lines;
     view.unmount(); // the attorney left while the sign-off was on its way
     await act(async () => finish({ document: 'doc', signed_off_by: 'alice' }));
-    expect(saved.exportResult).toEqual({ document: 'doc', signed_off_by: 'alice' });
-    expect(saved.exportedLines).toBe(sent);
-    exportSpy.mockRestore();
+    expect(ws.store.editors.R1.exportResult).toEqual({ document: 'doc', signed_off_by: 'alice' });
+    expect(ws.store.editors.R1.exportedLines).toBe(sent);
+    expect(ws.store.inFlight).toBe(false);
+  });
+
+  it('a late receipt does not overwrite sentences changed during the export (review W2b-R1)', async () => {
+    let finish;
+    vi.spyOn(api, 'exportDraft').mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+    const ws = workspaceStore();
+    const view = mount({ initialDraft: DRAFT, ...ws.props() });
+    fireEvent.click(screen.getByTestId('signoff-accept-all'));
+    startExport();
+    fireEvent.keyDown(screen.getAllByTestId('draft-line')[1], { key: 'x' }); // changed mid-export
+    view.unmount();
+    await act(async () => finish({ document: 'doc' }));
+    const entry = ws.store.editors.R1;
+    expect(entry.lines[1].status).toBe('excluded'); // the change survived the receipt
+    expect(entry.exportedLines).not.toBe(entry.lines); // …and still counts as unsaved
+  });
+
+  it('coming back during an export: no second sign-off, and the receipt appears when it lands (review W2b-R2)', async () => {
+    let finish;
+    const exportSpy = vi.spyOn(api, 'exportDraft').mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+    const ws = workspaceStore();
+    const first = mount({ initialDraft: '第一句。', ...ws.props() });
+    fireEvent.keyDown(screen.getAllByTestId('draft-line')[0], { key: 'a' });
+    startExport();
+    first.unmount(); // leave…
+    const back = mount({ initialDraft: '第一句。', ...ws.props() }); // …and come back
+    expect(screen.getByTestId('signoff-export')).toBeDisabled();
+
+    await act(async () => finish({ document: 'doc', signed_off_by: 'alice' }));
+    back.rerender(
+      <DraftEditor citationLookup={{}} caseId="CASE-T" rejectionId="R1" token="tok" canExport role="attorney" initialDraft="第一句。" {...ws.props()} />
+    );
+    expect(screen.getByTestId('export-result')).toBeInTheDocument();
+    expect(exportSpy).toHaveBeenCalledTimes(1);
+    // Adopted with the sentences it covered: nothing counts as unsaved.
+    expect(ws.store.editors.R1.exportedLines).toBe(ws.store.editors.R1.lines);
+    // The next change here keeps the receipt in the workspace (it used to
+    // save this editor's empty receipt over it).
+    fireEvent.keyDown(screen.getAllByTestId('draft-line')[0], { key: 'x' });
+    expect(ws.store.editors.R1.exportResult).toEqual({ document: 'doc', signed_off_by: 'alice' });
+    expect(ws.store.editors.R1.lines[0].status).toBe('excluded');
   });
 
   it('a new draft for the mounted editor still resets the review', () => {

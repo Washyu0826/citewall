@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Download, FileText, ShieldCheck } from 'lucide-react';
 
@@ -16,13 +16,29 @@ const ZH_NUMERALS = ['一', '二', '三', '四', '五', '六', '七', '八', '�
  * per-rejection export — every sentence decided, "I have reviewed" ticked,
  * attorney role, not a degraded result. The server re-checks all of it.
  */
-export default function ResponseExportCard({ session, caseId, rejections, progress, degraded, onExported, savedResult }) {
+export default function ResponseExportCard({
+  session,
+  caseId,
+  rejections,
+  progress,
+  degraded,
+  onExported,
+  savedResult,
+  inFlight = false,
+  onExportState,
+}) {
   const { t, i18n } = useTranslation();
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   // The receipt lives in the workspace (research 09 FE-L1): coming back to
-  // the page shows it again instead of inviting a second sign-off.
+  // the page shows it again. A receipt that lands after this card mounted
+  // (the export was started by an earlier mount) is adopted too, and an
+  // export in flight anywhere disables the button — no unintended second
+  // sign-off (review W2b-R2). A deliberate re-export stays possible.
   const [result, setResult] = useState(savedResult ?? null);
+  useEffect(() => {
+    if (savedResult) setResult(savedResult);
+  }, [savedResult]);
   const isAttorney = session?.role === 'attorney';
   const { ready, pending, accepted, missing } = exportReadiness(rejections, progress);
   const zh = (i18n.language || '').startsWith('zh');
@@ -42,8 +58,9 @@ export default function ResponseExportCard({ session, caseId, rejections, progre
   else if (accepted === 0) blocker = t('response_export.nothing_accepted');
 
   async function doExport() {
-    if (!ready || !confirmed || !isAttorney || degraded) return;
+    if (!ready || !confirmed || !isAttorney || degraded || busy || inFlight) return;
     setBusy(true);
+    onExportState?.(true);
     try {
       const res = await api.exportResponse(
         session.token,
@@ -58,6 +75,7 @@ export default function ResponseExportCard({ session, caseId, rejections, progre
       else toast.error(`${t('response_export.failed')}: ${e.message}`);
     } finally {
       setBusy(false);
+      onExportState?.(false);
     }
   }
 
@@ -91,9 +109,9 @@ export default function ResponseExportCard({ session, caseId, rejections, progre
             {blocker}
           </p>
           {isAttorney && (
-            <Button onClick={doExport} disabled={!ready || !confirmed || busy} data-testid="response-export-submit">
+            <Button onClick={doExport} disabled={!ready || !confirmed || busy || inFlight} data-testid="response-export-submit">
               <Download className="h-4 w-4" aria-hidden="true" />
-              {busy ? t('response_export.exporting') : t('response_export.export')}
+              {busy || inFlight ? t('response_export.exporting') : t('response_export.export')}
             </Button>
           )}
         </div>

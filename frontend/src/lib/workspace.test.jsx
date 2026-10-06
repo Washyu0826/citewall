@@ -141,7 +141,9 @@ describe('WorkspaceProvider', () => {
     expect(ws.fields.result).toBeUndefined();
   });
 
-  it('a second question gets a fresh, clickable dialog (CI wave 2b)', async () => {
+  // The flow only: the overlay left over by a reused dialog (B-41) needs real
+  // animation timing, which jsdom does not have — the e2e suite guards that.
+  it('a second question right after the first can be answered', async () => {
     renderWorkspace();
     act(() => {
       ws.setField('result', decided.result);
@@ -242,6 +244,59 @@ describe('WorkspaceProvider', () => {
     await waitFor(() => expect(ws.run).toBeNull());
     expect(ws.fields.result).toBeUndefined();
     expect(info).toHaveBeenCalledWith(i18n.t('workspace.result_discarded', { id: 'CASE-1' }));
+  });
+
+  it('a result that still arrives for the case that was left is dropped, not shown (B-12)', async () => {
+    // The server answers anyway (the abort is ignored): the case check must
+    // still keep CASE-1's result out of CASE-2.
+    let finish;
+    vi.spyOn(api, 'analyze').mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+    const info = vi.spyOn(toast, 'info').mockImplementation(() => {});
+    renderWorkspace();
+    act(() => {
+      ws.startAnalysis('tok', { case_id: 'CASE-1' });
+    });
+    let switched;
+    act(() => {
+      switched = currentCase.setCaseId('CASE-2');
+    });
+    fireEvent.click(await screen.findByTestId('discard-confirm'));
+    expect(await switched).toBe(true);
+    await act(async () => finish({ drafts: ['CASE-1 result'] }));
+    expect(currentCase.caseId).toBe('CASE-2');
+    expect(ws.fields.result).toBeUndefined();
+    expect(info).toHaveBeenCalledWith(i18n.t('workspace.result_discarded', { id: 'CASE-1' }));
+    expect(ws.run).toBeNull();
+  });
+
+  it('refuses an old-case answer that lands in the same update as the switch (W2b-R3)', () => {
+    renderWorkspace();
+    act(() => {
+      currentCase.setCaseId('CASE-2'); // nothing to lose: switches synchronously
+      ws.setCaseBound('CASE-1', 'redactPreview', { redacted: 'old case' });
+    });
+    expect(currentCase.caseId).toBe('CASE-2');
+    expect(ws.fields.redactPreview).toBeUndefined();
+  });
+
+  it('logging out during a running analysis asks first (W2b-R4)', async () => {
+    heldAnalyze();
+    renderWorkspace();
+    await expect(ws.confirmDiscard('logout')).resolves.toBe(true); // nothing running, nothing decided
+    act(() => {
+      ws.startAnalysis('tok', { case_id: 'CASE-1' });
+    });
+    let answer;
+    act(() => {
+      answer = ws.confirmDiscard('logout');
+    });
+    expect(await screen.findByText(i18n.t('workspace.discard.logout_running'))).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('discard-keep'));
+    expect(await answer).toBe(false);
+    expect(ws.run).not.toBeNull();
+    // Re-analysing is not asked about here: the analyze button is disabled
+    // while a run is in flight (SetupPanel).
+    await expect(ws.confirmDiscard('rerun')).resolves.toBe(true);
   });
 
   it('a superseded run never writes its result over the current one (W2b-D5)', async () => {

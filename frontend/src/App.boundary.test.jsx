@@ -26,18 +26,22 @@ function json(body) {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  globalThis.fetch = vi.fn(async (url) => {
-    const path = String(url).replace(/^\/api/, '').split('?')[0];
-    if (path === '/v1/auth/login') return json(DEMO_USERS.alice);
-    if (path === '/v1/quota') return json(defaultQuota());
-    if (path === '/v1/cases') return json(defaultCases());
-    return json({});
-  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url) => {
+      const path = String(url).replace(/^\/api/, '').split('?')[0];
+      if (path === '/v1/auth/login') return json(DEMO_USERS.alice);
+      if (path === '/v1/quota') return json(defaultQuota());
+      if (path === '/v1/cases') return json(defaultCases());
+      return json({});
+    })
+  );
 });
 
 afterEach(() => {
   queryClient.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals(); // the real fetch back for later test files
 });
 
 describe('App page boundaries', () => {

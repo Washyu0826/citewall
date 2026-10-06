@@ -32,24 +32,28 @@ beforeEach(() => {
   const gate = new Promise((resolve) => {
     releaseAnalyze = resolve;
   });
-  globalThis.fetch = vi.fn(async (url, init = {}) => {
-    const path = String(url).replace(/^\/api/, '').split('?')[0];
-    if (path === '/v1/auth/login') return json(DEMO_USERS.alice);
-    if (path === '/v1/quota') return json(defaultQuota());
-    if (path === '/v1/cases') return json(defaultCases());
-    if (path === '/v1/oa/analyze') {
-      analyzeCalls += 1;
-      await gate;
-      if (init.signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-      return json(defaultAnalysisResponse());
-    }
-    return json({});
-  });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url, init = {}) => {
+      const path = String(url).replace(/^\/api/, '').split('?')[0];
+      if (path === '/v1/auth/login') return json(DEMO_USERS.alice);
+      if (path === '/v1/quota') return json(defaultQuota());
+      if (path === '/v1/cases') return json(defaultCases());
+      if (path === '/v1/oa/analyze') {
+        analyzeCalls += 1;
+        await gate;
+        if (init.signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+        return json(defaultAnalysisResponse());
+      }
+      return json({});
+    })
+  );
 });
 
 afterEach(() => {
   queryClient.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals(); // the real fetch back for later test files
 });
 
 function renderApp() {
@@ -107,8 +111,10 @@ describe('App render stability', () => {
 
 describe('App workspace flows', () => {
   it('an analysis that finishes while the attorney is on another page is announced and kept', async () => {
+    const scroll = vi.spyOn(window, 'scrollTo');
     fireEvent.click(await loginAndOpenWorkspace());
     await screen.findByTestId('analysis-cancel');
+    expect(scroll).toHaveBeenCalledWith({ top: 0 }); // progress starts at the top (B-42)
     fireEvent.click(screen.getByTestId('nav-home'));
     await screen.findByTestId('home-new-analysis', {}, { timeout: 5000 });
     releaseAnalyze();
