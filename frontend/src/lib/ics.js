@@ -88,6 +88,9 @@ export function buildDeadlineIcs({ caseId, deadline, t }) {
     .join('\n');
 
   const events = vevent({
+    // UID domain keeps the former product name on purpose: a calendar matches
+    // re-imported events by UID, so renaming it would duplicate every
+    // deadline an attorney already imported (renamed 2026-10-06, NOTICE).
     uid: `${caseId}-statutory@citewall.local`,
     dateValue: statutory,
     summary: t('analyze.ics.statutory_summary', { caseId }),
@@ -109,7 +112,7 @@ export function buildDeadlineIcs({ caseId, deadline, t }) {
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//CiteWall//OA Deadline//EN',
+    'PRODID:-//Patent OA Assistant//OA Deadline//EN',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     ...events,

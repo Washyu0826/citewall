@@ -41,7 +41,7 @@ test.describe('Visual regression', () => {
 
   test('landing', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('text=CiteWall').first()).toBeVisible();
+    await expect(page.locator('text=Patent OA Assistant').first()).toBeVisible();
     await expect(page).toHaveScreenshot('landing.png', shot);
   });
 

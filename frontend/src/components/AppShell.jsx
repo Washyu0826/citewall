@@ -164,14 +164,18 @@ function TopBar({ session, onLogout, auditState, canCallAudit, onNavigateAudit, 
   return (
     <header className="border-b-4 border-accent bg-brand text-white">
       <div className={cn(CONTAINER, 'flex h-14 items-center gap-3')}>
-        <div className="flex shrink-0 items-center gap-2.5">
+        {/* min-w-0 + truncate: the product name is long; on a phone it may
+            clip rather than push the account controls off-screen. */}
+        <div className="flex min-w-0 items-center gap-2.5">
           <div
-            className="flex h-8 w-8 items-center justify-center rounded-brand bg-white text-sm font-bold tracking-tight text-navy-900"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-brand bg-white text-sm font-bold tracking-tight text-navy-900"
             aria-hidden="true"
           >
-            CW
+            OA
           </div>
-          <span className="text-lg font-bold tracking-tight">{t('app_title')}</span>
+          <span className="truncate text-lg font-bold tracking-tight" title={t('app_title')}>
+            {t('app_title')}
+          </span>
           <span className="hidden border-l border-white/30 pl-2.5 text-sm text-navy-100 lg:inline">
             {t('login.subtitle')}
           </span>

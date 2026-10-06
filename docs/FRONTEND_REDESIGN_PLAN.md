@@ -1,4 +1,4 @@
-# 前端改版計畫（CiteWall，2026-09-30 起）
+# 前端改版計畫（Patent OA Assistant，原名 CiteWall；2026-09-30 起）
 
 > 決策（負責人 2026-09-30）：目的 = 面試展示 + 事務所實用兼顧；風格 = 專業沉穩（延續深藍 + 琥珀，
 > 依 `docs/DESIGN_SYSTEM.md`）；範圍 = 全面重做（含資訊架構）；部署 = 公開 demo 網址 + 一行指令本機部署。
@@ -107,3 +107,6 @@
   - 在 `design/official-style` 分支上改，用 CI 截圖確認後再合回 main。
   - 工作台設定頁改為橫線分隔的表單：案件放最前面（手機上不再排在整份 OA 後面），用量改成側欄附註。
   - 合回 main（7d71185）後 CI 全綠：桌面 64、手機 45 passed；13 張視覺基準圖全部從 CI（Linux）截圖產生並逐張看過。
+- 2026-10-06：**改名 Patent OA Assistant**（負責人：「名字可能要重取一下，跟 AI 助手差的有點多」）。介面標題、圖示改 OA、favicon、
+  README、匯出與日曆的產品名、e2e 選擇器；CiteWall 保留為引用牆的名稱。刻意不改：快取加密標記與日曆事件 UID
+  （改了舊資料讀不到、已匯入的期限會重複），見 NOTICE。GitHub repo 改名為 `patent-oa-assistant`（舊網址自動轉址）。

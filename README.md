@@ -1,4 +1,4 @@
-# CiteWall   
+# Patent OA Assistant
 
 ![Legal Tech](https://img.shields.io/badge/Legal_Tech-Law-243c5a)
 ![AI Assistant](https://img.shields.io/badge/AI-Assistant-007acc)
@@ -10,19 +10,19 @@
 >
 > [English README](README.en.md) ｜ 授權：[Apache-2.0](LICENSE) ｜ 安全回報：[SECURITY.md](SECURITY.md)
 
-律師上傳審查意見（OA），CiteWall 會自動**分析核駁理由、找出前案、起草申復書、算出法定期限**；
+律師上傳審查意見（OA），Patent OA Assistant 會自動**分析核駁理由、找出前案、起草申復書、算出法定期限**；
 
 律師逐句審核、簽核後才能匯出。
 
-## 為什麼叫 CiteWall
+## 核心：CiteWall 引用牆
 
 法律 AI 最大的風險是**捏造引用**——引錯一個法條或前案，就是專業責任事故。
-所以我們在 LLM 和律師之間築一道**引用牆**：草稿中的每個引用都必須對應到真的檢索到的來源，
+所以我們在 LLM 和律師之間築一道**引用牆（CiteWall，也是本專案的舊名）**：草稿中的每個引用都必須對應到真的檢索到的來源，
 對不上就移除並標出來。**LLM 永遠不是最後的裁判。**
 
 ## 解決什麼問題
 
-| 律師事務所的痛點 | CiteWall 的做法 |
+| 律師事務所的痛點 | Patent OA Assistant 的做法 |
 |---|---|
 | 答辯大多是人工作業，費時 | 自動解析 OA、檢索前案、起草申復書 |
 | AI 可能捏造引用 | 引用牆：確定性驗證 + 逐句對齊 + 律師簽核 |
@@ -32,7 +32,7 @@
 
 ## 一、系統架構
 
-![CiteWall 架構：從上傳 OA 到申復書草稿的安全管線](presentation/assets/architecture.png)
+![Patent OA Assistant 架構：從上傳 OA 到申復書草稿的安全管線](presentation/assets/architecture.png)
 
 三條設計原則，由測試強制守住：
 
@@ -106,9 +106,9 @@ bash scripts/start_delivery.sh
 
 ## 六、前作與研究（Prior Art）
 
-CiteWall 不是從零開始，它建立在兩個先前的專案之上：
+Patent OA Assistant 不是從零開始，它建立在兩個先前的專案之上：
 
-| 前案 | 做了什麼 | CiteWall 延伸了什麼 |
+| 前案 | 做了什麼 | Patent OA Assistant 延伸了什麼 |
 |---|---|---|
 | [shin-lee-patent-rag](https://github.com/Washyu0826/shin-lee-patent-rag)（2026-04） | 台灣專利 RAG 問答：bge-m3 + HyDE + reranker，信心不足時拒答，並以 100 篇 TIPO 專利做對照實驗 | 從「找得到」走向「引用可信」：確定性引用硬牆、逐句對齊 |
 | shin-lee（2026-04～06，GDG on Campus 合作） | OA 答辯系統 POC：厚閘道、遮罩、稽核鏈、Dify 與 digiRunner 串接 | 多租戶、分散式正確性、隱私強化，以及公開發布前的全面審查 |

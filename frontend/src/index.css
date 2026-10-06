@@ -5,7 +5,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * CiteWall design tokens — docs/DESIGN_SYSTEM.md (primitives → semantic → component).
+ * Patent OA Assistant design tokens — docs/DESIGN_SYSTEM.md (primitives → semantic → component).
  *
  * Components consume the SEMANTIC utilities below (bg-surface-raised, text-fg-muted,
  * border-line …) instead of raw `bg-white dark:bg-slate-900` pairs: dark mode is

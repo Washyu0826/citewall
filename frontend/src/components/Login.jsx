@@ -21,7 +21,7 @@ const DESC_KEY = { alice: 'login.user_alice', bob: 'login.user_bob', carol: 'log
  * Sign-in. Deliberately an official-portal look, not a startup hero: solid
  * navy agency bar with the amber rule, a plain identity list, no marketing.
  *
- * Contract kept for e2e: a "CiteWall" brand string, one <button> per identity
+ * Contract kept for e2e: a "Patent OA Assistant" brand string, one <button> per identity
  * whose accessible name contains the person's name, errors as role="alert".
  */
 export default function Login({ onLogin }) {
@@ -73,7 +73,7 @@ export default function Login({ onLogin }) {
             className="flex h-9 w-9 items-center justify-center rounded-brand bg-white text-sm font-bold tracking-tight text-navy-900"
             aria-hidden="true"
           >
-            CW
+            OA
           </div>
           <div className="leading-tight">
             <div className="text-base font-semibold tracking-tight">{t('app_title')}</div>

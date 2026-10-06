@@ -350,7 +350,7 @@ def test_dify_calls_take_the_time_left_and_never_send_the_raw_request_id():
     assert sent["user"] == llm_client.dify_user_for("trace-陳小華-0912")
     assert "陳" not in sent["user"] and "0912" not in sent["user"] and "trace" not in sent["user"]
     assert llm_client.dify_user_for("trace-other") != sent["user"]
-    assert llm_client.dify_user_for(None) == "citewall-gateway"
+    assert llm_client.dify_user_for(None) == "patent-oa-assistant-gateway"
 
 
 def test_dify_out_of_time_raises_instead_of_answering_with_mock_text():

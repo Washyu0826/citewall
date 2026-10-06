@@ -1,4 +1,4 @@
-# CiteWall
+# Patent OA Assistant
 
 > **Privacy-first AI assistant for Taiwan patent office-action (OA) responses**
 >
@@ -6,20 +6,21 @@
 >
 > [繁體中文 README（主要）](README.md) · License: [Apache-2.0](LICENSE) · Security: [SECURITY.md](SECURITY.md)
 
-An attorney uploads an Office Action. CiteWall **classifies the rejections, retrieves prior art,
+An attorney uploads an Office Action. Patent OA Assistant **classifies the rejections, retrieves prior art,
 drafts the response and computes the statutory deadline** — and the attorney reviews and signs
 off every sentence before anything can be exported.
 
-## Why "CiteWall"
+## The core: the CiteWall citation wall
 
 The biggest risk in legal AI is a **fabricated citation** — citing the wrong statute or a
-non-existent reference is a professional-liability event. So there is a **wall** between the LLM
+non-existent reference is a professional-liability event. So there is a **wall** — CiteWall, also
+the project's former name — between the LLM
 and the attorney: every citation in a draft must map to a source that was actually retrieved,
 or it is stripped and flagged. **The LLM never gets the final say.**
 
 ## What it solves
 
-| Law-firm pain | How CiteWall handles it |
+| Law-firm pain | How Patent OA Assistant handles it |
 |---|---|
 | OA responses are mostly manual | Parses the OA, retrieves prior art, drafts the response |
 | AI can fabricate citations | Citation wall: deterministic check + sentence alignment + attorney sign-off |
@@ -113,9 +114,9 @@ Requires Python 3.13 and Node 24. Demo passwords are `demo-<user>` (e.g. `demo-a
 
 ## Prior art
 
-CiteWall builds on two earlier projects:
+Patent OA Assistant builds on two earlier projects:
 
-| Prior art | What it did | What CiteWall adds |
+| Prior art | What it did | What Patent OA Assistant adds |
 |---|---|---|
 | [shin-lee-patent-rag](https://github.com/Washyu0826/shin-lee-patent-rag) (2026-04) | Taiwan patent RAG Q&A: bge-m3 + HyDE + reranker, refuses to answer on low confidence, benchmarked on 100 TIPO patents | From "can it find it" to "can you trust the citation": deterministic citation wall, sentence alignment |
 | shin-lee (2026-04 to 06, GDG on Campus collaboration) | OA-response POC: thick gateway, masking, audit chain, Dify + digiRunner integration | Multi-tenancy, distributed correctness, privacy hardening, and a full pre-release review |

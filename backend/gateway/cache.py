@@ -296,6 +296,8 @@ def response_cache_key(tenant_id: str, user_id: str, case_id: str, prompt_hash: 
 # separation: a cache key never decrypts the mapping table, or vice versa).
 _RESP_HKDF_SALT = b"patentmind-response-cache"
 _RESP_HKDF_INFO = b"patentmind/response-cache/v1/tenant="
+# Stored-data format tag: keeps the former product name (renamed 2026-10-06,
+# NOTICE) — changing it would make every cached analysis unreadable.
 _ENC_MARK = "citewall-enc-v1"
 _fernets: dict[str, Any] = {}
 _fernets_lock = threading.Lock()

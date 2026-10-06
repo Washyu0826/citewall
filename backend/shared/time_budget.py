@@ -31,7 +31,7 @@ BUDGET_HEADER = "X-Time-Budget"  # seconds left in the request's budget
 _MAX_AHEAD_SEC = 3600.0
 
 _deadline_var: contextvars.ContextVar[float | None] = contextvars.ContextVar(
-    "citewall_request_deadline", default=None
+    "oa_assistant_request_deadline", default=None
 )
 
 

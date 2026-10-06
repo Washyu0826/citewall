@@ -9,7 +9,7 @@ test.describe('Login flow', () => {
     await page.goto('/');
 
     // Hero brand + tagline are visible.
-    await expect(page.locator('text=CiteWall').first()).toBeVisible();
+    await expect(page.locator('text=Patent OA Assistant').first()).toBeVisible();
 
     // All four demo identity cards render. The button text is just the user
     // initial + name + role label, so a name-matcher is the most stable.
@@ -27,7 +27,7 @@ test.describe('Login flow', () => {
     await page.getByRole('button', { name: /Alice/ }).click();
 
     await page.waitForURL(/\/home/, { timeout: 5000 });
-    await expect(page.locator('header').getByText('CiteWall')).toBeVisible();
+    await expect(page.locator('header').getByText('Patent OA Assistant')).toBeVisible();
     // Dashboard: the case with a deadline is listed.
     await expect(page.getByTestId('home-deadlines')).toContainText('CASE-2025-001');
   });

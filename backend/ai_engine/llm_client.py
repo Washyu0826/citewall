@@ -2548,7 +2548,9 @@ def dify_user_for(request_id: str | None) -> str:
     X-Request-ID, and which Dify stores in its end-user table — never reaches
     Dify (review W2-B7). One Dify end-user row per analysis."""
     if not request_id:
-        return "citewall-gateway"
+        return "patent-oa-assistant-gateway"
+    # The fallback key keeps the former product name: it decides the hashes,
+    # and changing it would break joins to existing Dify run logs.
     key = (settings.INTERNAL_TOKEN or "citewall-dify-user").encode("utf-8")
     return "req-" + hmac.new(key, request_id.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
 

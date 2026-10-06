@@ -1,10 +1,13 @@
-CiteWall
+Patent OA Assistant
 Copyright 2026 Washyu0826
 
 Student project — a GDG on Campus collaboration with TPIsoftware
 (NCCU GDGoC × Computex 2026). Originally developed under the working name
-"PatentMind"; internal identifiers (log names, Keycloak realm, Dify workflow
-names) still use that name.
+"PatentMind", then published as "CiteWall" (renamed 2026-10-06; CiteWall now
+names the citation wall). Internal identifiers keep the older names — log
+names, Keycloak realm, Dify workflow names ("PatentMind"), and stored-data
+markers such as the cache encryption tag and calendar-event UIDs ("citewall")
+— so existing data and imported calendar events stay valid.
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 

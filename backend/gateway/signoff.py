@@ -156,7 +156,7 @@ def build_response_docx(
     run = footer.add_run(
         f"簽核律師 / Signed off by: {signed_off_by}\n"
         f"內容 SHA-256 / Content SHA-256: {doc_hash}\n"
-        "本文件為 CiteWall 產生、經律師逐句審閱之草稿；送件前請再次確認。"
+        "本文件為 Patent OA Assistant 產生、經律師逐句審閱之草稿；送件前請再次確認。"
     )
     run.font.size = Pt(9)
     buf = io.BytesIO()
