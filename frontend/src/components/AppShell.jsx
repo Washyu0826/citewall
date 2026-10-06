@@ -26,7 +26,7 @@ import { useAuditVerify, useCases } from '../api/queries.js';
 import i18n, { htmlLangFor } from '../lib/i18n';
 import { useTheme } from '../lib/theme.jsx';
 import { useCurrentCase } from '../lib/currentCase.jsx';
-import { useWorkspace } from '../lib/workspace.jsx';
+import { useWorkspaceActions } from '../lib/workspace.jsx';
 import { isConfidentialLevel } from '../lib/cases.js';
 import { chainChipView } from '../lib/chainChip.js';
 import { cn } from '../lib/utils';
@@ -87,7 +87,7 @@ export default function AppShell({ session, onLogout, children, trustContext }) 
   const role = session?.role;
   // UX-5: signing out drops the workspace — ask first if there are sentence
   // decisions not exported yet.
-  const { confirmDiscard } = useWorkspace();
+  const { confirmDiscard } = useWorkspaceActions();
   const guardedLogout = useCallback(() => {
     confirmDiscard('logout').then((ok) => ok && onLogout());
   }, [confirmDiscard, onLogout]);

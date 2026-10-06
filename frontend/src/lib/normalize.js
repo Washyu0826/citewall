@@ -5,19 +5,32 @@
  * minimal backend, a proxy's error page) used to crash the page
  * (`quota.circuit_breaker.current_usd`, `rules_triggered.length`, `rows.map`).
  * Normalised once at the query layer into exactly the shape the view renders.
- * Unknown extra fields are kept. Pure — unit tested in normalize.test.js.
+ * Extra top-level fields are kept; a body that is not the expected object
+ * (`call()` hands a non-JSON 200 on as `{raw: '<html>…'}`) normalises to
+ * null / [] and the view says the data is unavailable — never made-up zeros.
+ * Pure — unit tested in normalize.test.js.
  */
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const str = (v) => (typeof v === 'string' ? v : '');
 const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
-const boolMap = (v) =>
-  isObj(v) ? Object.fromEntries(Object.entries(v).filter(([, b]) => typeof b === 'boolean')) : {};
+// Audit evidence: gate booleans AND the scalar facts some endpoints record
+// next to them (the export's provenance counts, the registry's outcome) —
+// dropping the non-booleans hid them from auditors (review W2b-E1). Only
+// nested objects / arrays are dropped (they cannot be rendered as text).
+const scalarMap = (v) =>
+  isObj(v)
+    ? Object.fromEntries(
+        Object.entries(v).filter(([, x]) => ['boolean', 'number', 'string'].includes(typeof x))
+      )
+    : {};
+const QUOTA_NUMBERS = ['user_daily_used', 'user_daily_limit', 'tenant_monthly_used', 'tenant_monthly_cap'];
 
 /** GET /v1/quota → usage bars + cost breaker; null when unusable. */
 export function normalizeQuota(data) {
-  if (!isObj(data)) return null;
+  // Not a snapshot at all (e.g. a proxy's HTML page): unavailable, not zeros.
+  if (!isObj(data) || !QUOTA_NUMBERS.some((k) => typeof data[k] === 'number')) return null;
   const cb = isObj(data.circuit_breaker) ? data.circuit_breaker : {};
   return {
     ...data,
@@ -49,12 +62,14 @@ export function normalizeAuditRows(data) {
     completion_tokens: num(r.completion_tokens),
     latency_ms: num(r.latency_ms),
     masked_field_rules: strList(r.masked_field_rules),
-    policy_decisions: boolMap(r.policy_decisions),
+    policy_decisions: scalarMap(r.policy_decisions),
   }));
 }
 
 /** POST /v1/redaction/preview → what the preview panel shows; null when unusable. */
 export function normalizeRedactionPreview(data) {
-  if (!isObj(data)) return null;
+  // Without the masked text there is no preview — the caller shows an error
+  // (an empty block would read as "nothing to mask" on the privacy step).
+  if (!isObj(data) || typeof data.redacted !== 'string') return null;
   return { ...data, redacted: str(data.redacted), rules_triggered: strList(data.rules_triggered) };
 }

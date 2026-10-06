@@ -2,8 +2,8 @@
 //
 // The workspace's state lives above the routes: leaving the page keeps the
 // result, the sentence decisions and a running analysis; a running analysis
-// can be cancelled; throwing unsaved decisions away (re-analysing, switching
-// case) asks first.
+// can be cancelled; throwing unsaved decisions or a running analysis away
+// (re-analysing, switching case) asks first.
 import { test, expect } from '@playwright/test';
 import { defaultAnalysisResponse, gotoNav, loginAsAlice, mockAnalyze } from './helpers/mock_backend.js';
 
@@ -23,6 +23,21 @@ async function acceptFirstSentence(page) {
   await expect(main(page).getByTestId('draft-line').first()).toHaveAttribute('data-status', 'accepted');
 }
 
+/** Hold /v1/oa/analyze until the returned function is called. */
+async function holdAnalyze(page) {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/v1/oa/analyze', async (route) => {
+    await gate;
+    await route
+      .fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(defaultAnalysisResponse()) })
+      .catch(() => {}); // the page may have stopped waiting (aborted)
+  });
+  return release;
+}
+
 test.describe('Workspace state (FE-L1 / UX-5)', () => {
   test('sentence decisions survive going to another page and back', async ({ page, viewport }) => {
     test.skip(viewport && viewport.width < 1280, XL_ONLY);
@@ -38,22 +53,15 @@ test.describe('Workspace state (FE-L1 / UX-5)', () => {
 
   test('an analysis keeps running while the attorney is on another page', async ({ page }) => {
     await loginAsAlice(page);
-    let release;
-    const gate = new Promise((resolve) => {
-      release = resolve;
-    });
-    await page.route('**/api/v1/oa/analyze', async (route) => {
-      await gate;
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(defaultAnalysisResponse()),
-      });
-    });
+    const release = await holdAnalyze(page);
     await analyzeButton(page).click();
     await expect(page.getByTestId('analysis-cancel')).toBeVisible();
 
     await gotoNav(page, '/home');
+    // The URL changes before React shows the (lazily loaded) page: release
+    // only once Home is really on screen — until then the attorney is still
+    // looking at the workspace, where no notice is needed.
+    await expect(page.getByTestId('home-new-analysis')).toBeVisible();
     release();
     await expect(page.getByText(/的分析完成了/)).toBeVisible({ timeout: 10_000 });
 
@@ -82,12 +90,15 @@ test.describe('Workspace state (FE-L1 / UX-5)', () => {
     await page.getByRole('button', { name: '編輯輸入' }).click();
     await analyzeButton(page).click();
     await page.getByTestId('discard-keep').click();
-    expect(posts).toBe(0); // kept: nothing was sent
+    await page.waitForTimeout(500); // a request would have been sent by now
+    expect(posts).toBe(0);
 
     await analyzeButton(page).click();
     await page.getByTestId('discard-confirm').click();
     await expect.poll(() => posts).toBe(1);
     await expect(main(page).getByText('答辯策略').first()).toBeVisible({ timeout: 10_000 });
+    // The new result starts with no decisions.
+    await expect(main(page).getByTestId('draft-line').first()).toHaveAttribute('data-status', 'pending');
   });
 
   test('switching case with sentence decisions asks first, and the page stays usable', async ({
@@ -101,10 +112,27 @@ test.describe('Workspace state (FE-L1 / UX-5)', () => {
     await page.getByTestId('case-switcher').click();
     await page.getByRole('menuitem', { name: /CASE-2025-002/ }).click();
     await page.getByTestId('discard-keep').click();
-
     await expect(page.getByTestId('case-switcher')).toContainText('CASE-2025-001');
     await expect(main(page).getByTestId('draft-line').first()).toHaveAttribute('data-status', 'accepted');
-    // The dialog opened from a dropdown item: the page must still take clicks.
+
+    // Confirming switches and drops the old case's result.
+    await page.getByTestId('case-switcher').click();
+    await page.getByRole('menuitem', { name: /CASE-2025-002/ }).click();
+    await page.getByTestId('discard-confirm').click();
+    await expect(page.getByTestId('case-switcher')).toContainText('CASE-2025-002');
+    await expect(page.getByText('答辯策略')).toHaveCount(0);
+    // The dialogs opened from a dropdown item: the page must still take clicks.
     await gotoNav(page, '/home');
+  });
+
+  test('switching case from the dashboard asks too (one guard for every switch)', async ({ page, viewport }) => {
+    test.skip(viewport && viewport.width < 1280, XL_ONLY);
+    await analyzed(page);
+    await acceptFirstSentence(page);
+    await gotoNav(page, '/home');
+
+    await page.getByRole('button', { name: '開始分析' }).first().click(); // another case
+    await page.getByTestId('discard-keep').click();
+    await expect(page.getByTestId('case-switcher')).toContainText('CASE-2025-001');
   });
 });

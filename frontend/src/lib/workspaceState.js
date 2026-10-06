@@ -16,7 +16,7 @@ export const CASE_BOUND_FIELDS = [
   'editing',
   'progress',
   'editors',
-  'responseExported',
+  'responseExport',
   'activeRejectionId',
 ];
 
@@ -27,19 +27,25 @@ export function dropCaseBound(fields) {
   return next;
 }
 
+const touched = (lines) =>
+  lines.some((l) => l?.status !== 'pending' || (l?.source && l.source !== 'ai_generated'));
+
 /**
  * Whether throwing the result away would lose the attorney's work (research
- * 09 UX-5): any sentence accepted, excluded, edited or added in a rejection
- * not exported yet. Nothing decided, or everything exported → nothing to lose.
+ * 09 UX-5): a rejection with any sentence accepted, excluded, edited or added
+ * whose CURRENT sentences were not exported — neither by that rejection's own
+ * export nor by the whole-response export. Sentences changed after an export
+ * count again (the exported snapshot is compared by identity: every change
+ * makes a new `lines` array).
  */
 export function hasUnsavedDecisions(fields) {
-  if (!fields?.result || fields.responseExported) return false;
-  const editors = fields.editors && typeof fields.editors === 'object' ? Object.values(fields.editors) : [];
-  return editors.some(
-    (e) =>
-      e &&
-      !e.exportResult &&
-      Array.isArray(e.lines) &&
-      e.lines.some((l) => l?.status !== 'pending' || (l?.source && l.source !== 'ai_generated'))
-  );
+  if (!fields?.result) return false;
+  const editors = fields.editors && typeof fields.editors === 'object' ? Object.entries(fields.editors) : [];
+  const responseLines = fields.responseExport?.linesByRejection ?? null;
+  return editors.some(([rid, e]) => {
+    if (!e || !Array.isArray(e.lines) || !touched(e.lines)) return false;
+    const exportedAlone = e.exportedLines != null && e.exportedLines === e.lines;
+    const exportedInResponse = responseLines != null && responseLines[rid] === e.lines;
+    return !(exportedAlone || exportedInResponse);
+  });
 }

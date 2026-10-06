@@ -61,7 +61,14 @@ export default function DraftEditor({
   const [addingValue, setAddingValue] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState(() => restored?.exportResult ?? null);
+  // The exact `lines` that were signed off and exported: a later change makes
+  // a new array, so the workspace can tell exported work from unsaved work.
+  const [exportedLines, setExportedLines] = useState(() => restored?.exportedLines ?? null);
   const [showOriginalIdx, setShowOriginalIdx] = useState(null);
+  const onSaveRef = useRef(onSave);
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   // A NEW draft resets the review. Not on mount: that would wipe what was
   // just restored.
@@ -72,6 +79,7 @@ export default function DraftEditor({
     setLines(splitIntoLines(initialDraft));
     setReviewed(false);
     setExportResult(null);
+    setExportedLines(null);
     setEditingIdx(null);
     setAddingValue('');
     setShowOriginalIdx(null);
@@ -85,8 +93,8 @@ export default function DraftEditor({
   const acceptablePending = lines.filter((l) => l.status === 'pending' && !acceptBlocked(l)).length;
 
   useEffect(() => {
-    onSave?.({ draft: initialDraft, lines, reviewed, exportResult });
-  }, [onSave, initialDraft, lines, reviewed, exportResult]);
+    onSave?.({ draft: initialDraft, lines, reviewed, exportResult, exportedLines });
+  }, [onSave, initialDraft, lines, reviewed, exportResult, exportedLines]);
 
   // Also hands the per-sentence decisions up, so the workspace can export the
   // whole response in one document. Fires only when `lines` / export change.
@@ -169,6 +177,7 @@ export default function DraftEditor({
       source: l.source,
       accepted: l.status === 'accepted',
     }));
+    const sentLines = lines;
     setExporting(true);
     try {
       const res = await api.exportDraft(token, {
@@ -178,6 +187,18 @@ export default function DraftEditor({
         attorney_signoff: true,
       });
       setExportResult(res);
+      setExportedLines(sentLines);
+      // Saved directly too: if the attorney left the page while the export
+      // ran, this editor is gone and its effect will not report the receipt —
+      // the sign-off happened on the server, so the workspace must know
+      // (review W2b-D3; otherwise a second, duplicate sign-off follows).
+      onSaveRef.current?.({
+        draft: initialDraft,
+        lines: sentLines,
+        reviewed: true,
+        exportResult: res,
+        exportedLines: sentLines,
+      });
       toast.success(t('signoff.export_success'));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {

@@ -9,15 +9,15 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
 // Budgets in KB of gzip. Raise them deliberately, in review, never silently.
-// Measured 2026-10-06 after lazy-loading every page: initial JS 180.9 KB
+// Measured 2026-10-06 after lazy-loading every page: initial JS 183.4 KB
 // (was ~213 KB with every page in the entry chunk), CSS 11.9 KB, largest lazy
-// chunk (Analyze) 22.5 KB. What remains up front is what the shell itself
+// chunk (Analyze) 22.7 KB. What remains up front is what the shell itself
 // uses: React, router, i18n strings, TanStack Query, the Radix menus/dialogs,
 // tailwind-merge.
 export const BUDGET_KB = {
   initialJs: 190,
   initialCss: 16,
-  largestLazyChunk: 40,
+  largestLazyChunk: 30,
 };
 
 const dist = process.argv[2] || 'dist';
@@ -52,8 +52,9 @@ for (const [name, kb] of Object.entries(measured)) {
 }
 console.log(`initial JS: ${initialJs.join(', ')}`);
 console.log(`lazy chunks: ${lazy.map((c) => `${c.file} ${c.kb.toFixed(1)} KB`).join(', ')}`);
-if (initialJs.length === 0) {
-  console.error('no entry script found in index.html — the parser needs updating');
+// A parser that finds nothing would pass vacuously.
+if (initialJs.length === 0 || initialCss.length === 0) {
+  console.error('no entry script / stylesheet found in index.html — the parser needs updating');
   failed = true;
 }
 process.exit(failed ? 1 : 0);

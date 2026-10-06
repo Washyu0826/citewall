@@ -16,11 +16,13 @@ const ZH_NUMERALS = ['一', '二', '三', '四', '五', '六', '七', '八', '�
  * per-rejection export — every sentence decided, "I have reviewed" ticked,
  * attorney role, not a degraded result. The server re-checks all of it.
  */
-export default function ResponseExportCard({ session, caseId, rejections, progress, degraded, onExported }) {
+export default function ResponseExportCard({ session, caseId, rejections, progress, degraded, onExported, savedResult }) {
   const { t, i18n } = useTranslation();
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null);
+  // The receipt lives in the workspace (research 09 FE-L1): coming back to
+  // the page shows it again instead of inviting a second sign-off.
+  const [result, setResult] = useState(savedResult ?? null);
   const isAttorney = session?.role === 'attorney';
   const { ready, pending, accepted, missing } = exportReadiness(rejections, progress);
   const zh = (i18n.language || '').startsWith('zh');
@@ -50,7 +52,7 @@ export default function ResponseExportCard({ session, caseId, rejections, progre
       setResult(res);
       downloadBase64(res.docx_base64, res.filename, DOCX_MIME);
       toast.success(t('response_export.done'));
-      onExported?.();
+      onExported?.(res);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) toast.error(t('signoff.signoff_required'));
       else toast.error(`${t('response_export.failed')}: ${e.message}`);

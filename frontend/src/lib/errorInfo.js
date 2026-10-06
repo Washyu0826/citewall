@@ -50,13 +50,14 @@ export function classifyError(err, t) {
  * so only a full reload helps — never a "try again" re-render. Browsers word it
  * differently: Chromium "Failed to fetch dynamically imported module", Safari
  * "Importing a module script failed", Firefox "error loading dynamically
- * imported module".
+ * imported module"; Vite itself "Unable to preload CSS for …" when a page
+ * chunk has its own stylesheet.
  */
 export function isChunkLoadError(err) {
   const msg = typeof err?.message === 'string' ? err.message : '';
   return (
     err?.name === 'ChunkLoadError' ||
-    /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(
+    /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module|Unable to preload CSS/i.test(
       msg
     )
   );

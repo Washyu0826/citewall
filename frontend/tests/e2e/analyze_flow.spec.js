@@ -59,6 +59,8 @@ test.describe('Analyze flow', () => {
     await analyzeButton(page).click(); // analysis for CASE-2025-001 in flight
     await page.getByTestId('case-switcher').click();
     await page.getByRole('menuitem', { name: /CASE-2025-002/ }).click();
+    // Leaving a running analysis asks first (research 09 UX-5, review W2b-D2).
+    await page.getByTestId('discard-confirm').click();
     release();
 
     // The old case's result is dropped and the attorney is told why.

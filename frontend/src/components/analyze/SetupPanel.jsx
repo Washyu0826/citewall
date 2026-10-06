@@ -46,6 +46,7 @@ export default function SetupPanel({
   onLogout,
   redactPreview,
   quota,
+  quotaUnavailable,
 }) {
   const { t } = useTranslation();
   const row = cases?.find((c) => c.case_id === caseId);
@@ -190,7 +191,9 @@ export default function SetupPanel({
       <aside className="self-start border-l-4 border-line pl-4 lg:sticky lg:top-6">
         <h2 className="text-base font-bold text-fg">{t('analyze.input.quota')}</h2>
         <div className="mt-3 space-y-3">
-          {!quota ? (
+          {!quota && quotaUnavailable ? (
+            <p className="text-sm text-fg-muted">{t('analyze.input.quota_unavailable')}</p>
+          ) : !quota ? (
             <SkeletonText lines={3} />
           ) : (
             <>

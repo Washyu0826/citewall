@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle } from 'lucide-react';
 
-import { api } from '../api/client.js';
+import { ApiError, api } from '../api/client.js';
 import { useCases, useQuota } from '../api/queries.js';
 import { buildCitationLookup, lookupForRejection } from '../lib/citations.js';
 import { useCurrentCase } from '../lib/currentCase.jsx';
@@ -63,14 +63,14 @@ const DEFAULT_CASE = 'CASE-2025-001';
 export default function Analyze({ session, onLogout, onTrustChange, initialCaseId }) {
   const { t } = useTranslation();
   const { setCaseId: setCurrentCase } = useCurrentCase();
-  const { run, startAnalysis, cancelAnalysis, confirmDiscard } = useWorkspace();
+  const { run, startAnalysis, cancelAnalysis, confirmDiscard, setCaseBound } = useWorkspace();
 
   const caseId = initialCaseId || DEFAULT_CASE;
   const [oaText, setOaText] = useWorkspaceField('oaText', SAMPLE_OA);
   const [targetPatent, setTargetPatent] = useWorkspaceField('targetPatent', 'US17123456');
   const [result] = useWorkspaceField('result', null);
   const [error, setError] = useWorkspaceField('error', null);
-  const [redactPreview, setRedactPreview] = useWorkspaceField('redactPreview', null);
+  const [redactPreview] = useWorkspaceField('redactPreview', null);
   const [editing, setEditing] = useWorkspaceField('editing', false);
   const [sourceTab, setSourceTab] = useWorkspaceField('sourceTab', 'paste');
   const [domicile, setDomicile] = useWorkspaceField('domicile', 'unknown');
@@ -80,35 +80,40 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   const [uploadWarnings, setUploadWarnings] = useWorkspaceField('uploadWarnings', []);
   const [activeRejectionId, setActiveRejectionId] = useWorkspaceField('activeRejectionId', null);
   const [progress, setProgress] = useWorkspaceField('progress', {});
-  const [editors, setEditors] = useWorkspaceField('editors', {});
-  const [responseExported, setResponseExported] = useWorkspaceField('responseExported', false);
+  const [editors] = useWorkspaceField('editors', {});
+  // The whole-response export receipt + the sentences it covered.
+  const [responseExport] = useWorkspaceField('responseExport', null);
+  const responseExported = responseExport !== null;
   const [previewing, setPreviewing] = useState(false);
   const [selectedCitation, setSelectedCitation] = useState(null);
   const [refsOpen, setRefsOpen] = useState(false);
   const isWide = useMediaQuery(WIDE_QUERY);
 
-  const { data: quota } = useQuota(session.token);
+  const quotaQ = useQuota(session.token);
+  const quota = quotaQ.data;
+  // Loaded but unusable (or failed): say so instead of a skeleton forever.
+  const quotaUnavailable = !quotaQ.isLoading && !quota;
   const casesQ = useCases(session.token);
   const cases = casesQ.data?.cases;
   const securityLevel = cases?.find((c) => c.case_id === caseId)?.security_level;
   // The analysis runs in the workspace provider: it keeps going (and its
-  // result is kept) while the attorney is on another page.
-  const running = run !== null;
+  // result is kept) while the attorney is on another page. Shown only for
+  // the case it belongs to.
+  const running = run !== null && run.caseId === caseId;
+
+  // The analyze button sits at the end of a long form (a screen or two down
+  // on a phone); progress and then the result start at the top — show them.
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (running && !wasRunning.current) window.scrollTo({ top: 0 });
+    wasRunning.current = running;
+  }, [running]);
 
   // Opened with no current case: publish the workspace default so the top-bar
   // switcher, the trust band and this page all name the same case (B-6).
   useEffect(() => {
     if (!initialCaseId) setCurrentCase(DEFAULT_CASE);
   }, [initialCaseId, setCurrentCase]);
-
-  // The case the page shows right now, for the redaction preview's stale
-  // check (a layout effect: same commit as a switch — review V-F1). Switching
-  // case drops the old result in the workspace provider, which also does the
-  // analysis's own stale check (FAILURE_LOG B-12).
-  const caseRef = useRef(caseId);
-  useLayoutEffect(() => {
-    caseRef.current = caseId;
-  }, [caseId]);
 
   useEffect(() => {
     if (typeof onTrustChange !== 'function') return;
@@ -146,9 +151,15 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   const saveHandlers = useMemo(
     () =>
       Object.fromEntries(
-        rejections.map((r) => [r.rejection_id, (state) => setEditors((prev) => ({ ...prev, [r.rejection_id]: state }))])
+        // Case-bound: an export that completes after a switch (the editor
+        // reports its receipt even when unmounted) must not land in the new
+        // case's workspace.
+        rejections.map((r) => [
+          r.rejection_id,
+          (state) => setCaseBound(caseId, 'editors', (prev) => ({ ...(prev ?? {}), [r.rejection_id]: state })),
+        ])
       ),
-    [rejections, setEditors]
+    [rejections, setCaseBound, caseId]
   );
 
   const citationLookup = useMemo(() => (result ? buildCitationLookup(result.related_prior_art) : {}), [result]);
@@ -173,10 +184,15 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
     const requestedCase = caseId;
     setPreviewing(true);
     try {
-      const preview = await api.redactionPreview(session.token, oaText, requestedCase);
-      if (caseRef.current === requestedCase) setRedactPreview(normalizeRedactionPreview(preview));
+      const preview = normalizeRedactionPreview(await api.redactionPreview(session.token, oaText, requestedCase));
+      // A preview without the masked text is not "nothing to mask": on the
+      // privacy step it must read as a failure (review W2b-E4).
+      if (!preview) throw new ApiError(502, 'unexpected redaction preview response');
+      // Case-bound, checked in the workspace: the attorney may have opened
+      // another case (from any page) while this was in flight (W2b-D1).
+      setCaseBound(requestedCase, 'redactPreview', preview);
     } catch (e) {
-      if (caseRef.current === requestedCase) setError(e);
+      setCaseBound(requestedCase, 'error', e);
     } finally {
       setPreviewing(false);
     }
@@ -249,6 +265,7 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
           onLogout={onLogout}
           redactPreview={redactPreview}
           quota={quota}
+          quotaUnavailable={quotaUnavailable}
         />
       )}
 
@@ -320,7 +337,13 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
                 rejections={rejections}
                 progress={progress}
                 degraded={isDegraded}
-                onExported={() => setResponseExported(true)}
+                savedResult={responseExport?.result}
+                onExported={(res) =>
+                  setCaseBound(caseId, 'responseExport', {
+                    result: res,
+                    linesByRejection: Object.fromEntries(Object.entries(editors).map(([rid, e]) => [rid, e?.lines])),
+                  })
+                }
               />
             </div>
 

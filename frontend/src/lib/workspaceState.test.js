@@ -19,11 +19,25 @@ describe('hasUnsavedDecisions', () => {
     expect(hasUnsavedDecisions({ ...base, editors: { r1: { lines: [line('pending', 'attorney_edited')] } } })).toBe(true);
   });
 
-  it('is false when that rejection — or the whole response — was exported', () => {
-    expect(hasUnsavedDecisions({ ...base, editors: { r1: { lines: [line('accepted')], exportResult: {} } } })).toBe(false);
+  it('is false when exactly the current sentences were exported — per rejection or as the whole response', () => {
+    const lines = [line('accepted')];
+    expect(hasUnsavedDecisions({ ...base, editors: { r1: { lines, exportedLines: lines } } })).toBe(false);
     expect(
-      hasUnsavedDecisions({ ...base, responseExported: true, editors: { r1: { lines: [line('accepted')] } } })
+      hasUnsavedDecisions({ ...base, responseExport: { linesByRejection: { r1: lines } }, editors: { r1: { lines } } })
     ).toBe(false);
+  });
+
+  it('counts changes made after an export again (review W2b-D4)', () => {
+    const exported = [line('accepted')];
+    const changedAfter = [line('excluded')];
+    expect(hasUnsavedDecisions({ ...base, editors: { r1: { lines: changedAfter, exportedLines: exported } } })).toBe(true);
+    expect(
+      hasUnsavedDecisions({
+        ...base,
+        responseExport: { linesByRejection: { r1: exported } },
+        editors: { r1: { lines: changedAfter } },
+      })
+    ).toBe(true);
   });
 
   it('ignores editor state left without a result', () => {
@@ -33,7 +47,15 @@ describe('hasUnsavedDecisions', () => {
 
 describe('dropCaseBound', () => {
   it('drops the analysis but keeps the typed inputs', () => {
-    const next = dropCaseBound({ oaText: 'OA', targetPatent: 'US1', result: {}, progress: {}, editors: {}, error: 'x' });
+    const next = dropCaseBound({
+      oaText: 'OA',
+      targetPatent: 'US1',
+      result: {},
+      progress: {},
+      editors: {},
+      responseExport: {},
+      error: 'x',
+    });
     expect(next).toEqual({ oaText: 'OA', targetPatent: 'US1' });
   });
 

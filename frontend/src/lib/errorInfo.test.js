@@ -65,6 +65,8 @@ describe('isChunkLoadError', () => {
     expect(isChunkLoadError(new TypeError('Importing a module script failed.'))).toBe(true);
     expect(isChunkLoadError(new TypeError('error loading dynamically imported module'))).toBe(true);
     expect(isChunkLoadError(Object.assign(new Error('x'), { name: 'ChunkLoadError' }))).toBe(true);
+    // Vite's own wording when a page chunk's stylesheet fails to load.
+    expect(isChunkLoadError(new Error('Unable to preload CSS for /assets/Analyze-1.css'))).toBe(true);
   });
 
   it('does not mistake an ordinary render error for one', () => {

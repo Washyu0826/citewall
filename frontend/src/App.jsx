@@ -19,11 +19,42 @@ const DesignSystem = lazy(() => import('./components/DesignSystem.jsx'));
 // was one 368 KB chunk with every page in it, so an auditor downloaded the
 // whole analysis workspace before seeing the audit log. The login screen and
 // the shell stay in the entry chunk — they are the first paint.
-const Analyze = lazy(() => import('./components/Analyze.jsx'));
-const AuditView = lazy(() => import('./components/AuditView.jsx'));
-const CaseAdmin = lazy(() => import('./components/CaseAdmin.jsx'));
-const Home = lazy(() => import('./components/pages/Home.jsx'));
-const Cases = lazy(() => import('./components/pages/Cases.jsx'));
+const loadAnalyze = () => import('./components/Analyze.jsx');
+const loadAuditView = () => import('./components/AuditView.jsx');
+const loadCaseAdmin = () => import('./components/CaseAdmin.jsx');
+const loadHome = () => import('./components/pages/Home.jsx');
+const loadCases = () => import('./components/pages/Cases.jsx');
+const Analyze = lazy(loadAnalyze);
+const AuditView = lazy(loadAuditView);
+const CaseAdmin = lazy(loadCaseAdmin);
+const Home = lazy(loadHome);
+const Cases = lazy(loadCases);
+
+// The pages each role's navigation leads to, fetched while the browser is
+// idle right after sign-in (review W2b-E2). Two reasons: the first click needs
+// no download, and an open tab keeps working across a redeploy — the new
+// image no longer serves the old hashed chunk files, and a chunk fetched only
+// later would 404 (and a reload signs the user out: the session is memory-only).
+const PAGES_FOR_ROLE = {
+  attorney: [loadHome, loadAnalyze, loadCases],
+  paralegal: [loadHome, loadAnalyze, loadCases],
+  auditor: [loadAuditView, loadCases],
+  it_admin: [loadCaseAdmin, loadAuditView],
+};
+
+function usePrefetchPages(role) {
+  useEffect(() => {
+    const loaders = PAGES_FOR_ROLE[role];
+    if (!loaders) return undefined;
+    const run = () => loaders.forEach((load) => load().catch(() => {}));
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(run, { timeout: 3000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = setTimeout(run, 1500);
+    return () => clearTimeout(id);
+  }, [role]);
+}
 
 function DesignRoute() {
   return (
@@ -73,6 +104,7 @@ export default function App() {
   const [trustContext, setTrustContext] = useState({ caseId: '', maskedEntityCount: 0 });
   // Keys the per-page error boundary: navigating away clears a page's error.
   const { pathname } = useLocation();
+  usePrefetchPages(session?.role);
 
   const handleLogout = useCallback(() => {
     setSession((cur) => {

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { api } from '../api/client.js';
 import '../lib/i18n.js';
 import DraftEditor from './DraftEditor.jsx';
 
@@ -108,6 +109,23 @@ describe('DraftEditor review state survives leaving the page (research 09 FE-L1)
 
     mount({ initialDraft: '另一份草稿。', saved });
     expect(screen.getAllByTestId('draft-line')[0]).toHaveAttribute('data-status', 'pending');
+  });
+
+  it('an export that finishes after the page was left is still saved (review W2b-D3)', async () => {
+    let finish;
+    const exportSpy = vi.spyOn(api, 'exportDraft').mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+    let saved;
+    const view = mount({ initialDraft: '第一句。', onSave: (s) => (saved = s) });
+    fireEvent.keyDown(screen.getAllByTestId('draft-line')[0], { key: 'a' });
+    fireEvent.click(screen.getByTestId('signoff-checkbox'));
+    fireEvent.click(screen.getByTestId('signoff-export'));
+    expect(exportSpy).toHaveBeenCalled();
+    const sent = saved.lines;
+    view.unmount(); // the attorney left while the sign-off was on its way
+    await act(async () => finish({ document: 'doc', signed_off_by: 'alice' }));
+    expect(saved.exportResult).toEqual({ document: 'doc', signed_off_by: 'alice' });
+    expect(saved.exportedLines).toBe(sent);
+    exportSpy.mockRestore();
   });
 
   it('a new draft for the mounted editor still resets the review', () => {

@@ -221,6 +221,16 @@ function GateDecisions({ decisions, t }) {
   return (
     <span className="flex min-w-40 max-w-64 flex-wrap gap-x-3 gap-y-0.5 text-sm">
       {entries.map(([k, v]) => {
+        // Recorded facts, not gates (the export's provenance counts, the
+        // registry's outcome): plain `key=value`, never a ✓/✗ — a count of 0
+        // is not a failed gate (review W2b-E1).
+        if (typeof v !== 'boolean') {
+          return (
+            <span key={k} className="whitespace-nowrap font-mono text-xs text-fg-muted" title={`${k}=${v}`}>
+              {t(`audit_page.gate.${k}`, { defaultValue: k })}={String(v)}
+            </span>
+          );
+        }
         const info = INFORMATIONAL.has(k);
         const failed = !info && !v;
         const Icon = v ? Check : X;

@@ -30,11 +30,19 @@ import { dropCaseBound, hasUnsavedDecisions } from './workspaceState.js';
  *
  * Also owns:
  *   - the running analysis, with cancel (an AbortSignal into `call()`);
+ *   - the case binding: everything here belongs to ONE case. A case switch
+ *     drops it in the same render as the switch, and late answers for the
+ *     old case (analysis, preview, export) are dropped, not stored under the
+ *     new one (`setCaseBound`);
  *   - the discard question (UX-5): re-analysing, switching case or logging
- *     out with unsaved sentence decisions asks first, and the browser warns
- *     before the tab is closed or reloaded.
+ *     out with unsaved sentence decisions — or switching away from a running
+ *     analysis — asks first; the browser warns before the tab is closed.
+ *
+ * Two contexts: the actions are stable, so components that only act (the
+ * shell's logout) do not re-render on every keystroke in the workspace.
  */
-const WorkspaceContext = createContext(null);
+const WorkspaceStateContext = createContext(null);
+const WorkspaceActionsContext = createContext(null);
 
 const WORKSPACE_PATH = '/analyze';
 
@@ -44,14 +52,16 @@ export function WorkspaceProvider({ children }) {
   const { caseId, setCaseChangeGuard } = useCurrentCase();
   const [fields, setFields] = useState({});
   const [run, setRun] = useState(null); // { caseId, startedAt } while an analysis is in flight
-  const [question, setQuestion] = useState(null); // { kind } — the open discard question
+  const [question, setQuestion] = useState(null); // { id, kind } — the open discard question
 
   const controllerRef = useRef(null);
+  const runRef = useRef(null);
   const aliveRef = useRef(true);
   const caseRef = useRef(caseId);
   const pathRef = useRef(pathname);
   const fieldsRef = useRef(fields);
-  const prevCaseRef = useRef(caseId);
+  const questionRef = useRef(null); // { id, resolve } — kept out of state (see `ask`)
+  const questionSeq = useRef(0);
   // Layout effects: they run in the same commit as the change, before any
   // network continuation reads them (the B-12 lesson, review V-F1).
   useLayoutEffect(() => {
@@ -67,19 +77,14 @@ export function WorkspaceProvider({ children }) {
   useEffect(() => {
     aliveRef.current = true;
     return () => {
-      // Logout / user switch: stop waiting; nothing may land in a dead tree.
+      // Logout / user switch: stop waiting; nothing may land in a dead tree,
+      // and an open question must not leave its caller waiting forever.
       aliveRef.current = false;
       controllerRef.current?.abort();
+      questionRef.current?.resolve(false);
+      questionRef.current = null;
     };
   }, []);
-
-  // The case changed — from anywhere (header, dashboard, case list, the
-  // form): the result, preview, error and decisions belong to the old case.
-  useEffect(() => {
-    if (prevCaseRef.current === caseId) return;
-    prevCaseRef.current = caseId;
-    setFields(dropCaseBound);
-  }, [caseId]);
 
   const setField = useCallback((name, next, fallback) => {
     setFields((f) => {
@@ -90,20 +95,29 @@ export function WorkspaceProvider({ children }) {
     });
   }, []);
 
+  /** Set a field only if `forCase` is still the open case — for answers
+   * that arrive after an await (redaction preview, export receipt). */
+  const setCaseBound = useCallback(
+    (forCase, name, value) => {
+      if (aliveRef.current && caseRef.current === forCase) setField(name, value);
+    },
+    [setField]
+  );
+
   // The promise's resolver lives in a ref, not in state: React may run state
   // updaters twice (StrictMode), and resolving belongs outside them.
-  const questionRef = useRef(null);
   const ask = useCallback(
     (kind) =>
       new Promise((resolve) => {
         questionRef.current?.resolve(false); // a newer question replaces an unanswered one
-        questionRef.current = { resolve };
+        questionSeq.current += 1;
+        const id = questionSeq.current;
+        questionRef.current = { id, resolve };
         // Open on the next tick: the switch / logout usually comes from a
         // Radix DropdownMenu item, and a Dialog opened while the menu is
-        // still closing can leave `pointer-events: none` on <body> after it
-        // closes (a known Radix interaction).
+        // still closing can leave `pointer-events: none` on <body>.
         setTimeout(() => {
-          if (aliveRef.current && questionRef.current?.resolve === resolve) setQuestion({ kind });
+          if (aliveRef.current && questionRef.current?.id === id) setQuestion({ id, kind });
         }, 0);
       }),
     []
@@ -122,9 +136,24 @@ export function WorkspaceProvider({ children }) {
   );
 
   useEffect(() => {
-    // Synchronous `true` when there is nothing to lose: the switch then
-    // happens exactly as before (see currentCase.jsx).
-    setCaseChangeGuard(() => (hasUnsavedDecisions(fieldsRef.current) ? ask('switch_case') : true));
+    setCaseChangeGuard({
+      // Synchronous `true` when there is nothing to lose: the switch then
+      // happens exactly as before (see currentCase.jsx).
+      guard: (next) => {
+        if (runRef.current && runRef.current.caseId !== next) return ask('switch_case_running');
+        return hasUnsavedDecisions(fieldsRef.current) ? ask('switch_case') : true;
+      },
+      // Runs in the same event as the switch, so the old case's result is
+      // never rendered under the new case (review W2b-D8).
+      onSwitch: (next) => {
+        setFields(dropCaseBound);
+        if (runRef.current && runRef.current.caseId !== next) {
+          // The analysis belongs to the case being left: stop waiting for it
+          // (its result could only be dropped — FAILURE_LOG B-12).
+          controllerRef.current?.abort('case_switch');
+        }
+      },
+    });
     return () => setCaseChangeGuard(null);
   }, [setCaseChangeGuard, ask]);
 
@@ -146,11 +175,13 @@ export function WorkspaceProvider({ children }) {
       controllerRef.current?.abort();
       const controller = new AbortController();
       controllerRef.current = controller;
-      setRun({ caseId: requestedCase, startedAt: Date.now() });
+      runRef.current = { caseId: requestedCase, startedAt: Date.now() };
+      setRun(runRef.current);
       setFields((f) => ({ ...dropCaseBound(f) }));
+      const current = () => aliveRef.current && controllerRef.current === controller;
       try {
         const r = await api.analyze(token, payload, { signal: controller.signal });
-        if (!aliveRef.current) return;
+        if (!current()) return; // superseded, cancelled after the answer arrived, or logged out
         queryClient.invalidateQueries({ queryKey: ['quota'] });
         queryClient.invalidateQueries({ queryKey: ['cases'] });
         // The case was switched while the analysis ran: this result belongs
@@ -167,13 +198,22 @@ export function WorkspaceProvider({ children }) {
       } catch (e) {
         if (!aliveRef.current) return;
         if (e?.cancelled) {
-          if (controllerRef.current === controller) toast.info(t('workspace.analysis_cancelled'));
+          if (controllerRef.current !== controller) return; // superseded by a newer run
+          // The server still finishes (and counts) it: refresh the usage.
+          queryClient.invalidateQueries({ queryKey: ['quota'] });
+          queryClient.invalidateQueries({ queryKey: ['cases'] });
+          toast.info(
+            controller.signal.reason === 'case_switch'
+              ? t('workspace.result_discarded', { id: requestedCase })
+              : t('workspace.analysis_cancelled')
+          );
           return;
         }
-        if (caseRef.current === requestedCase) setFields((f) => ({ ...f, error: e }));
+        if (current() && caseRef.current === requestedCase) setFields((f) => ({ ...f, error: e }));
       } finally {
         if (aliveRef.current && controllerRef.current === controller) {
           controllerRef.current = null;
+          runRef.current = null;
           setRun(null);
         }
       }
@@ -185,38 +225,55 @@ export function WorkspaceProvider({ children }) {
     controllerRef.current?.abort();
   }, []);
 
-  const value = useMemo(
-    () => ({ fields, setField, run, startAnalysis, cancelAnalysis, confirmDiscard }),
-    [fields, setField, run, startAnalysis, cancelAnalysis, confirmDiscard]
+  const actions = useMemo(
+    () => ({ setField, setCaseBound, startAnalysis, cancelAnalysis, confirmDiscard }),
+    [setField, setCaseBound, startAnalysis, cancelAnalysis, confirmDiscard]
   );
+  const state = useMemo(() => ({ fields, run }), [fields, run]);
 
   return (
-    <WorkspaceContext.Provider value={value}>
-      {children}
-      <Dialog open={question !== null} onOpenChange={(open) => !open && answer(false)}>
-        <DialogContent closeLabel={t('workspace.discard.keep')}>
-          <DialogHeader>
-            <DialogTitle>{t('workspace.discard.title')}</DialogTitle>
-            <DialogDescription>{t(`workspace.discard.${question?.kind ?? 'rerun'}`)}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => answer(false)} data-testid="discard-keep">
-              {t('workspace.discard.keep')}
-            </Button>
-            <Button variant="destructive" onClick={() => answer(true)} data-testid="discard-confirm">
-              {t('workspace.discard.confirm')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </WorkspaceContext.Provider>
+    <WorkspaceActionsContext.Provider value={actions}>
+      <WorkspaceStateContext.Provider value={state}>
+        {children}
+        {/* One Dialog instance per question (keyed, unmounted when answered):
+            reopening a reused Dialog right after closing it left the previous
+            open overlay covering the new one (CI, wave 2b). */}
+        {question && (
+          <Dialog key={question.id} open onOpenChange={(open) => !open && answer(false)}>
+            <DialogContent closeLabel={t('workspace.discard.keep')}>
+              <DialogHeader>
+                <DialogTitle>{t('workspace.discard.title')}</DialogTitle>
+                <DialogDescription>{t(`workspace.discard.${question.kind}`)}</DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => answer(false)} data-testid="discard-keep">
+                  {t('workspace.discard.keep')}
+                </Button>
+                <Button variant="destructive" onClick={() => answer(true)} data-testid="discard-confirm">
+                  {t('workspace.discard.confirm')}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+      </WorkspaceStateContext.Provider>
+    </WorkspaceActionsContext.Provider>
   );
 }
 
-export function useWorkspace() {
-  const ctx = useContext(WorkspaceContext);
-  if (!ctx) throw new Error('useWorkspace must be used inside <WorkspaceProvider>');
+/** Stable actions only — never re-renders the caller on workspace changes. */
+export function useWorkspaceActions() {
+  const ctx = useContext(WorkspaceActionsContext);
+  if (!ctx) throw new Error('useWorkspaceActions must be used inside <WorkspaceProvider>');
   return ctx;
+}
+
+/** State and actions (the workspace page). */
+export function useWorkspace() {
+  const state = useContext(WorkspaceStateContext);
+  const actions = useContext(WorkspaceActionsContext);
+  if (!state || !actions) throw new Error('useWorkspace must be used inside <WorkspaceProvider>');
+  return { ...state, ...actions };
 }
 
 /**
@@ -224,9 +281,10 @@ export function useWorkspace() {
  * navigation). `initial` is used until the field is first set.
  */
 export function useWorkspaceField(name, initial) {
-  const { fields, setField } = useWorkspace();
+  const { fields } = useContext(WorkspaceStateContext);
+  const { setField } = useWorkspaceActions();
   const initialRef = useRef(initial);
-  const value = Object.prototype.hasOwnProperty.call(fields, name) ? fields[name] : initial;
+  const value = Object.prototype.hasOwnProperty.call(fields, name) ? fields[name] : initialRef.current;
   const set = useCallback((next) => setField(name, next, initialRef.current), [name, setField]);
   return [value, set];
 }

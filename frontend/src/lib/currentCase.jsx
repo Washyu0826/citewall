@@ -9,10 +9,12 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState } fro
  * must not end up in browser history, proxy or server logs) and not in
  * localStorage (the next user of a shared workstation must not inherit it).
  *
- * A switch can be vetoed (research 09 UX-5): the workspace registers a guard
- * that asks before unsaved sentence decisions are thrown away. Every switch —
- * header, dashboard, case list, workspace form — goes through `setCaseId`, so
- * one guard covers them all. `setCaseId` resolves to whether it switched.
+ * A switch can be vetoed (research 09 UX-5): the workspace registers
+ * `{ guard, onSwitch }` — `guard(next)` returns true (synchronously, when
+ * nothing would be lost) or a Promise<boolean> (it asks first); `onSwitch`
+ * runs with the switch itself. Every switch — header, dashboard, case list,
+ * workspace form — goes through `setCaseId`, so one registration covers them
+ * all. `setCaseId` resolves to whether it switched.
  */
 const CurrentCaseContext = createContext({
   caseId: '',
@@ -29,9 +31,12 @@ export function CurrentCaseProvider({ children, initial = '' }) {
     if (next === caseRef.current) return Promise.resolve(true);
     const apply = () => {
       caseRef.current = next;
+      // The workspace drops the old case's analysis in the SAME update, so it
+      // is never rendered under the new case id.
+      guardRef.current?.onSwitch?.(next);
       setCaseIdState(next);
     };
-    const verdict = guardRef.current ? guardRef.current(next) : true;
+    const verdict = guardRef.current?.guard ? guardRef.current.guard(next) : true;
     // Nothing to protect (the usual case): switch synchronously, exactly as
     // before the guard existed — callers often navigate right after.
     if (verdict === true) {

@@ -39,6 +39,12 @@ server {
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         gzip_static on;
         gzip_vary on;
+        # Behind a TLS proxy (this container listens on plain :8080): a stock
+        # nginx proxy speaks HTTP/1.0 upstream and may add Via — with the
+        # defaults gzip_static would then silently send the raw files. Safe
+        # here: static, public, and Vary is sent (review W2b-E3).
+        gzip_http_version 1.0;
+        gzip_proxied any;
         try_files $uri =404;
     }
 
