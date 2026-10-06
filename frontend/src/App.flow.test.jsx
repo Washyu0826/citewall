@@ -17,6 +17,12 @@ import {
   defaultQuota,
 } from '../tests/e2e/helpers/mock_backend.js';
 
+// jsdom cannot save files; the download itself is not under test here.
+vi.mock('./lib/responseExport.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  downloadBase64: vi.fn(),
+}));
+
 // The whole app, StrictMode and lazy pages included, against a fake gateway:
 // the workspace flows that cross pages (research 09 FE-L1).
 
@@ -24,6 +30,8 @@ let releaseAnalyze;
 let analyzeCalls;
 let releaseExport;
 let exportCalls;
+let releaseResponseExport;
+let responseExportCalls;
 
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -32,11 +40,15 @@ function json(body, status = 200) {
 beforeEach(() => {
   analyzeCalls = 0;
   exportCalls = 0;
+  responseExportCalls = 0;
   const gate = new Promise((resolve) => {
     releaseAnalyze = resolve;
   });
-  const exportGate = new Promise((resolve) => {
-    releaseExport = resolve;
+  // One gate per export call: releaseExport(i) lets the i-th one answer.
+  const exportResolvers = [];
+  releaseExport = (i = 0) => exportResolvers[i]();
+  const responseExportGate = new Promise((resolve) => {
+    releaseResponseExport = resolve;
   });
   vi.stubGlobal(
     'fetch',
@@ -51,9 +63,14 @@ beforeEach(() => {
         if (init.signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
         return json(defaultAnalysisResponse());
       }
+      if (path === '/v1/oa/export_response') {
+        responseExportCalls += 1;
+        await responseExportGate;
+        return json({ docx_base64: 'AA==', filename: 'r.docx', content_sha256: 'b'.repeat(64), signed_off_by: 'alice' });
+      }
       if (path === '/v1/oa/export') {
         exportCalls += 1;
-        await exportGate;
+        await new Promise((resolve) => exportResolvers.push(resolve));
         return json({ document: 'doc', content_sha256: 'a'.repeat(64), signed_off_by: 'alice', attorney_signoff: true });
       }
       return json({});
@@ -169,11 +186,60 @@ describe('App workspace flows', () => {
     await screen.findByTestId('signoff-accept-all', {}, { timeout: 5000 }); // the fresh review
 
     releaseExport();
-    expect(await screen.findByText(i18n.t('signoff.export_success'), {}, { timeout: 5000 })).toBeInTheDocument();
+    // Said as superseded, not as done (W2b-T2).
+    expect(await screen.findByText(i18n.t('signoff.export_superseded'), {}, { timeout: 5000 })).toBeInTheDocument();
     // Let a (wrongly) accepted receipt be adopted: that takes an effect and a
     // render after the toast.
     await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
     expect(screen.queryByTestId('export-result')).toBeNull();
     expect(screen.getByTestId('signoff-export')).toBeDisabled(); // nothing decided yet in the fresh review
+  });
+
+  it('a whole-response receipt of an earlier analysis is not shown on a fresh review (W2b-T1, wiring)', async () => {
+    fireEvent.click(await loginAndOpenWorkspace());
+    releaseAnalyze();
+    fireEvent.click(await screen.findByTestId('signoff-accept-all', {}, { timeout: 5000 }));
+    fireEvent.click(screen.getByTestId('response-export-confirm'));
+    fireEvent.click(screen.getByTestId('response-export-submit'));
+    await waitFor(() => expect(responseExportCalls).toBe(1));
+
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('workspace.edit_input') }));
+    fireEvent.click(await screen.findByTestId('analyze-submit'));
+    fireEvent.click(await screen.findByTestId('discard-confirm'));
+    await waitFor(() => expect(analyzeCalls).toBe(2));
+    await screen.findByTestId('signoff-accept-all', {}, { timeout: 5000 }); // the fresh review
+
+    releaseResponseExport();
+    expect(await screen.findByText(i18n.t('response_export.done_superseded'), {}, { timeout: 5000 })).toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    expect(screen.queryByTestId('response-export-result')).toBeNull();
+  });
+
+  it("an earlier analysis's export landing late does not unlock the current one (W2b-T6, wiring)", async () => {
+    fireEvent.click(await loginAndOpenWorkspace());
+    releaseAnalyze();
+    fireEvent.click(await screen.findByTestId('signoff-accept-all', {}, { timeout: 5000 }));
+    fireEvent.click(screen.getByTestId('signoff-checkbox'));
+    fireEvent.click(screen.getByTestId('signoff-export'));
+    await waitFor(() => expect(exportCalls).toBe(1));
+
+    // Re-analyse, review again and export again while the first export is still out.
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('workspace.edit_input') }));
+    fireEvent.click(await screen.findByTestId('analyze-submit'));
+    fireEvent.click(await screen.findByTestId('discard-confirm'));
+    await waitFor(() => expect(analyzeCalls).toBe(2));
+    fireEvent.click(await screen.findByTestId('signoff-accept-all', {}, { timeout: 5000 }));
+    fireEvent.click(screen.getByTestId('signoff-checkbox'));
+    fireEvent.click(screen.getByTestId('signoff-export'));
+    await waitFor(() => expect(exportCalls).toBe(2));
+
+    releaseExport(0); // the FIRST analysis's export lands now
+    await screen.findByText(i18n.t('signoff.export_superseded'), {}, { timeout: 5000 });
+    fireEvent.click(screen.getByTestId('nav-home'));
+    await screen.findByTestId('home-new-analysis', {}, { timeout: 5000 });
+    fireEvent.click(screen.getByTestId('nav-analyze'));
+    // The current export is still out: no second sign-off.
+    expect(await screen.findByTestId('signoff-export', {}, { timeout: 5000 })).toBeDisabled();
+    expect(exportCalls).toBe(2);
   });
 });

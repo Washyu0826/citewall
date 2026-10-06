@@ -71,9 +71,18 @@ export default function ResponseExportCard({
       // The server has signed off: record that before anything local (the
       // download) can fail, or a return to the page invites a second
       // sign-off (review W2b-S6).
-      onExported?.(res);
-      downloadBase64(res.docx_base64, res.filename, DOCX_MIME);
-      toast.success(t('response_export.done'));
+      const kept = onExported?.(res) !== false;
+      try {
+        downloadBase64(res.docx_base64, res.filename, DOCX_MIME);
+      } catch (e) {
+        // Signed off all the same — not "export failed" (W2b-T3).
+        toast.error(`${t('response_export.download_failed')}: ${e.message}`);
+        return;
+      }
+      // Refused (the analysis was replaced meanwhile): downloaded, but not
+      // shown in the current review (W2b-T2).
+      if (kept) toast.success(t('response_export.done'));
+      else toast.info(t('response_export.done_superseded'));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) toast.error(t('signoff.signoff_required'));
       else toast.error(`${t('response_export.failed')}: ${e.message}`);

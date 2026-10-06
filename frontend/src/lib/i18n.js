@@ -222,6 +222,8 @@ const resources = {
         decided_count: '{{decided}}/{{total}} 已決定',
         signoff_required: '需律師簽核：請先勾選「我已逐項確認」再匯出。系統未產生任何文件。',
         export_success: '已匯出答辯稿（已簽核）',
+        export_superseded:
+          '簽核匯出已完成，但它屬於已被取代的分析（重新分析或切換了案件），不會顯示在目前的審閱上。伺服器的稽核紀錄有這次簽核；需要文件請在目前的審閱重新匯出。',
         export_failed: '匯出失敗',
         download: '下載 .txt',
         result_title: '已簽核答辯稿',
@@ -683,6 +685,8 @@ const resources = {
         signoff_required:
           'Attorney sign-off required: tick "I have reviewed each item" before export. No document was produced.',
         export_success: 'Response exported (signed off)',
+        export_superseded:
+          'The signed-off export finished, but it belongs to an analysis that was replaced (re-analysed or case switched), so it is not shown in the current review. The audit log records the sign-off; export again from the current review if you need the document.',
         export_failed: 'Export failed',
         download: 'Download .txt',
         result_title: 'Signed-off response',

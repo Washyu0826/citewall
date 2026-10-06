@@ -71,7 +71,7 @@ export default function DraftEditor({
   // An export started by an EARLIER mount of this editor (the attorney left
   // and came back) reports through the workspace: the receipt and the
   // in-flight flag live there, and `exportInFlight` keeps the button disabled
-  // until the receipt lands (review W2b-R2).
+  // until that export finishes — receipt or failure (review W2b-R2).
   const savedReceipt = saved && saved.draft === initialDraft ? (saved.exportResult ?? null) : null;
   const savedExportedLines = saved && saved.draft === initialDraft ? (saved.exportedLines ?? null) : null;
   useEffect(() => {
@@ -214,8 +214,11 @@ export default function DraftEditor({
       // (review W2b-D3). Only the receipt: the workspace merges it into the
       // CURRENT entry, so sentences changed during the export are kept (and
       // count as unsaved — they differ from `sentLines`) (review W2b-R1).
-      report.onReceipt?.({ draft: initialDraft, exportResult: res, exportedLines: sentLines });
-      toast.success(t('signoff.export_success'));
+      const kept = report.onReceipt?.({ draft: initialDraft, exportResult: res, exportedLines: sentLines });
+      // Refused (the analysis was replaced meanwhile): the sign-off happened,
+      // but it is not shown anywhere — say so instead of "done" (W2b-T2).
+      if (kept === false) toast.info(t('signoff.export_superseded'));
+      else toast.success(t('signoff.export_success'));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         toast.error(t('signoff.signoff_required'));

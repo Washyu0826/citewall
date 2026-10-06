@@ -117,14 +117,19 @@ export function WorkspaceProvider({ children }) {
    * leaving the case and coming back is a NEW analysis: it must not inherit
    * an older export's receipt (review W2b-S2). Checked inside the update,
    * against the state it applies to — so also in the same event as a case
-   * switch or a new analysis, which drop the result first. */
+   * switch or a new analysis, which drop the result first.
+   *
+   * Returns whether `forResult` is the committed result — for the caller's
+   * MESSAGE only (an export receipt that was refused must not say "done",
+   * review W2b-T2); the update above is what decides. */
   const setResultBound = useCallback((forResult, name, value) => {
-    if (!aliveRef.current || forResult == null) return;
+    if (!aliveRef.current || forResult == null) return false;
     setFields((f) => {
       if (f.result !== forResult) return f;
       const next = typeof value === 'function' ? value(f[name]) : value;
       return Object.is(next, f[name]) ? f : { ...f, [name]: next };
     });
+    return fieldsRef.current.result === forResult;
   }, []);
 
   // The promise's resolver lives in a ref, not in state: React may run state

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
 import { api } from '../../api/client.js';
-import '../../lib/i18n.js';
+import i18n from '../../lib/i18n.js';
 import { downloadBase64 } from '../../lib/responseExport.js';
 import { toast } from '../../lib/toast.jsx';
 import ResponseExportCard from './ResponseExportCard.jsx';
@@ -47,8 +47,8 @@ describe('ResponseExportCard — leaving the page during an export', () => {
     expect(onExported).toHaveBeenCalledWith(RECEIPT);
   });
 
-  it('records the receipt even when the local download fails (review W2b-S6)', async () => {
-    vi.spyOn(toast, 'error').mockImplementation(() => {});
+  it('records the receipt even when the local download fails, and says it was signed off (W2b-S6, T3)', async () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => {});
     downloadBase64.mockImplementationOnce(() => {
       throw new Error('bad base64');
     });
@@ -58,6 +58,7 @@ describe('ResponseExportCard — leaving the page during an export', () => {
     fireEvent.click(screen.getByTestId('response-export-confirm'));
     await act(async () => fireEvent.click(screen.getByTestId('response-export-submit')));
     expect(onExported).toHaveBeenCalledWith(RECEIPT);
+    expect(error).toHaveBeenCalledWith(`${i18n.t('response_export.download_failed')}: bad base64`);
   });
 
   it('a card mounted while an export is in flight cannot start another', () => {
