@@ -32,9 +32,10 @@ export default function ResponseExportCard({
   const [busy, setBusy] = useState(false);
   // The receipt lives in the workspace (research 09 FE-L1): coming back to
   // the page shows it again. A receipt that lands after this card mounted
-  // (the export was started by an earlier mount) is adopted too, and an
-  // export in flight anywhere disables the button — no unintended second
-  // sign-off (review W2b-R2). A deliberate re-export stays possible.
+  // (the export was started by an earlier mount) is adopted too, and a
+  // whole-response export still in flight from an earlier mount disables the
+  // button — no unintended second sign-off (review W2b-R2). A deliberate
+  // re-export stays possible.
   const [result, setResult] = useState(savedResult ?? null);
   useEffect(() => {
     if (savedResult) setResult(savedResult);
@@ -67,9 +68,12 @@ export default function ResponseExportCard({
         buildResponsePayload({ caseId, title: t('response_export.doc_title'), rejections, progress, headingFor })
       );
       setResult(res);
+      // The server has signed off: record that before anything local (the
+      // download) can fail, or a return to the page invites a second
+      // sign-off (review W2b-S6).
+      onExported?.(res);
       downloadBase64(res.docx_base64, res.filename, DOCX_MIME);
       toast.success(t('response_export.done'));
-      onExported?.(res);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) toast.error(t('signoff.signoff_required'));
       else toast.error(`${t('response_export.failed')}: ${e.message}`);

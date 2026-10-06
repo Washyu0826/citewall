@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 
 import { api } from '../../api/client.js';
 import '../../lib/i18n.js';
+import { downloadBase64 } from '../../lib/responseExport.js';
 import { toast } from '../../lib/toast.jsx';
 import ResponseExportCard from './ResponseExportCard.jsx';
 
@@ -43,6 +44,19 @@ describe('ResponseExportCard — leaving the page during an export', () => {
     expect(states).toEqual([true]);
     await act(async () => finish(RECEIPT));
     expect(states).toEqual([true, false]);
+    expect(onExported).toHaveBeenCalledWith(RECEIPT);
+  });
+
+  it('records the receipt even when the local download fails (review W2b-S6)', async () => {
+    vi.spyOn(toast, 'error').mockImplementation(() => {});
+    downloadBase64.mockImplementationOnce(() => {
+      throw new Error('bad base64');
+    });
+    vi.spyOn(api, 'exportResponse').mockResolvedValue(RECEIPT);
+    const onExported = vi.fn();
+    mount({ onExported });
+    fireEvent.click(screen.getByTestId('response-export-confirm'));
+    await act(async () => fireEvent.click(screen.getByTestId('response-export-submit')));
     expect(onExported).toHaveBeenCalledWith(RECEIPT);
   });
 

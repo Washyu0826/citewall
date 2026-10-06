@@ -69,17 +69,14 @@ export default function DraftEditor({
   const [exportedLines, setExportedLines] = useState(() => restored?.exportedLines ?? null);
   const [showOriginalIdx, setShowOriginalIdx] = useState(null);
   // An export started by an EARLIER mount of this editor (the attorney left
-  // and came back) still reports through the workspace: the receipt and the
-  // in-flight flag live there (review W2b-R2).
-  const callbacksRef = useRef({ onReceipt, onExportState });
-  useEffect(() => {
-    callbacksRef.current = { onReceipt, onExportState };
-  }, [onReceipt, onExportState]);
+  // and came back) reports through the workspace: the receipt and the
+  // in-flight flag live there, and `exportInFlight` keeps the button disabled
+  // until the receipt lands (review W2b-R2).
   const savedReceipt = saved && saved.draft === initialDraft ? (saved.exportResult ?? null) : null;
   const savedExportedLines = saved && saved.draft === initialDraft ? (saved.exportedLines ?? null) : null;
   useEffect(() => {
-    // A receipt that landed after this editor mounted: adopt it, so the
-    // export button does not invite a second sign-off and the next change
+    // A receipt that landed after this editor mounted: adopt it with the
+    // sentences it covered, so the signed-off panel shows and the next change
     // here does not save the receipt away.
     if (savedReceipt && savedReceipt !== exportResult) {
       setExportResult(savedReceipt);
@@ -196,8 +193,12 @@ export default function DraftEditor({
       accepted: l.status === 'accepted',
     }));
     const sentLines = lines;
+    // The handlers of THIS render: bound to the analysis on screen when the
+    // export was clicked. A receipt that lands after a re-analysis or a
+    // case switch is refused, not given to the newer analysis (W2b-S2).
+    const report = { onReceipt, onExportState };
     setExporting(true);
-    callbacksRef.current.onExportState?.(true);
+    report.onExportState?.(true);
     try {
       const res = await api.exportDraft(token, {
         case_id: caseId,
@@ -213,7 +214,7 @@ export default function DraftEditor({
       // (review W2b-D3). Only the receipt: the workspace merges it into the
       // CURRENT entry, so sentences changed during the export are kept (and
       // count as unsaved — they differ from `sentLines`) (review W2b-R1).
-      callbacksRef.current.onReceipt?.({ draft: initialDraft, exportResult: res, exportedLines: sentLines });
+      report.onReceipt?.({ draft: initialDraft, exportResult: res, exportedLines: sentLines });
       toast.success(t('signoff.export_success'));
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -223,7 +224,7 @@ export default function DraftEditor({
       }
     } finally {
       setExporting(false);
-      callbacksRef.current.onExportState?.(false);
+      report.onExportState?.(false);
     }
   }
 

@@ -86,7 +86,7 @@ export default function AppShell({ session, onLogout, children, trustContext }) 
   const location = useLocation();
   const role = session?.role;
   // UX-5: signing out drops the workspace — ask first if there are sentence
-  // decisions not exported yet.
+  // decisions not exported yet, or an analysis still running (W2b-R4).
   const { confirmDiscard } = useWorkspaceActions();
   const guardedLogout = useCallback(() => {
     confirmDiscard('logout').then((ok) => ok && onLogout());

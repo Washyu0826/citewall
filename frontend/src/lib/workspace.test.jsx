@@ -294,9 +294,37 @@ describe('WorkspaceProvider', () => {
     fireEvent.click(screen.getByTestId('discard-keep'));
     expect(await answer).toBe(false);
     expect(ws.run).not.toBeNull();
-    // Re-analysing is not asked about here: the analyze button is disabled
-    // while a run is in flight (SetupPanel).
+    // Re-analysing is not asked about here: the form is not shown while a
+    // run is in flight (Analyze: `showSetup = !running && …`).
     await expect(ws.confirmDiscard('rerun')).resolves.toBe(true);
+  });
+
+  it('receipts belong to one analysis: a re-analysis or a case switch refuses older ones (W2b-S2)', async () => {
+    const finishes = [];
+    vi.spyOn(api, 'analyze').mockImplementation(() => new Promise((resolve) => finishes.push(resolve)));
+    renderWorkspace();
+    act(() => {
+      ws.startAnalysis('tok', { case_id: 'CASE-1' });
+    });
+    await act(async () => finishes[0]({ drafts: ['same draft'] }));
+    const first = ws.fields.result;
+    act(() => ws.setResultBound(first, 'responseExport', { result: 'receipt' }));
+    expect(ws.fields.responseExport).toEqual({ result: 'receipt' });
+
+    act(() => {
+      ws.startAnalysis('tok', { case_id: 'CASE-1' }); // same case, same draft text
+    });
+    await act(async () => finishes[1]({ drafts: ['same draft'] }));
+    act(() => ws.setResultBound(first, 'responseExport', { result: 'late receipt of the first analysis' }));
+    expect(ws.fields.responseExport).toBeUndefined();
+
+    const second = ws.fields.result;
+    act(() => {
+      currentCase.setCaseId('CASE-2'); // nothing unsaved: switches synchronously
+      ws.setResultBound(second, 'responseExport', { result: 'old case' });
+    });
+    expect(currentCase.caseId).toBe('CASE-2');
+    expect(ws.fields.responseExport).toBeUndefined();
   });
 
   it('a superseded run never writes its result over the current one (W2b-D5)', async () => {

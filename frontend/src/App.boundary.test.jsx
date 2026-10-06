@@ -41,7 +41,7 @@ beforeEach(() => {
 afterEach(() => {
   queryClient.clear();
   vi.restoreAllMocks();
-  vi.unstubAllGlobals(); // the real fetch back for later test files
+  vi.unstubAllGlobals(); // undo the fetch stub (hygiene: vitest isolates test files anyway)
 });
 
 describe('App page boundaries', () => {

@@ -54,6 +54,7 @@ describe('dropCaseBound', () => {
       progress: {},
       editors: {},
       responseExport: {},
+      exportsInFlight: { R1: true }, // a stuck flag would disable the next analysis's export button
       error: 'x',
     });
     expect(next).toEqual({ oaText: 'OA', targetPatent: 'US1' });
@@ -88,11 +89,17 @@ describe('mergeReceipt (review W2b-R1)', () => {
     expect(hasUnsavedDecisions({ ...base, editors })).toBe(true);
   });
 
-  it('replaces an entry for another draft (or none) with what was exported', () => {
+  it('records what was exported when there is no entry yet', () => {
     const sent = [line('accepted')];
-    for (const editors of [undefined, {}, { r1: { draft: 'OTHER', lines: [line('excluded')] } }]) {
+    for (const editors of [undefined, {}]) {
       const next = mergeReceipt(editors, 'r1', receipt(sent));
       expect(next.r1).toEqual({ draft: 'D', lines: sent, reviewed: true, exportResult: { document: 'doc' }, exportedLines: sent });
     }
+  });
+
+  it('never overwrites an entry for another draft — that is newer work (review W2b-S1)', () => {
+    const editors = { r1: { draft: 'NEWER', lines: [line('accepted')] } };
+    expect(mergeReceipt(editors, 'r1', receipt([line('accepted')]))).toBe(editors);
+    expect(hasUnsavedDecisions({ ...base, editors })).toBe(true); // still asks before it is thrown away
   });
 });

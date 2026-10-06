@@ -56,13 +56,14 @@ export function hasUnsavedDecisions(fields) {
  * W2b-R1): only the receipt and the sentences it covered are set on the
  * CURRENT entry — sentences the attorney changed while the export ran stay,
  * and count as unsaved (they are not the exported array). An entry for a
- * different draft (or none) is replaced by what was exported.
+ * DIFFERENT draft is newer work than the export and is never overwritten
+ * (review W2b-S1); with no entry at all, what was exported is recorded.
  */
 export function mergeReceipt(editors, rejectionId, { draft, exportResult, exportedLines }) {
   const cur = editors?.[rejectionId];
-  const merged =
-    cur && cur.draft === draft
-      ? { ...cur, exportResult, exportedLines }
-      : { draft, lines: exportedLines, reviewed: true, exportResult, exportedLines };
+  if (cur && cur.draft !== draft) return editors;
+  const merged = cur
+    ? { ...cur, exportResult, exportedLines }
+    : { draft, lines: exportedLines, reviewed: true, exportResult, exportedLines };
   return { ...(editors ?? {}), [rejectionId]: merged };
 }

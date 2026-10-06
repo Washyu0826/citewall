@@ -64,7 +64,7 @@ const DEFAULT_CASE = 'CASE-2025-001';
 export default function Analyze({ session, onLogout, onTrustChange, initialCaseId }) {
   const { t } = useTranslation();
   const { setCaseId: setCurrentCase } = useCurrentCase();
-  const { run, startAnalysis, cancelAnalysis, confirmDiscard, setCaseBound } = useWorkspace();
+  const { run, startAnalysis, cancelAnalysis, confirmDiscard, setCaseBound, setResultBound } = useWorkspace();
 
   const caseId = initialCaseId || DEFAULT_CASE;
   const [oaText, setOaText] = useWorkspaceField('oaText', SAMPLE_OA);
@@ -148,34 +148,36 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
     [rejections, setProgress]
   );
 
+  // Everything below belongs to THIS analysis result (`setResultBound`): an
+  // export that completes after a case switch or a re-analysis (the editor
+  // reports its receipt even when unmounted) must not land in the newer
+  // analysis — not even one with the same draft text (review W2b-S2).
+
   // Each rejection's sentence decisions, saved in the workspace (FE-L1).
   const saveHandlers = useMemo(
     () =>
       Object.fromEntries(
-        // Case-bound: an export that completes after a switch (the editor
-        // reports its receipt even when unmounted) must not land in the new
-        // case's workspace.
         rejections.map((r) => [
           r.rejection_id,
-          (state) => setCaseBound(caseId, 'editors', (prev) => ({ ...(prev ?? {}), [r.rejection_id]: state })),
+          (state) => setResultBound(result, 'editors', (prev) => ({ ...(prev ?? {}), [r.rejection_id]: state })),
         ])
       ),
-    [rejections, setCaseBound, caseId]
+    [rejections, setResultBound, result]
   );
 
   // A per-rejection export's receipt, merged into the CURRENT entry (the
   // editor that started it may be gone, and sentences changed meanwhile must
   // survive — review W2b-R1), and its in-flight flag, which a remounted editor
-  // reads so it cannot start a second sign-off (W2b-R2). Both case-bound.
+  // reads so it cannot start a second sign-off (W2b-R2).
   const receiptHandlers = useMemo(
     () =>
       Object.fromEntries(
         rejections.map((r) => [
           r.rejection_id,
-          (receipt) => setCaseBound(caseId, 'editors', (prev) => mergeReceipt(prev, r.rejection_id, receipt)),
+          (receipt) => setResultBound(result, 'editors', (prev) => mergeReceipt(prev, r.rejection_id, receipt)),
         ])
       ),
-    [rejections, setCaseBound, caseId]
+    [rejections, setResultBound, result]
   );
   const [exportsInFlight] = useWorkspaceField('exportsInFlight', {});
   const exportStateHandlers = useMemo(
@@ -184,10 +186,10 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
         rejections.map((r) => [
           r.rejection_id,
           (busy) =>
-            setCaseBound(caseId, 'exportsInFlight', (prev) => ({ ...(prev ?? {}), [r.rejection_id]: busy })),
+            setResultBound(result, 'exportsInFlight', (prev) => ({ ...(prev ?? {}), [r.rejection_id]: busy })),
         ])
       ),
-    [rejections, setCaseBound, caseId]
+    [rejections, setResultBound, result]
   );
 
   const citationLookup = useMemo(() => (result ? buildCitationLookup(result.related_prior_art) : {}), [result]);
@@ -371,10 +373,10 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
                 savedResult={responseExport?.result}
                 inFlight={exportsInFlight.response === true}
                 onExportState={(busy) =>
-                  setCaseBound(caseId, 'exportsInFlight', (prev) => ({ ...(prev ?? {}), response: busy }))
+                  setResultBound(result, 'exportsInFlight', (prev) => ({ ...(prev ?? {}), response: busy }))
                 }
                 onExported={(res) =>
-                  setCaseBound(caseId, 'responseExport', {
+                  setResultBound(result, 'responseExport', {
                     result: res,
                     linesByRejection: Object.fromEntries(Object.entries(editors).map(([rid, e]) => [rid, e?.lines])),
                   })

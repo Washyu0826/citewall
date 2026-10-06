@@ -32,11 +32,18 @@ import { dropCaseBound, hasUnsavedDecisions } from './workspaceState.js';
  *   - the running analysis, with cancel (an AbortSignal into `call()`);
  *   - the case binding: everything here belongs to ONE case. A case switch
  *     drops it in the same render as the switch, and late answers for the
- *     old case (analysis, preview, export) are dropped, not stored under the
- *     new one (`setCaseBound`);
+ *     old case (analysis, preview, errors) are dropped, not stored under the
+ *     new one (`setCaseBound`). Reviews and export receipts are bound more
+ *     tightly, to one analysis result (`setResultBound`);
  *   - the discard question (UX-5): re-analysing, switching case or logging
- *     out with unsaved sentence decisions — or switching away from a running
- *     analysis — asks first; the browser warns before the tab is closed.
+ *     out with unsaved sentence decisions — or switching case or logging out
+ *     during a running analysis — asks first; the browser warns before the
+ *     tab is closed.
+ *
+ * An export still in flight when a new analysis starts (or the case is
+ * switched) loses its in-flight flag with the rest of the old analysis: the
+ * new analysis is a new review, and its export a new sign-off, not a
+ * duplicate. The old export's receipt is then refused (`setResultBound`).
  *
  * Two contexts: the actions are stable, so components that only act (the
  * shell's logout) do not re-render on every keystroke in the workspace.
@@ -96,13 +103,29 @@ export function WorkspaceProvider({ children }) {
   }, []);
 
   /** Set a field only if `forCase` is still the open case — for answers
-   * that arrive after an await (redaction preview, export receipt). */
+   * that arrive after an await (redaction preview, errors). */
   const setCaseBound = useCallback(
     (forCase, name, value) => {
       if (aliveRef.current && caseRef.current === forCase) setField(name, value);
     },
     [setField]
   );
+
+  /** Set a field only while `forResult` is still the analysis on screen —
+   * for what belongs to ONE analysis: sentence reviews, export receipts and
+   * in-flight flags. A re-analysis (same case, maybe the same draft text) or
+   * leaving the case and coming back is a NEW analysis: it must not inherit
+   * an older export's receipt (review W2b-S2). Checked inside the update,
+   * against the state it applies to — so also in the same event as a case
+   * switch or a new analysis, which drop the result first. */
+  const setResultBound = useCallback((forResult, name, value) => {
+    if (!aliveRef.current || forResult == null) return;
+    setFields((f) => {
+      if (f.result !== forResult) return f;
+      const next = typeof value === 'function' ? value(f[name]) : value;
+      return Object.is(next, f[name]) ? f : { ...f, [name]: next };
+    });
+  }, []);
 
   // The promise's resolver lives in a ref, not in state: React may run state
   // updaters twice (StrictMode), and resolving belongs outside them.
@@ -235,8 +258,8 @@ export function WorkspaceProvider({ children }) {
   }, []);
 
   const actions = useMemo(
-    () => ({ setField, setCaseBound, startAnalysis, cancelAnalysis, confirmDiscard }),
-    [setField, setCaseBound, startAnalysis, cancelAnalysis, confirmDiscard]
+    () => ({ setField, setCaseBound, setResultBound, startAnalysis, cancelAnalysis, confirmDiscard }),
+    [setField, setCaseBound, setResultBound, startAnalysis, cancelAnalysis, confirmDiscard]
   );
   const state = useMemo(() => ({ fields, run }), [fields, run]);
 
