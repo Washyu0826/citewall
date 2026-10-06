@@ -55,3 +55,43 @@ describe('call() error contract', () => {
     expect(err.message).not.toContain('/v1/');
   });
 });
+
+describe('call() cancellation (research 09 FE-L1)', () => {
+  const abortingFetch = () =>
+    vi.fn(
+      (_url, { signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            const e = new Error('aborted');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        })
+    );
+
+  it('reports the caller aborting as a cancellation, not an error to show', async () => {
+    globalThis.fetch = abortingFetch();
+    const controller = new AbortController();
+    const pending = call('/v1/oa/analyze', { signal: controller.signal, timeoutMs: 60_000 }).catch((e) => e);
+    controller.abort();
+    const err = await pending;
+    expect(err.cancelled).toBe(true);
+    expect(err.status).not.toBe(408);
+  });
+
+  it('still reports its own timeout as a 408 when a caller signal is present', async () => {
+    globalThis.fetch = abortingFetch();
+    const controller = new AbortController();
+    const err = await call('/v1/oa/analyze', { signal: controller.signal, timeoutMs: 5 }).catch((e) => e);
+    expect(err.status).toBe(408);
+    expect(err.cancelled).toBeUndefined();
+  });
+
+  it('does not even start a request whose signal is already aborted', async () => {
+    globalThis.fetch = abortingFetch();
+    const controller = new AbortController();
+    controller.abort();
+    const err = await call('/v1/oa/analyze', { signal: controller.signal }).catch((e) => e);
+    expect(err.cancelled).toBe(true);
+  });
+});

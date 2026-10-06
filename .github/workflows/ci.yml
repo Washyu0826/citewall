@@ -221,6 +221,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Research 09 FE-L4: what loads before the first page renders, in gzip
+      # bytes, against budgets in scripts/check-bundle.mjs.
+      - name: Bundle size budget
+        run: npm run check:bundle
+
       - name: npm audit (non-blocking)
         continue-on-error: true
         run: npm audit --omit=dev --audit-level=high

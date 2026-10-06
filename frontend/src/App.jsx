@@ -1,14 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import { Navigate, Route, Routes, useNavigate } from 'react-router';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
 
 import Login from './components/Login.jsx';
-import Analyze from './components/Analyze.jsx';
-import AuditView from './components/AuditView.jsx';
 import AppShell from './components/AppShell.jsx';
-import CaseAdmin from './components/CaseAdmin.jsx';
-import Home from './components/pages/Home.jsx';
-import Cases from './components/pages/Cases.jsx';
+import { PageLoading } from './components/PageLoading.jsx';
+import RouteErrorBoundary from './components/RouteErrorBoundary.jsx';
 import { CurrentCaseProvider, useCurrentCase } from './lib/currentCase.jsx';
+import { WorkspaceProvider } from './lib/workspace.jsx';
 import { SESSION_EXPIRED_EVENT, api } from './api/client.js';
 import { queryClient } from './lib/queryClient.js';
 import { toast } from './lib/toast.jsx';
@@ -16,6 +14,16 @@ import i18n from './lib/i18n.js';
 
 // 設計系統審稿頁（/design）— 內部用，lazy load 讓它不進主 bundle。
 const DesignSystem = lazy(() => import('./components/DesignSystem.jsx'));
+
+// Every signed-in page loads on demand (research 09 FE-L4): the first load
+// was one 368 KB chunk with every page in it, so an auditor downloaded the
+// whole analysis workspace before seeing the audit log. The login screen and
+// the shell stay in the entry chunk — they are the first paint.
+const Analyze = lazy(() => import('./components/Analyze.jsx'));
+const AuditView = lazy(() => import('./components/AuditView.jsx'));
+const CaseAdmin = lazy(() => import('./components/CaseAdmin.jsx'));
+const Home = lazy(() => import('./components/pages/Home.jsx'));
+const Cases = lazy(() => import('./components/pages/Cases.jsx'));
 
 function DesignRoute() {
   return (
@@ -63,6 +71,8 @@ export default function App() {
   const [session, setSession] = useState(null);
   // Lifted to App so it survives route changes; routes call setTrustContext.
   const [trustContext, setTrustContext] = useState({ caseId: '', maskedEntityCount: 0 });
+  // Keys the per-page error boundary: navigating away clears a page's error.
+  const { pathname } = useLocation();
 
   const handleLogout = useCallback(() => {
     setSession((cur) => {
@@ -111,7 +121,10 @@ export default function App() {
   return (
     // Keyed by user so a new login never inherits the previous user's case.
     <CurrentCaseProvider key={session.user_id || session.display_name}>
+      <WorkspaceProvider>
       <AppShell session={session} onLogout={handleLogout} trustContext={trustContext}>
+        <RouteErrorBoundary key={pathname}>
+        <Suspense fallback={<PageLoading />}>
         <Routes>
           <Route path="/login" element={<Navigate to={landingPath} replace />} />
           {canWorkCases && <Route path="/home" element={<Home session={session} />} />}
@@ -137,7 +150,10 @@ export default function App() {
           <Route path="/design" element={<DesignRoute />} />
           <Route path="*" element={<Navigate to={landingPath} replace />} />
         </Routes>
+        </Suspense>
+        </RouteErrorBoundary>
       </AppShell>
+      </WorkspaceProvider>
     </CurrentCaseProvider>
   );
 }

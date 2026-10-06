@@ -52,15 +52,36 @@ export function errorDetailText(body, fallback = '') {
 // therefore never fire this.
 export const SESSION_EXPIRED_EVENT = 'pm:session-expired';
 
+/** The caller aborted (`signal`): not an error to show — `err.cancelled`. */
+function cancelledError() {
+  const err = new ApiError(0, 'request cancelled');
+  err.cancelled = true;
+  return err;
+}
+
 export async function call(
   path,
-  { method = 'GET', body, token, headers = {}, timeoutMs = DEFAULT_TIMEOUT_MS } = {}
+  { method = 'GET', body, token, headers = {}, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = {}
 ) {
   const fullHeaders = { 'Content-Type': 'application/json', ...headers };
   if (token) fullHeaders.Authorization = `Bearer ${token}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  // A caller's signal (research 09 FE-L1: the user cancels a running
+  // analysis) aborts the same fetch, but is reported as a cancellation, not
+  // as a timeout.
+  if (signal?.aborted) {
+    clearTimeout(timer);
+    throw cancelledError();
+  }
+  const onCallerAbort = () => controller.abort();
+  signal?.addEventListener('abort', onCallerAbort, { once: true });
   let res;
+  let text;
   try {
     res = await fetch(BASE + path, {
       method,
@@ -68,6 +89,9 @@ export async function call(
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
+    // Inside the try: an abort (timeout or caller) can land while the body is
+    // still arriving, and must be reported the same way.
+    text = await res.text();
   } catch (e) {
     // Normalise transport-level failures to ApiError(0/408) so every caller's
     // `instanceof ApiError` branch handles them with a readable message
@@ -75,13 +99,16 @@ export async function call(
     // No path in the message: it is shown to the user, and paths are not
     // theirs to read (a path once carried a case id — FAILURE_LOG B-10).
     if (e?.name === 'AbortError') {
+      // Only the CALLER aborting is a cancellation; our timer, or anything
+      // else, stays the timeout it always was.
+      if (signal?.aborted && !timedOut) throw cancelledError();
       throw new ApiError(408, `request timed out after ${Math.round(timeoutMs / 1000)}s`);
     }
     throw new ApiError(0, 'network error: gateway unreachable. check your connection.', null);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onCallerAbort);
   }
-  const text = await res.text();
   let data = null;
   try {
     data = text ? JSON.parse(text) : null;
@@ -141,13 +168,14 @@ export const api = {
   // proxy access logs (FAILURE_LOG B-10). The gateway now refuses any
   // ?case_id= with 400 (B-27).
   quota: (token) => call('/v1/quota', { token }),
-  analyze: (token, payload) =>
+  analyze: (token, payload, { signal } = {}) =>
     call('/v1/oa/analyze', {
       method: 'POST',
       token,
       body: payload,
       headers: { 'X-Case-Id': payload.case_id },
       timeoutMs: LLM_TIMEOUT_MS,
+      signal,
     }),
   // Q16 sign-off export. Mirrors `analyze`: POST with the X-Case-Id header.
   // payload = { case_id, rejection_id?, segments:[{segment_id, text, source,

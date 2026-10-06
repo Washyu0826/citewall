@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle } from 'lucide-react';
 
 import { api } from '../api/client.js';
-import { useAnalyze, useCases, useQuota } from '../api/queries.js';
+import { useCases, useQuota } from '../api/queries.js';
 import { buildCitationLookup, lookupForRejection } from '../lib/citations.js';
 import { useCurrentCase } from '../lib/currentCase.jsx';
 import { buildDeadlineRequestFields } from '../lib/deadlineInputs.js';
 import { tablesForRejection } from '../lib/elementTable.js';
+import { normalizeRedactionPreview } from '../lib/normalize.js';
 import { toast } from '../lib/toast.jsx';
 import { useMediaQuery } from '../lib/useMediaQuery.js';
+import { useWorkspace, useWorkspaceField } from '../lib/workspace.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card.jsx';
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from './ui/overlay.jsx';
 import { Page, PageHeader } from './ui/page.jsx';
@@ -43,6 +44,7 @@ Attorney contact: alice.chen@apex-ip.com (mobile: 0912-345-678)
 // Three columns only when there is room for the drafts to breathe (UX_REVIEW
 // W4: 1366×768 was cramped); below this the references open in a dialog.
 const WIDE_QUERY = '(min-width: 1536px)';
+const DEFAULT_CASE = 'CASE-2025-001';
 
 /**
  * The analysis workspace: 輸入 OA → 確認遮罩 → 分析 → 逐句審閱 → 簽核匯出.
@@ -53,68 +55,60 @@ const WIDE_QUERY = '(min-width: 1536px)';
  *
  * The case comes from the shell (in-memory current case — never the URL);
  * `initialCaseId` changes when the user switches case.
+ *
+ * The workspace's state — inputs, result, sentence decisions, the running
+ * analysis — lives above the routes (lib/workspace.jsx, research 09 FE-L1),
+ * so leaving this page loses nothing; only transient UI state is local here.
  */
 export default function Analyze({ session, onLogout, onTrustChange, initialCaseId }) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   const { setCaseId: setCurrentCase } = useCurrentCase();
+  const { run, startAnalysis, cancelAnalysis, confirmDiscard } = useWorkspace();
 
-  const [oaText, setOaText] = useState(SAMPLE_OA);
-  const [caseId, setCaseId] = useState(initialCaseId || 'CASE-2025-001');
-  const [targetPatent, setTargetPatent] = useState('US17123456');
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
-  const [redactPreview, setRedactPreview] = useState(null);
+  const caseId = initialCaseId || DEFAULT_CASE;
+  const [oaText, setOaText] = useWorkspaceField('oaText', SAMPLE_OA);
+  const [targetPatent, setTargetPatent] = useWorkspaceField('targetPatent', 'US17123456');
+  const [result] = useWorkspaceField('result', null);
+  const [error, setError] = useWorkspaceField('error', null);
+  const [redactPreview, setRedactPreview] = useWorkspaceField('redactPreview', null);
+  const [editing, setEditing] = useWorkspaceField('editing', false);
+  const [sourceTab, setSourceTab] = useWorkspaceField('sourceTab', 'paste');
+  const [domicile, setDomicile] = useWorkspaceField('domicile', 'unknown');
+  const [oaSequence, setOaSequence] = useWorkspaceField('oaSequence', '');
+  const [serviceDate, setServiceDate] = useWorkspaceField('serviceDate', '');
+  const [loadedMeta, setLoadedMeta] = useWorkspaceField('loadedMeta', null);
+  const [uploadWarnings, setUploadWarnings] = useWorkspaceField('uploadWarnings', []);
+  const [activeRejectionId, setActiveRejectionId] = useWorkspaceField('activeRejectionId', null);
+  const [progress, setProgress] = useWorkspaceField('progress', {});
+  const [editors, setEditors] = useWorkspaceField('editors', {});
+  const [responseExported, setResponseExported] = useWorkspaceField('responseExported', false);
   const [previewing, setPreviewing] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [sourceTab, setSourceTab] = useState('paste');
-  const [domicile, setDomicile] = useState('unknown');
-  const [oaSequence, setOaSequence] = useState('');
-  const [serviceDate, setServiceDate] = useState('');
-  const [loadedMeta, setLoadedMeta] = useState(null);
-  const [uploadWarnings, setUploadWarnings] = useState([]);
-  const [activeRejectionId, setActiveRejectionId] = useState(null);
   const [selectedCitation, setSelectedCitation] = useState(null);
   const [refsOpen, setRefsOpen] = useState(false);
-  const [progress, setProgress] = useState({});
-  const [responseExported, setResponseExported] = useState(false);
   const isWide = useMediaQuery(WIDE_QUERY);
 
   const { data: quota } = useQuota(session.token);
   const casesQ = useCases(session.token);
   const cases = casesQ.data?.cases;
   const securityLevel = cases?.find((c) => c.case_id === caseId)?.security_level;
-  const analyzeMut = useAnalyze(session.token);
-  const running = analyzeMut.isPending;
+  // The analysis runs in the workspace provider: it keeps going (and its
+  // result is kept) while the attorney is on another page.
+  const running = run !== null;
 
   // Opened with no current case: publish the workspace default so the top-bar
   // switcher, the trust band and this page all name the same case (B-6).
   useEffect(() => {
-    if (!initialCaseId && caseId) setCurrentCase(caseId);
-  }, [initialCaseId, caseId, setCurrentCase]);
+    if (!initialCaseId) setCurrentCase(DEFAULT_CASE);
+  }, [initialCaseId, setCurrentCase]);
 
-  // The case the page shows right now, readable from an in-flight request's
-  // continuation (state captured by runAnalyze's closure would be stale).
-  // A LAYOUT effect, and keyed on the shell's case first: it runs in the same
-  // commit as the switch, before any network continuation can. A passive
-  // effect on `caseId` left a window of one render + one scheduler task in
-  // which the old case's result could still land (review V-F1).
+  // The case the page shows right now, for the redaction preview's stale
+  // check (a layout effect: same commit as a switch — review V-F1). Switching
+  // case drops the old result in the workspace provider, which also does the
+  // analysis's own stale check (FAILURE_LOG B-12).
   const caseRef = useRef(caseId);
   useLayoutEffect(() => {
-    caseRef.current = initialCaseId || caseId;
-  }, [initialCaseId, caseId]);
-
-  // The shell switched case: follow it, keep the typed OA, drop the old
-  // result, preview and error (an old case's error + Retry would re-run
-  // against the new case).
-  useEffect(() => {
-    if (!initialCaseId) return;
-    setCaseId(initialCaseId);
-    setResult(null);
-    setRedactPreview(null);
-    setError(null);
-    setEditing(false);
-  }, [initialCaseId]);
+    caseRef.current = caseId;
+  }, [caseId]);
 
   useEffect(() => {
     if (typeof onTrustChange !== 'function') return;
@@ -126,9 +120,13 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   // NB: progress is reset in runAnalyze, BEFORE the new result renders — a
   // reset here would run after the DraftEditors' mount-time reports (child
   // effects fire first) and wipe them.
+  // Keep the rejection the attorney was on when they come back to the page;
+  // a new result starts at its first rejection.
   useEffect(() => {
-    setActiveRejectionId(rejections[0]?.rejection_id ?? null);
-  }, [rejections]);
+    setActiveRejectionId((cur) =>
+      rejections.some((r) => r.rejection_id === cur) ? cur : (rejections[0]?.rejection_id ?? null)
+    );
+  }, [rejections, setActiveRejectionId]);
 
   // Stable per-rejection callbacks so DraftEditor's progress effect doesn't loop.
   const progressHandlers = useMemo(
@@ -141,7 +139,16 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
           (p) => setProgress((prev) => ({ ...prev, [r.rejection_id]: p })),
         ])
       ),
-    [rejections]
+    [rejections, setProgress]
+  );
+
+  // Each rejection's sentence decisions, saved in the workspace (FE-L1).
+  const saveHandlers = useMemo(
+    () =>
+      Object.fromEntries(
+        rejections.map((r) => [r.rejection_id, (state) => setEditors((prev) => ({ ...prev, [r.rejection_id]: state }))])
+      ),
+    [rejections, setEditors]
   );
 
   const citationLookup = useMemo(() => (result ? buildCitationLookup(result.related_prior_art) : {}), [result]);
@@ -167,7 +174,7 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
     setPreviewing(true);
     try {
       const preview = await api.redactionPreview(session.token, oaText, requestedCase);
-      if (caseRef.current === requestedCase) setRedactPreview(preview);
+      if (caseRef.current === requestedCase) setRedactPreview(normalizeRedactionPreview(preview));
     } catch (e) {
       if (caseRef.current === requestedCase) setError(e);
     } finally {
@@ -176,32 +183,16 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
   }
 
   async function runAnalyze() {
-    const requestedCase = caseId;
-    setError(null);
-    setResult(null);
-    setProgress({});
-    setResponseExported(false);
-    setEditing(false);
-    try {
-      const r = await analyzeMut.mutateAsync({
-        oa_text: oaText,
-        case_id: requestedCase,
-        target_patent_no: targetPatent,
-        ...buildDeadlineRequestFields({ domicile, oaSequence, serviceDate }),
-      });
-      queryClient.invalidateQueries({ queryKey: ['quota'] });
-      queryClient.invalidateQueries({ queryKey: ['cases'] });
-      // The case was switched while the analysis ran: this result belongs to
-      // the old case. Showing it would let it be signed off and exported under
-      // the new case id (FAILURE_LOG B-12) — drop it and say so.
-      if (caseRef.current !== requestedCase) {
-        toast.info(t('workspace.result_discarded', { id: requestedCase }));
-        return;
-      }
-      setResult(r);
-    } catch (e) {
-      if (caseRef.current === requestedCase) setError(e);
-    }
+    // UX-5: a new analysis replaces the result and its sentence decisions.
+    if (!(await confirmDiscard('rerun'))) return;
+    // The provider clears the old result, error and decisions, keeps the
+    // inputs, and drops a result that comes back for a case no longer open.
+    startAnalysis(session.token, {
+      oa_text: oaText,
+      case_id: caseId,
+      target_patent_no: targetPatent,
+      ...buildDeadlineRequestFields({ domicile, oaSequence, serviceDate }),
+    });
   }
 
   const showSetup = !running && (!result || editing);
@@ -226,7 +217,7 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
         <Stepper current={step} />
       </div>
 
-      {running && <RunningPanel />}
+      {running && <RunningPanel startedAt={run.startedAt} onCancel={cancelAnalysis} />}
 
       {showSetup && (
         <SetupPanel
@@ -317,6 +308,8 @@ export default function Analyze({ session, onLogout, onTrustChange, initialCaseI
                     onCitationClick={handleCitationClick}
                     degraded={isDegraded}
                     onProgress={progressHandlers[r.rejection_id]}
+                    savedReview={editors[r.rejection_id]}
+                    onSaveReview={saveHandlers[r.rejection_id]}
                     onShowReferences={isWide ? null : () => setRefsOpen(true)}
                   />
                 </div>

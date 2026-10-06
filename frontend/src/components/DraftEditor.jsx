@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Check, CheckCheck, ExternalLink, Pencil, ShieldX, Undo2, X } from 'lucide-react';
 import { api, ApiError } from '../api/client.js';
@@ -28,6 +28,11 @@ import { CITATION_REMOVED, applyEdit, isAcceptBlocked, splitIntoLines } from '..
  *
  * `onProgress` reports {total, decided, accepted, excluded, exported} so the
  * workspace can show whole-OA progress across rejections.
+ *
+ * `saved` / `onSave` (research 09 FE-L1): the decisions also live in the
+ * workspace above the routes. `saved` is what was there when this editor
+ * mounted — restored if it belongs to the same draft — and `onSave` receives
+ * every change, so leaving the page and coming back loses nothing.
  */
 export default function DraftEditor({
   initialDraft,
@@ -40,21 +45,30 @@ export default function DraftEditor({
   onCitationClick,
   degraded = false,
   onProgress,
+  saved,
+  onSave,
 }) {
   const { t } = useTranslation();
   const isParalegal = role === 'paralegal';
   const editedSource = isParalegal ? 'paralegal_edited' : 'attorney_edited';
   const addedSource = isParalegal ? 'paralegal_added' : 'attorney_added';
-  const [lines, setLines] = useState(() => splitIntoLines(initialDraft));
+  // Restore only what was saved for THIS draft text.
+  const [restored] = useState(() => (saved && saved.draft === initialDraft ? saved : null));
+  const [lines, setLines] = useState(() => restored?.lines ?? splitIntoLines(initialDraft));
   const [editingIdx, setEditingIdx] = useState(null);
   const [editValue, setEditValue] = useState('');
-  const [reviewed, setReviewed] = useState(false);
+  const [reviewed, setReviewed] = useState(() => restored?.reviewed ?? false);
   const [addingValue, setAddingValue] = useState('');
   const [exporting, setExporting] = useState(false);
-  const [exportResult, setExportResult] = useState(null);
+  const [exportResult, setExportResult] = useState(() => restored?.exportResult ?? null);
   const [showOriginalIdx, setShowOriginalIdx] = useState(null);
 
+  // A NEW draft resets the review. Not on mount: that would wipe what was
+  // just restored.
+  const draftRef = useRef(initialDraft);
   useEffect(() => {
+    if (draftRef.current === initialDraft) return;
+    draftRef.current = initialDraft;
     setLines(splitIntoLines(initialDraft));
     setReviewed(false);
     setExportResult(null);
@@ -69,6 +83,10 @@ export default function DraftEditor({
   const pendingCount = lines.length - decidedCount;
   const acceptBlocked = isAcceptBlocked;
   const acceptablePending = lines.filter((l) => l.status === 'pending' && !acceptBlocked(l)).length;
+
+  useEffect(() => {
+    onSave?.({ draft: initialDraft, lines, reviewed, exportResult });
+  }, [onSave, initialDraft, lines, reviewed, exportResult]);
 
   // Also hands the per-sentence decisions up, so the workspace can export the
   // whole response in one document. Fires only when `lines` / export change.

@@ -29,10 +29,16 @@ server {
         proxy_buffering off;
     }
 
-    # Hashed build assets: cache forever.
+    # Hashed build assets: cache forever, and send the .gz that the build made
+    # (scripts/precompress.mjs) — the SPA used to go out uncompressed, 682 KB
+    # of JS on a first visit (research 09 FE-L4). Static files only: API
+    # responses (/api/) stay uncompressed — they mix secrets with
+    # attacker-influenced text, the BREACH pattern.
     location /assets/ {
         include /etc/nginx/snippets/security-headers.conf;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
+        gzip_static on;
+        gzip_vary on;
         try_files $uri =404;
     }
 

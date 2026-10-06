@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 
 import { api } from './client.js';
+import { normalizeAuditRows, normalizeQuota } from '../lib/normalize.js';
 
 /**
  * TanStack Query hooks over the transport in client.js (P1③).
@@ -15,6 +16,8 @@ export function useQuota(token, enabled = true) {
   return useQuery({
     queryKey: ['quota'],
     queryFn: () => api.quota(token),
+    // FE-5: one well-formed shape for the view, whatever the backend sent.
+    select: normalizeQuota,
     enabled: enabled && !!token,
     // Quota fetch failing must never block the analyze surface — the old code
     // swallowed the error (.catch(()=>{})); mirror that by not retrying.
@@ -36,6 +39,7 @@ export function useAuditRecent(token, enabled = true) {
   return useQuery({
     queryKey: ['audit', 'recent'],
     queryFn: () => api.auditRecent(token),
+    select: normalizeAuditRows,
     enabled: enabled && !!token,
   });
 }

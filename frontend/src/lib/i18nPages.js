@@ -126,6 +126,31 @@ export const pagesZhTW = {
     gates_ok: '閘道檢查全部通過',
     gates: '閘道檢查',
     result_discarded: '分析期間已切換案件，{{id}} 的結果沒有顯示。請在該案件重新分析。',
+    // FE-L1: the analysis keeps running when the attorney leaves the page.
+    analysis_done: '{{id}} 的分析完成了，回到分析工作台即可查看。',
+    cancel: '取消等待',
+    // Honest: the request is only abandoned client-side.
+    cancel_hint: '伺服器可能仍會完成這次分析並計入用量；之後送出相同內容會直接取得結果。',
+    analysis_cancelled: '已停止等待分析結果。',
+    // UX-5: throwing away unsaved sentence decisions asks first.
+    discard: {
+      title: '放棄尚未匯出的審閱？',
+      rerun: '重新分析會取代目前的結果，已做的逐句決定（接受、排除、改寫）會遺失。',
+      switch_case: '切換案件會清除目前的結果，已做的逐句決定（接受、排除、改寫）會遺失。',
+      logout: '登出會清除目前的結果，已做的逐句決定（接受、排除、改寫）會遺失。',
+      keep: '保留，回到審閱',
+      confirm: '放棄並繼續',
+    },
+  },
+  page: {
+    loading: '載入頁面中…',
+    failed_title: '這個頁面無法顯示',
+    failed_body: '頁面發生錯誤。其他頁面與您的登入狀態不受影響。',
+    // A lazy page chunk failed to download — usually a new deployment
+    // replaced the old files, or the connection dropped.
+    chunk_failed: '頁面檔案下載失敗，可能是系統剛更新或網路中斷。請重新整理頁面。',
+    retry: '重試',
+    reload: '重新整理',
   },
   errors: {
     timeout: '請求逾時。模型可能仍在處理，請稍後重試。',
@@ -435,6 +460,26 @@ export const pagesEn = {
     gates_ok: 'All gateway checks passed',
     gates: 'Gateway checks',
     result_discarded: 'The case changed during the analysis, so the result for {{id}} was not shown. Analyze it again in that case.',
+    analysis_done: 'The analysis of {{id}} is ready — open the workspace to review it.',
+    cancel: 'Stop waiting',
+    cancel_hint: 'The server may still finish this analysis and count it against your usage; submitting the same input again then returns the result at once.',
+    analysis_cancelled: 'Stopped waiting for the analysis.',
+    discard: {
+      title: 'Discard the review you have not exported?',
+      rerun: 'Analyzing again replaces the current result; your sentence decisions (accepted, excluded, rewritten) will be lost.',
+      switch_case: 'Switching case clears the current result; your sentence decisions (accepted, excluded, rewritten) will be lost.',
+      logout: 'Signing out clears the current result; your sentence decisions (accepted, excluded, rewritten) will be lost.',
+      keep: 'Keep reviewing',
+      confirm: 'Discard and continue',
+    },
+  },
+  page: {
+    loading: 'Loading page…',
+    failed_title: 'This page cannot be shown',
+    failed_body: 'Something went wrong on this page. Other pages and your session are not affected.',
+    chunk_failed: 'The page could not be downloaded — the system may have just been updated, or the connection dropped. Reload the page.',
+    retry: 'Try again',
+    reload: 'Reload',
   },
   errors: {
     timeout: 'The request timed out. The model may still be working — try again shortly.',

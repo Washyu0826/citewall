@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
 
 import { cn } from '../../lib/utils';
+import { Button } from '../ui/button.jsx';
 import { Card } from '../ui/card.jsx';
 
 // Stage timings calibrated to the live chain (digiRunner → Dify → qwen2.5:7b,
@@ -23,18 +24,22 @@ function fmtElapsed(ms) {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export default function RunningPanel() {
+/**
+ * `startedAt` comes from the workspace (the analysis outlives this page —
+ * research 09 FE-L1), so coming back shows the real elapsed time, not 00:00.
+ * `onCancel` stops waiting; the note says what that does and does not do.
+ */
+export default function RunningPanel({ startedAt, onCancel }) {
   const { t } = useTranslation();
   const [now, setNow] = useState(() => Date.now());
-  const startRef = useRef(Date.now());
+  const mountedAt = useRef(Date.now());
 
   useEffect(() => {
-    startRef.current = Date.now();
     const id = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(id);
   }, []);
 
-  const elapsedMs = now - startRef.current;
+  const elapsedMs = Math.max(0, now - (startedAt ?? mountedAt.current));
   const idx = STAGES.findIndex((s) => elapsedMs / 1000 < s.untilSec);
   const currentIdx = idx === -1 ? STAGES.length - 1 : idx;
 
@@ -70,6 +75,14 @@ export default function RunningPanel() {
         })}
       </ol>
       <p className="mt-5 text-sm leading-relaxed text-fg-muted">{t('analyze.drafts.running_note')}</p>
+      {onCancel && (
+        <div className="mt-4 border-t border-line pt-4">
+          <Button variant="outline" size="sm" onClick={onCancel} data-testid="analysis-cancel">
+            {t('workspace.cancel')}
+          </Button>
+          <p className="mt-2 text-xs leading-relaxed text-fg-muted">{t('workspace.cancel_hint')}</p>
+        </div>
+      )}
     </Card>
   );
 }

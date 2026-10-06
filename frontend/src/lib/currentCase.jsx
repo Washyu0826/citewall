@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 
 /**
  * The case the user is working on, shared by the shell's case switcher, the
@@ -8,12 +8,47 @@ import { createContext, useContext, useMemo, useState } from 'react';
  * Held in memory only — deliberately NOT in the URL (CLAUDE.md §9: case ids
  * must not end up in browser history, proxy or server logs) and not in
  * localStorage (the next user of a shared workstation must not inherit it).
+ *
+ * A switch can be vetoed (research 09 UX-5): the workspace registers a guard
+ * that asks before unsaved sentence decisions are thrown away. Every switch —
+ * header, dashboard, case list, workspace form — goes through `setCaseId`, so
+ * one guard covers them all. `setCaseId` resolves to whether it switched.
  */
-const CurrentCaseContext = createContext({ caseId: '', setCaseId: () => {} });
+const CurrentCaseContext = createContext({
+  caseId: '',
+  setCaseId: () => Promise.resolve(true),
+  setCaseChangeGuard: () => {},
+});
 
 export function CurrentCaseProvider({ children, initial = '' }) {
-  const [caseId, setCaseId] = useState(initial);
-  const value = useMemo(() => ({ caseId, setCaseId }), [caseId]);
+  const [caseId, setCaseIdState] = useState(initial);
+  const caseRef = useRef(initial);
+  const guardRef = useRef(null);
+
+  const setCaseId = useCallback((next) => {
+    if (next === caseRef.current) return Promise.resolve(true);
+    const apply = () => {
+      caseRef.current = next;
+      setCaseIdState(next);
+    };
+    const verdict = guardRef.current ? guardRef.current(next) : true;
+    // Nothing to protect (the usual case): switch synchronously, exactly as
+    // before the guard existed — callers often navigate right after.
+    if (verdict === true) {
+      apply();
+      return Promise.resolve(true);
+    }
+    return Promise.resolve(verdict).then((ok) => {
+      if (ok) apply();
+      return ok === true;
+    });
+  }, []);
+
+  const setCaseChangeGuard = useCallback((guard) => {
+    guardRef.current = guard;
+  }, []);
+
+  const value = useMemo(() => ({ caseId, setCaseId, setCaseChangeGuard }), [caseId, setCaseId, setCaseChangeGuard]);
   return <CurrentCaseContext.Provider value={value}>{children}</CurrentCaseContext.Provider>;
 }
 

@@ -42,3 +42,22 @@ export function classifyError(err, t) {
   }
   return { message: t('errors.unexpected'), retryable: false, showDetails: true };
 }
+
+/**
+ * A lazily loaded page whose JS chunk could not be downloaded (research 09
+ * FE-L4/FE-5): usually a redeploy replaced the hashed files the open tab still
+ * references, or the connection dropped. React.lazy caches the failed import,
+ * so only a full reload helps — never a "try again" re-render. Browsers word it
+ * differently: Chromium "Failed to fetch dynamically imported module", Safari
+ * "Importing a module script failed", Firefox "error loading dynamically
+ * imported module".
+ */
+export function isChunkLoadError(err) {
+  const msg = typeof err?.message === 'string' ? err.message : '';
+  return (
+    err?.name === 'ChunkLoadError' ||
+    /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(
+      msg
+    )
+  );
+}

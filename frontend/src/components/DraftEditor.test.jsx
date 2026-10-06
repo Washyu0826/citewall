@@ -78,3 +78,44 @@ describe('DraftEditor — Q14/Q17 [UNSUPPORTED_REF_n] gate', () => {
     expect(screen.getAllByTestId('draft-line')[0]).toHaveAttribute('data-status', 'accepted');
   });
 });
+
+describe('DraftEditor review state survives leaving the page (research 09 FE-L1)', () => {
+  const DRAFT = '第一句。第二句。';
+
+  function mount(props) {
+    return render(
+      <DraftEditor citationLookup={{}} caseId="CASE-T" rejectionId="R1" token="tok" canExport role="attorney" {...props} />
+    );
+  }
+
+  it('hands every change to onSave and restores it on the next mount', () => {
+    let saved;
+    const first = mount({ initialDraft: DRAFT, onSave: (s) => (saved = s) });
+    fireEvent.keyDown(screen.getAllByTestId('draft-line')[0], { key: 'a' });
+    expect(saved.lines[0].status).toBe('accepted');
+    first.unmount(); // the attorney went to another page
+
+    mount({ initialDraft: DRAFT, saved, onSave: (s) => (saved = s) });
+    expect(screen.getAllByTestId('draft-line')[0]).toHaveAttribute('data-status', 'accepted');
+    expect(screen.getAllByTestId('draft-line')[1]).toHaveAttribute('data-status', 'pending');
+  });
+
+  it('ignores a saved review that belongs to a different draft', () => {
+    let saved;
+    const first = mount({ initialDraft: DRAFT, onSave: (s) => (saved = s) });
+    fireEvent.keyDown(screen.getAllByTestId('draft-line')[0], { key: 'a' });
+    first.unmount();
+
+    mount({ initialDraft: '另一份草稿。', saved });
+    expect(screen.getAllByTestId('draft-line')[0]).toHaveAttribute('data-status', 'pending');
+  });
+
+  it('a new draft for the mounted editor still resets the review', () => {
+    const view = mount({ initialDraft: DRAFT });
+    fireEvent.keyDown(screen.getAllByTestId('draft-line')[0], { key: 'a' });
+    view.rerender(
+      <DraftEditor initialDraft="新草稿。" citationLookup={{}} caseId="CASE-T" rejectionId="R1" token="tok" canExport role="attorney" />
+    );
+    expect(screen.getAllByTestId('draft-line')[0]).toHaveAttribute('data-status', 'pending');
+  });
+});

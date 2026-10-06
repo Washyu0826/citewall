@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- navItemsForRole is shared with App.jsx */
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
@@ -26,6 +26,7 @@ import { useAuditVerify, useCases } from '../api/queries.js';
 import i18n, { htmlLangFor } from '../lib/i18n';
 import { useTheme } from '../lib/theme.jsx';
 import { useCurrentCase } from '../lib/currentCase.jsx';
+import { useWorkspace } from '../lib/workspace.jsx';
 import { isConfidentialLevel } from '../lib/cases.js';
 import { chainChipView } from '../lib/chainChip.js';
 import { cn } from '../lib/utils';
@@ -84,6 +85,12 @@ export default function AppShell({ session, onLogout, children, trustContext }) 
   const navigate = useNavigate();
   const location = useLocation();
   const role = session?.role;
+  // UX-5: signing out drops the workspace — ask first if there are sentence
+  // decisions not exported yet.
+  const { confirmDiscard } = useWorkspace();
+  const guardedLogout = useCallback(() => {
+    confirmDiscard('logout').then((ok) => ok && onLogout());
+  }, [confirmDiscard, onLogout]);
 
   const isAuditor = role === 'auditor';
   const canCallAudit = isAuditor || role === 'it_admin';
@@ -129,7 +136,7 @@ export default function AppShell({ session, onLogout, children, trustContext }) 
         </a>
         <TopBar
           session={session}
-          onLogout={onLogout}
+          onLogout={guardedLogout}
           auditState={auditState}
           canCallAudit={canCallAudit}
           onNavigateAudit={() => navigate('/audit')}

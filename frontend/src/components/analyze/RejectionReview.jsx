@@ -24,6 +24,8 @@ export default function RejectionReview({
   degraded,
   onProgress,
   onShowReferences,
+  savedReview,
+  onSaveReview,
 }) {
   const { t } = useTranslation();
   // Export (sign-off) is an ATTORNEY act — the backend 403s a paralegal.
@@ -89,6 +91,8 @@ export default function RejectionReview({
                 onCitationClick={onCitationClick}
                 degraded={degraded}
                 onProgress={onProgress}
+                saved={savedReview}
+                onSave={onSaveReview}
               />
             </section>
           </>

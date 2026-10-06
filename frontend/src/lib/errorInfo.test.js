@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { errorDetailText } from '../api/client.js';
-import { asText, classifyError } from './errorInfo.js';
+import { asText, classifyError, isChunkLoadError } from './errorInfo.js';
 
 const t = (key) => key;
 
@@ -56,5 +56,20 @@ describe('asText', () => {
     expect(asText('a')).toBe('a');
     expect(asText([{ msg: 'x' }])).toBe('');
     expect(asText(undefined)).toBe('');
+  });
+});
+
+describe('isChunkLoadError', () => {
+  it('recognises each browser wording of a failed page-chunk download', () => {
+    expect(isChunkLoadError(new TypeError('Failed to fetch dynamically imported module: https://x/assets/Analyze-1.js'))).toBe(true);
+    expect(isChunkLoadError(new TypeError('Importing a module script failed.'))).toBe(true);
+    expect(isChunkLoadError(new TypeError('error loading dynamically imported module'))).toBe(true);
+    expect(isChunkLoadError(Object.assign(new Error('x'), { name: 'ChunkLoadError' }))).toBe(true);
+  });
+
+  it('does not mistake an ordinary render error for one', () => {
+    expect(isChunkLoadError(new TypeError("Cannot read properties of undefined (reading 'map')"))).toBe(false);
+    expect(isChunkLoadError(null)).toBe(false);
+    expect(isChunkLoadError({ message: 42 })).toBe(false);
   });
 });
