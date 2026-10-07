@@ -600,7 +600,9 @@ invalid knob values fall back to defaults; a stale pause file is removed at
 start; crash-looping services back off. CI makes `du` fail before and after a
 reset and expects the container to keep running, reset, and pass the full
 smoke test, and restarts a killed container with a stale pause file.
-(FAILURE_LOG B-56, B-57)
+Known: a reset that keeps failing (only possible with root-owned content in
+`/app/data`, which visitors cannot create) stops and restarts the gateway and
+ai_engine on every watchdog pass. (FAILURE_LOG B-56..B-58)
 
 ### Open findings from the same review (not fixed)
 

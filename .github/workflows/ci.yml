@@ -390,8 +390,9 @@ jobs:
 
       # B-56: the watchdog must survive a failing `du` (set -e once ended the
       # whole script, i.e. the container) — an unreadable directory makes du
-      # fail on every pass. The reset's find deletes that (empty) directory,
-      # so it is created again after the reset (B-57).
+      # fail before the reset. The reset's find deletes that (empty)
+      # directory, so it is created again after the reset and du is checked
+      # to fail again (B-57); in between, and after the final rm, du succeeds.
       - name: The data watchdog resets the demo past its size limit
         run: |
           docker run -d --name demo-watchdog -p 8082:7860 \
