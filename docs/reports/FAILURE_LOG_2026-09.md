@@ -869,7 +869,7 @@
    - 「九個問題」少算五個：我只算審查標為新發現的，沒用 git log 查程式是哪個 commit 加的。
    - 「釘住上限」其實只釘住下限；「255 字元的字」其實是 256。
 2. **替代字元又撞上原文。** B-56 的文件編輯腳本用 `§` 代表反斜線，安全稽核裡真正的章節符號「§5.8」被換成「\5.8」。P-21 記過用 `~` 撞上「~10 s」，這次換了字元，卻沒檢查它是否出現在要寫入的文字裡。這次的編輯腳本不用替代字元。
-3. **測試數字沒說範圍。** 「393 個相關後端測試」是這 20 個測試檔的總和，commit 沒寫是哪些：`tests/unit/` 的 test_masking_linear_time、test_egress_guard（79 個），以及 test_masking、test_masking_hardening、test_masking_ner、test_masking_unicode、test_orchestrator_request_id、test_orchestrator_saga、test_timeout_hierarchy、test_p0_correctness_fixes、test_subject_erasure、test_tenant_dictionary、test_sentry_scrubbing，與 `tests/integration/` 的 test_public_demo_limits、test_compat_endpoints、test_adversarial_inputs、test_e2e_mock、test_prompt_injection、test_audit_error_path、test_wave2a（合計 314 個）。
+3. **測試數字沒說範圍。** 「393 個相關後端測試」是這 20 個測試檔的總和，commit 沒寫是哪些：`tests/unit/` 的 test_masking_linear_time、test_egress_guard（在 e22c375 時 79 個；之後新增 2 個，現在 81 個），以及 test_masking、test_masking_hardening、test_masking_ner、test_masking_unicode、test_orchestrator_request_id、test_orchestrator_saga、test_timeout_hierarchy、test_p0_correctness_fixes、test_subject_erasure、test_tenant_dictionary、test_sentry_scrubbing，與 `tests/integration/` 的 test_public_demo_limits、test_compat_endpoints、test_adversarial_inputs、test_e2e_mock、test_prompt_injection、test_audit_error_path、test_wave2a（合計 314 個）。
 - **教訓**：
   - 寫「它會怎樣」之前，用真的工具跑一次（GNU du／find 的失敗模式、bash errexit 的例外）。
   - 同一件事在不同文件要一致：改一處就搜尋其他處。
@@ -885,7 +885,7 @@
 |---|---|---|---|
 | R6-1 | 低（說法） | 「十六個問題是我改出來的」用文件自己的規則還是少算：R5-6（B-56 新增的 inside-run-256 測試只釘住下限）與 R5-7（B-56 新增的 search pattern 沒進常設掃描）和已計入的 R4-9 同類，卻沒標也沒算 | 標為 B-56 改出來的；個案報告第 4.7 節補上，共 18 個 |
 | R6-2 | nit（說法） | CI 註解仍寫「du 每一輪都失敗」：從重置刪掉目錄到 CI 重新建立之間（約 1～2 秒），以及最後刪掉目錄之後，du 都會成功 | 註解改成「重置前，以及重新建立之後」 |
-| R6-3 | nit | 一直失敗的重置每一輪都會停掉並重啟 gateway 與 ai_engine（正式設定是每分鐘一次）。需要 `/app/data` 裡有 root 擁有的內容，訪客做不到 | 記入安全稽核 M-21 與執行手冊（已知限制，程式未改） |
+| R6-3 | nit | 一直失敗的重置每一輪都會停掉並重啟 gateway 與 ai_engine（正式設定是每分鐘一次）。需要 `/app/data` 裡有 demo 使用者刪不掉的內容，或放入種子資料一直失敗（例如磁碟滿了），訪客做不到 | 記入安全稽核 M-21 與執行手冊（已知限制，程式未改） |
 | R6-4 | nit | 歷史紀錄的用字：R4-3 列開頭的「並不會空出事件迴圈」沒被 B-56 的更正註記涵蓋；個案報告開頭沒寫 e22c375、ce0bd35 | 更正註記補上 R4-3 列；開頭補上 commit |
 
 - 本輪只改文件與 CI 註解，程式沒有變動。
@@ -893,8 +893,10 @@
 ## P-25　Claude 在 B-57 的失誤（2026-10-07，第六輪審查發現）
 
 1. **第十五次宣稱過頭（輕微）。** 補算「我改出來的問題」時，只補了審查點名的五個，沒有用同一個規則檢查 B-56 自己的項目（R5-6、R5-7）。
-2. **剛寫下的教訓馬上又違反。** P-24 寫「改一處就搜尋其他處」，但更正「du 每次都失敗」時改了安全稽核與個案報告，漏了 CI 註解本身。
+2. **剛寫下的教訓馬上又違反。** P-24 寫「改一處就搜尋其他處」，但更正「du 每次都失敗」時改了安全稽核與個案報告；CI 註解本身雖然也改了（加上「重置後重新建立」），卻留著「fail on every pass」。
 - **教訓**：更正一個說法時，用關鍵字搜尋整個 repo（含 CI 與程式註解），不是只看審查列出的位置。
+
+**第七輪審查（ce0bd35..7e7f6ad，只有文件）**：沒有中等以上的問題，也沒有實質的不實說法；審查核對了「393」（79＋314）與「18 個」的計算。四個用字的 nit（重置一直失敗的原因不只 root 擁有的檔案、計數規則要寫明也不含 nit、P-25 第 2 點對 CI 註解的描述、P-24 的 79 是 e22c375 時的數字）照審查建議的措辭直接修正，之後合併到 main。
 
 ## D-1　稽核金鑰輪替已實作，文件仍寫「不支援」（2026-09-28 發現，2026-09-29 已修正）
 
