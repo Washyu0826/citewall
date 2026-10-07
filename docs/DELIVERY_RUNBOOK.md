@@ -13,7 +13,7 @@
 | OS | Windows 11（Git Bash for scripts）or Linux/macOS |
 | Python | 3.13（3.14 尚無 paddlepaddle 等 wheel），`pip install -r backend/requirements.txt`（含 test deps） |
 | Node | 18+（`frontend/` vite dev server） |
-| Docker Desktop | 已啟動 / running（qdrant、redis、postgres、minio via `docker-compose.yml`） |
+| Docker Desktop | 已啟動 / running（qdrant、redis、postgres、rustfs via `docker-compose.yml`） |
 | Port 注意 | 主機 **5432 已被外部容器（pulse-db）佔用** — 本專案 Postgres 對外綁 **15432**（`POSTGRES_HOST_PORT`，預設即 15432，勿改回 5432） |
 | `.env` | 首次啟動會自動產生 `JWT_SECRET` / `INTERNAL_TOKEN` / `DEMO_LOGIN_SECRET`（需 `openssl`） |
 | （選用）bge-m3 | 真實 RAG 模式需先 `python scripts/prefetch_bge_m3.py`（一次性下載；之後完全離線載入） |
@@ -28,7 +28,7 @@
 | 6333 / 6334 | Qdrant（REST / gRPC） |
 | 6379 | Redis |
 | 15432 | Postgres（本專案；選用 audit backend：`AUDIT_BACKEND=postgres`） |
-| 19000 / 19001 | MinIO（S3 API / console；Q13 WORM 封存：`ARCHIVE_BACKEND=s3`） |
+| 19000 / 19001 | RustFS（S3 API / console；Q13 WORM 封存：`ARCHIVE_BACKEND=s3`；MinIO 已於 2026-09 下架，FAILURE_LOG E-4） |
 | 18080 | digiRunner（外部團隊部署，選用 hop） |
 | 8088 | Dify CE（外部團隊部署，選用 hop） |
 
@@ -73,6 +73,33 @@ bash scripts/smoke_demo.sh   # 應印出 ALL GREEN — demo ready
 ```
 
 ---
+
+### 一行指令的公開 demo / One-command demo（mock 模式）
+
+和 Hugging Face Space 是同一個映像檔（`docker/demo.Dockerfile`）：前端、gateway、ai_engine
+在同一個容器，`LLM_MODE=mock`、合成資料、重啟後不保留任何東西。
+
+```bash
+docker compose -f docker-compose.demo.yml up --build    # 開 http://localhost:8080，點示範帳號
+python scripts/smoke_demo_image.py http://localhost:8080   # 選用：從外面驗一次（CI 每次都會跑）
+```
+
+這**不是**交付用的形態：正式部署請用上面的 `--profile app`（各服務分開、真的密鑰與模型、持久化）。
+
+**公開到 Hugging Face Space**（`.github/workflows/deploy-demo.yml`）：main 的 CI 全綠後自動部署，權杖只放在 GitHub。
+
+1. Hugging Face → Settings → Access Tokens → 建立有 **write** 權限的 token。
+2. GitHub repo → Settings → Secrets and variables → Actions：
+   - Secret `HF_TOKEN` = 上一步的 token
+   - Variable `HF_SPACE_ID` = `<HF 帳號>/patent-oa-assistant`
+3. Actions → **Deploy demo (Hugging Face Space)** → Run workflow（之後每次 main 的 CI 綠燈都會自動部署）。
+   它只上傳 git 追蹤的檔案（`scripts/build_hf_space.py`），等新版建好後，再對線上網址跑一次
+   `smoke_demo_image.py`。
+4. 網址：`https://<HF 帳號>-patent-oa-assistant.hf.space`（Space 頁面也會嵌入顯示）。
+
+已知限制：
+- 免費 CPU 閒置 48 小時會休眠，喚醒約 1–2 分鐘；重啟後所有登入與資料都會重置。
+- 所有訪客經過同一個代理，共用登入頻率限制（每分鐘 30 次）；也共用同一個示範帳號的每日配額。
 
 ## 3. Demo 流程 / Demo Flow
 
@@ -138,12 +165,12 @@ docker compose up -d postgres          # host :15432（5432 被佔，勿改回�
 - Postgres 不可達時 gateway **拒絕啟動**（invariant #4 — 沒有稽核就不該服務）；
   運行中寫入失敗則照舊落入 write-ahead outbox（`audit_outbox.py`）等待 replay。
 
-**WORM 封存 → MinIO Object Lock**（`ARCHIVE_BACKEND=s3`）
+**WORM 封存 → S3 Object Lock（compose 用 RustFS）**（`ARCHIVE_BACKEND=s3`）
 
 ```bash
-docker compose up -d minio             # S3 API :19000，console :19001
-python scripts/init_minio.py           # 一鍵建 bucket（Object Lock 必須在建立時啟用）
-# .env：ARCHIVE_BACKEND=s3（其餘 ARCHIVE_S3_* 預設即對應 compose MinIO）
+docker compose up -d rustfs                # S3 API :19000，console :19001
+python scripts/init_object_store.py        # 一鍵建 bucket（Object Lock 必須在建立時啟用）
+# .env：ARCHIVE_BACKEND=s3（其餘 ARCHIVE_S3_* 預設即對應 compose RustFS）
 python -m backend.gateway.audit_archive seal     # 封存
 python -m backend.gateway.audit_archive verify   # 從 bucket 拉回驗 Merkle chain
 ```

@@ -21,7 +21,7 @@
 | 3 審閱與匯出 | 全案簽核進度、合併匯出 DOCX | 完成（e2e 通過） |
 | 4 其他頁面 | 登入、稽核、案件登錄、手機版 | 完成（e2e 通過） |
 | 4b 官方文件風 | 拿掉側欄、頂部導覽、橫線表格、少卡片少標籤、文件用明體 | 完成（e2e 通過、基準圖已更新） |
-| 5 部署 | `docker compose up`（mock 模式）驗證；公開 demo（平台待定，建議 Cloud Run）；**MinIO 映像檔已從 Docker Hub 移除，需改用支援 S3 Object Lock 的替代方案**（見 FAILURE_LOG E-4） | 待做 |
+| 5 部署 | 一行指令 demo（`docker compose -f docker-compose.demo.yml up --build`，mock 模式，CI 每次建置並從外部測試）；公開 demo 放 Hugging Face Space（負責人 2026-10-07 決定，完全公開，`deploy-demo.yml`）；MinIO 換成 RustFS 1.0.1（WORM 與 COMPLIANCE 模式由 CI 驗證，FAILURE_LOG E-4） | 進行中：程式與 CI 完成；待負責人設定 `HF_TOKEN`／`HF_SPACE_ID` 後上線 |
 | 6 說明書 | 自動截圖 → `docs/USER_GUIDE.md`、README 更新 | 待做 |
 
 ## 進度紀錄

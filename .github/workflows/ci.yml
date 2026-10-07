@@ -362,6 +362,14 @@ jobs:
       - name: Smoke test through nginx
         run: python3 scripts/smoke_demo_image.py http://127.0.0.1:8080
 
+      # B-50 has two layers in this image: TRUSTED_UPSTREAM_IPS="" and nginx
+      # stripping the identity headers. Turn the first back on (the gateway's
+      # default, loopback) so the spoof check above must hold on nginx alone.
+      - name: Smoke test with loopback trust on (nginx header strip alone)
+        run: |
+          docker run -d --name demo-trust -p 8081:7860 \n            -e TRUSTED_UPSTREAM_IPS=127.0.0.1,::1 patentmind/demo:local
+          python3 scripts/smoke_demo_image.py http://127.0.0.1:8081
+
       - name: Container logs
         if: always()
         run: docker compose -f docker-compose.demo.yml logs --no-color | tail -n 200

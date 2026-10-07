@@ -29,7 +29,7 @@ patentmind-poc/
 │   │   │                   hash_version=2 = HMAC-SHA256 (AUDIT_HMAC_KEY) over ALL fields
 │   │   │                   AUDIT_BACKEND=sqlite | postgres（同 trigger/同鏈，verify 共用）
 │   │   ├── audit_archive.py / audit_outbox.py — Q13 WORM 封存 + write-ahead outbox
-│   │   │                   ARCHIVE_BACKEND=local | s3（MinIO Object Lock，scripts/init_minio.py）
+│   │   │                   ARCHIVE_BACKEND=local | s3（RustFS Object Lock，scripts/init_object_store.py）
 │   │   ├── cache.py / redis_cache.py — Q9 CACHE_BACKEND=memory | redis
 │   │   ├── revocation.py — H-5 JWT jti 撤銷 (memory | redis)
 │   │   ├── signoff.py    — Q16 sign-off / provenance / export-gate helpers
@@ -99,7 +99,7 @@ bash scripts/start_backend.sh               # 只起兩個 backend service
 cd frontend && npm install && npm run dev   # http://localhost:5173
 
 # 測試 suites（2026-09-25 基準，Python 3.12 venv、無 docker 容器：
-# pytest 1615 passed / 48 skipped（postgres/qdrant/minio/keycloak/tesseract/bge-m3 缺席時 skip）；
+# pytest 1615 passed / 48 skipped（postgres/qdrant/rustfs/keycloak/tesseract/bge-m3 缺席時 skip）；
 # frontend: vitest 58 passed、Playwright 92 passed / 33 skipped）
 python -m pytest
 cd frontend && npm run lint && npm run test:unit && npx playwright test
@@ -124,7 +124,7 @@ invariant has broken.
 | Q9 | Redis cache（graceful degradation；JSON 序列化） | `CACHE_BACKEND=redis`（另有 `RATE_LIMIT_BACKEND` / `REVOCATION_BACKEND=redis`） |
 | Q10 | Per-tenant uploadable JSON dictionary（file drop + reload，不用重啟） | `data/tenant_dicts/<tenant_id>.json` + `reload_tenant_dictionary()` |
 | Q12 | `/auth/oidc/begin` + `/auth/oidc/callback`、`/auth/saml/acs`、`/auth/magic/request` + `/consume` + JWT 撤銷（`revocation.py`）。OIDC 可走**真 Keycloak**（discovery + code→token + JWKS 驗章 + role/tenant claim 映射，`backend/gateway/oidc_keycloak.py`；realm 匯入檔 `keycloak/realm-patentmind.json`，compose 服務 :8081） | `OIDC_MODE=stub\|keycloak`；smoke: `bash scripts/smoke_keycloak.sh` |
-| Q13 | WORM archiver（`audit_archive.py`：sealed segments + Merkle root chain；`ARCHIVE_BACKEND=local` 本地唯讀目錄 / `=s3` 真 MinIO **Object Lock** bucket，per-object retention GOVERNANCE\|COMPLIANCE）+ write-ahead outbox（`audit_outbox.py`，invariant #4 backstop）；audit DB 可切 Postgres（`AUDIT_BACKEND=postgres`，同 trigger 阻擋 UPDATE/DELETE + 同 hash chain，verify 邏輯兩 backend 共用） | `ARCHIVE_BACKEND=s3` + `python scripts/init_minio.py`（MinIO :19000/:19001）；`AUDIT_BACKEND=postgres` + `POSTGRES_URL`（:15432）；驗證走 `verify_archive` |
+| Q13 | WORM archiver（`audit_archive.py`：sealed segments + Merkle root chain；`ARCHIVE_BACKEND=local` 本地唯讀目錄 / `=s3` 真 S3 **Object Lock** bucket（compose 用 RustFS；MinIO 已於 2026-09 下架），per-object retention GOVERNANCE\|COMPLIANCE）+ write-ahead outbox（`audit_outbox.py`，invariant #4 backstop）；audit DB 可切 Postgres（`AUDIT_BACKEND=postgres`，同 trigger 阻擋 UPDATE/DELETE + 同 hash chain，verify 邏輯兩 backend 共用） | `ARCHIVE_BACKEND=s3` + `python scripts/init_object_store.py`（RustFS :19000/:19001）；`AUDIT_BACKEND=postgres` + `POSTGRES_URL`（:15432）；驗證走 `verify_archive` |
 | Q14 | Verifier 是獨立第二 model call（`assert_verifier_independence()`；anthropic 模式 = Haiku）。dify 與 local 模式預設用確定性驗證器（同一顆地端模型自己驗自己沒有獨立性，還多一輪延遲；FAILURE_LOG B-19） | `LLM_MODEL_VERIFIER`（必 ≠ REASONING）；local 可設 `LOCAL_VERIFIER_MODEL`（須 ≠ `LLM_MODEL_LOCAL`） |
 | Q15 | 真地端 LLM：Ollama OpenAI-compat endpoint | `LLM_MODE=local` + `LLM_MODEL_LOCAL`（這台機器用 `qwen2.5:7b`，**無** llama3.1:8b） |
 | Q17 | Holiday producer（`scripts/fetch_holidays.py`：TW data.gov.tw / US 法定規則 / JP 内閣府）+ versioned `data/calendars/*.json`；deadline.py 讀檔，硬編表僅 fallback | `HOLIDAY_SOURCE=bundled|jsonfile|remote` |
@@ -158,7 +158,7 @@ invariant has broken.
 | Q4 — No SSR landing page | Build separate Next.js app (out of POC repo) |
 | Q8 — figure 區域偵測已實作（PyMuPDF layout：影像/向量聚類 + FIG. N／第 N 圖 caption 對應）| 後續：把每個 bbox crop 丟 Vision 模型做「描述圖 2」問答（機密案僅限地端 vision）|
 | Q12 — SAML IdP 是 stub（OIDC 已接真 Keycloak ✅，`OIDC_MODE=keycloak`） | SAML 換 python3-saml + 真 ADFS/Azure AD；OIDC 換企業級 IdP 只需改 issuer/client（`digirunner/oidc.yaml` 模板已對齊 realm `patentmind`） |
-| Q13 — WORM s3 模式目前對 MinIO（`ARCHIVE_BACKEND=s3` ✅，Object Lock + versioning + retention 已驗） | 換 AWS S3 / Azure 只是 endpoint+credentials 設定；COMPLIANCE mode 上線前確認法遵期間 |
+| Q13 — WORM s3 模式目前對 RustFS 1.0.1（`ARCHIVE_BACKEND=s3` ✅，Object Lock + versioning + retention 與 COMPLIANCE 模式皆由 CI 驗證） | 換 AWS S3 / Azure 只是 endpoint+credentials 設定；COMPLIANCE mode 上線前確認法遵期間 |
 | Q13 — audit Postgres backend 已實作（`AUDIT_BACKEND=postgres` ✅） | backup.py / quality_eval.py 的離線讀取仍走 SQLite 檔案快照 — postgres 模式的備份要改走 pg_dump / streaming replication |
 | Q20 — 排程 wrapper 已出（`scripts/run_backup.py` + `backup_cron.sh` + schtasks，見 DELIVERY_RUNBOOK §7）| **must upgrade to streaming replication before prod**（snapshot cron 達不到 RPO<5min）|
 | 2026-09-25 branch — 未實機驗證 | 真 API key 跑 `scripts/anthropic_smoke.py`（Sonnet 5 schema + effort、citations 切塊）；GPU 上跑 PaddleOCR-VL / Qwen3 embedding + reranker；docker 實跑 Dify 1.17.1、digiRunner release-v4.7.3、Qdrant 1.19、audit Postgres `hash_version` 遷移 |
@@ -181,7 +181,7 @@ invariant has broken.
 
 ### P0 — production readiness
 - [x] ✅ Real Anthropic client in `llm_client.py` (`LLM_MODE=anthropic`; Dify/Ollama path via `LLM_MODE=dify` / `local`)
-- [x] ✅ Replace SQLite audit with Postgres（`AUDIT_BACKEND=postgres`）+ real S3 Object Lock target（`ARCHIVE_BACKEND=s3` → MinIO，`scripts/init_minio.py`；AWS S3 只差 endpoint/credentials）
+- [x] ✅ Replace SQLite audit with Postgres（`AUDIT_BACKEND=postgres`）+ real S3 Object Lock target（`ARCHIVE_BACKEND=s3` → RustFS，`scripts/init_object_store.py`；AWS S3 只差 endpoint/credentials）
 - [x] ✅ Redis cache (`CACHE_BACKEND=redis`)
 - [x] ✅ Qdrant vector store (`VECTOR_BACKEND=qdrant`)
 - [x] ✅ Real PDF/DOCX OA upload（`/v1/oa/upload` + PyMuPDF + Tesseract/Vision OCR）

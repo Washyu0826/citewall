@@ -591,6 +591,44 @@
 3. **沒注意 vitest 反向執行 afterEach**，清空提示跑在卸載之前。
 - **教訓**：拿突變當證據前，先問它在修正前會不會一樣失敗；只有在修正前會通過、修正後會失敗的突變，才是這個修正的證據。
 
+## 第 5 階段（部署）找到的問題（2026-10-07）
+
+## B-49　Object Lock bucket 的初始化腳本從沒在 CI 跑過，而且沒匯出 .env 就會當掉（2026-10-07 發現並修正）
+
+- **現象**：把 MinIO 換成 RustFS 之後，CI 第一次真的執行到 `scripts/init_minio.py`，結果在載入後端設定時就當掉：`JWT_SECRET is the published placeholder string`。
+- **原因**：這支一次性腳本匯入了後端的設定模組，而設定模組在載入時會執行**服務**的開機檢查，其中一項拒絕公開的預設 JWT_SECRET。腳本本身只讀 `ARCHIVE_S3_*`，根本不簽發權杖。設定模組也不會自動讀 `.env`。
+- **影響**：照 DELIVERY_RUNBOOK 執行這支腳本的人，只要沒先匯出 `.env`，就會遇到這個錯誤。在這個 repo 的公開歷史裡（09-26 起），CI 的 MinIO 步驟一直在拉映像檔時就失敗，所以這個問題從沒被跑到。
+- **修正**：腳本（改名為 `scripts/init_object_store.py`）只在沒有匯出 JWT_SECRET 時，為自己的行程設一個隨機值；服務的檢查不變（已在本機確認：預設字串仍會被服務拒絕）。
+
+## B-50　同一台主機上的代理會把瀏覽器送的身分標頭轉給 gateway，任何訪客都能冒充任何使用者（2026-10-07 發現並修正，原本就存在）
+
+- **原因**：為了 digiRunner，gateway 會把來自 `TRUSTED_UPSTREAM_IPS`（預設是本機 127.0.0.1／::1，而且不需要共用密鑰）的 `x-user-id`、`x-tenant-id`、`x-user-role` 當成已驗證的身分。auth.py 的設計前提是「能偽造身分的只有已經在受信任網段內的人」。但同一台主機上的代理，會**從本機**轉送瀏覽器自己帶的標頭，前提就不成立。
+- **影響**：
+  - `scripts/start_demo.sh` 的 vite 開發代理：能連到 :5173 的人都能冒充任何使用者（vite 預設只聽本機，所以平常只有本機使用者）；已知帳號的角色取自使用者表，所以冒充 carol 就拿到 IT 管理員權限。用 `scripts/start_ngrok.sh` 對外分享時，所有拿到 ngrok Basic Auth 密碼的人都做得到。
+  - 新的單一容器 demo 映像檔（nginx 從本機轉送）若沒有防護，公開網址上任何人都做得到。
+  - 用同樣的「本機就信任」邏輯，沒有設 `METRICS_TOKEN` 時，`/metrics`（含租戶 ID 與費用數字）也會經由這類代理對外開放。
+  - 多容器的 `--profile app` 不受影響：nginx 在另一個容器，gateway 看到的不是本機位址。
+- **修正**：
+  - nginx 範本與 vite 代理一律清掉這四個標頭（瀏覽器永遠不該自稱身分），各有測試。
+  - demo 映像檔另外設 `TRUSTED_UPSTREAM_IPS=""`，並在每次啟動時產生隨機的 `METRICS_TOKEN`。
+  - CI 的 demo 映像檔測試會帶偽造的 `x-user-id` 去打 API，確認回 401；`/metrics` 也確認回 401。
+- **沒有修改**：gateway 本身仍信任本機的 digiRunner（交付環境需要）。在同一台主機上把任何會轉送瀏覽器標頭的服務放到 gateway 前面之前，都要先清掉這些標頭，或設 `UPSTREAM_AUTH_SHARED_SECRET`。
+
+## B-51　容器版的前端沒有可用的一鍵登入（2026-10-07 發現並修正）
+
+- **原因**：SPA 的「點 Alice 登入」只送使用者名稱，靠 `VITE_DEMO_LOGIN_SECRET` 標頭驗證。前端的 Dockerfile 刻意把它清空（正確：不能把密鑰編進公開的 JS），結果容器版只剩「輸入帳號、要求登入連結、再點連結」這條路。
+- **影響**：`docker compose --profile app` 起來的畫面，按示範帳號會出現「Invalid credentials」；公開 demo 根本無法一鍵試用。
+- **修正**：新的建置旗標 `VITE_DEMO_PUBLIC_PASSWORDS`（預設關閉）讓一鍵登入送出**本來就公開**的 `demo-{user}` 密碼。gateway 只在 `LLM_MODE=mock` 接受這組密碼，所以在正式部署打開這個旗標也沒有作用，JS 裡也沒有任何密鑰。只有 demo 映像檔打開。
+
+## P-19　Claude 在第 5 階段的失誤（2026-10-07，都在送出前或 CI 發現）
+
+1. `git mv` 改名後，又在 `git add` 列出舊檔名，指令失敗，什麼都沒有提交（已重做）。
+2. 新的 vite 代理測試第一版用 `import.meta.url` 讀檔，在 jsdom 環境不是 `file:` 網址而失敗；改用工作目錄的相對路徑。
+3. 第一次推送 RustFS 的修改前，沒有先在本機跑過初始化腳本，B-49 是 CI 才抓到的。結果是好的（CI 正是為此而跑），但其實在本機用沒有 JWT_SECRET 的環境跑一次就能先發現。
+4. demo 映像檔第一次在 CI 建置就失敗（`"/frontend": not found`）：根目錄的 `.dockerignore` 為了後端映像檔排除了整個 `frontend/`，我寫新的 Dockerfile 前沒有先看。改用只給這個 Dockerfile 的 `docker/demo.Dockerfile.dockerignore`，並保留前端自己的排除項（特別是 `frontend/.env*`：vite 建置時會讀 .env）。
+5. 第一版的 Space 組裝腳本從工作目錄讀 Dockerfile，其他檔案卻從 git 取，兩者可能不一致；送出前發現，改成全部從 git 取。
+6. 第一版的部署 workflow 只用 `branches: [main]` 過濾 `workflow_run`。這個條件比對的是分支**名稱**，fork 的 PR 分支也可以叫 main，而這個工作會在拿得到 HF 權杖的情況下 checkout 那個 commit。送出前發現，改成只接受本 repo 的 push。
+
 ## D-1　稽核金鑰輪替已實作，文件仍寫「不支援」（2026-09-28 發現，2026-09-29 已修正）
 
 - **原因**：`06e2b0e` 實作了金鑰輪替，隨後的 `22f9463` 也有修改 `CLAUDE.md`、`HANDOFF.md`，但沒有更新這一行。
@@ -709,6 +747,7 @@
 - **影響**：CI 無法驗證 Postgres 路徑，包括 H-10 稽核鏈的 advisory lock；`docker-compose.yml` 的 MinIO 服務也拉不到，稽核 WORM 封存（`ARCHIVE_BACKEND=s3`）在部署時沒有現成的映像檔可用。
 - **暫時處理**：CI 的 MinIO 步驟改為 `continue-on-error`，S3 相關測試會自動略過，其他服務的測試照常執行。
 - **待決定**：替換成支援 **S3 Object Lock** 的方案（需先查證各替代品是否真的支援 WORM），列入部署階段。
+- **已解決（2026-10-07，第 5 階段）**：改用 RustFS `1.0.1`（Apache-2.0，支援 Object Lock 與版本控制，固定版本）。Garage 不支援 Object Lock，排除；SeaweedFS 留作備案。CI 的 S3 封存測試從 09-30 起一直被**默默略過**，現在改為必須執行（`ARCHIVE_S3_REQUIRED=1`，連不上就失敗）：6 個 WORM 測試全部通過，並新增一個只在 CI 執行的 COMPLIANCE 模式測試（見 B-49 之後的紀錄）。
 
 ## 待確認的資料不一致
 

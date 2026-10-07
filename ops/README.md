@@ -13,7 +13,7 @@ docker compose --profile app --profile monitoring up -d --build
 ```
 
 瀏覽器開 `http://<這台機器>:8080`（`FRONTEND_PORT`）。只有前端這個埠對辦公室網路開放；
-gateway `:8010`、ai_engine `:8011`、Qdrant、Postgres、Redis、Keycloak、MinIO、
+gateway `:8010`、ai_engine `:8011`、Qdrant、Postgres、Redis、Keycloak、RustFS、
 Prometheus `:9090`、Grafana `:3000` 都只綁 127.0.0.1。
 
 不加 `--profile` 的 `docker compose up -d` 行為不變：只起基礎設施容器（給

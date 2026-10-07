@@ -1,0 +1,77 @@
+name: Deploy demo (Hugging Face Space)
+
+# The public mock-mode demo (docker/demo.Dockerfile) on a Hugging Face Docker
+# Space. Runs after CI succeeds on main — the CI `demo-image` job has already
+# built and smoke-tested the same Dockerfile — or by hand.
+#
+# Off until the repository is configured (nothing here runs otherwise):
+#   secret   HF_TOKEN     a Hugging Face token with write access
+#   variable HF_SPACE_ID  OWNER/SPACE, e.g. alice/patent-oa-assistant
+# The token stays in GitHub; the workflow never prints it.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # `branches: [main]` above matches the head branch NAME, which a fork's
+    # pull request can also be called — and this job checks out that commit
+    # with the HF token in reach. Only a successful CI run for a PUSH to this
+    # repository deploys.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+    steps:
+      - name: Configured?
+        id: cfg
+        run: |
+          if [ -n "$HF_TOKEN" ] && [ -n "$HF_SPACE_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "HF_TOKEN secret or HF_SPACE_ID variable not set; skipping the deploy."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          # The commit CI just passed, not whatever main points at by now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          python-version: "3.13"
+
+      - name: Assemble and upload the Space
+        if: steps.cfg.outputs.ready == 'true'
+        run: |
+          pip install huggingface_hub==2.1.1
+          python scripts/build_hf_space.py --out build/hf-space --upload "$HF_SPACE_ID"
+          echo "EXPECT_VERSION=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
+
+      - name: Wait for the new build, then smoke-test the live Space
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          # A Space build (npm ci + pip install) takes several minutes.
+          SMOKE_WAIT_SECONDS: "1500"
+        run: |
+          url=$(python -c "import sys; sys.path.insert(0, 'scripts'); from build_hf_space import space_url; print(space_url('$HF_SPACE_ID'))")
+          echo "Space app: $url"
+          python scripts/smoke_demo_image.py "$url"

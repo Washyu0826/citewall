@@ -108,7 +108,7 @@ Requires Python 3.13 and Node 24. Demo passwords are `demo-<user>` (e.g. `demo-a
 ## Tech stack
 
 **Frontend** React 19 · Vite 8 · Tailwind 4 · TanStack Query · zh-TW / EN · dark mode
-**Backend** FastAPI · Qdrant (hybrid retrieval) · Redis · PostgreSQL · MinIO (WORM archive) · Keycloak (OIDC)
+**Backend** FastAPI · Qdrant (hybrid retrieval) · Redis · PostgreSQL · RustFS (WORM archive) · Keycloak (OIDC)
 **AI** Dify · Ollama (on-prem) · Claude (cloud, optional for public cases) · PaddleOCR-VL (on-prem OCR)
 **Gateway** digiRunner (TPIsoftware's open-source API gateway)
 

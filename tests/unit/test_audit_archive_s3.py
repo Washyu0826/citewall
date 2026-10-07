@@ -299,30 +299,64 @@ def test_compliance_retention_cannot_be_bypassed_or_shortened():
     )
     version_id = put["VersionId"]
 
+    def refused(call):
+        # A refusal, not a missing feature: NotImplemented would pass a bare
+        # pytest.raises(ClientError) without proving anything.
+        with pytest.raises(ClientError) as exc:
+            call()
+        assert exc.value.response["Error"]["Code"] not in ("NotImplemented", "MethodNotAllowed")
+
+    # Controls — so the refusals below cannot be vacuous: a GOVERNANCE
+    # version IS removable with the bypass, and a COMPLIANCE retention CAN be
+    # extended (the retention API works on this store).
+    gov = client.put_object(
+        Bucket=bucket,
+        Key="governance-control",
+        Body=b"x",
+        ObjectLockMode="GOVERNANCE",
+        ObjectLockRetainUntilDate=until,
+    )
+    client.delete_object(
+        Bucket=bucket,
+        Key="governance-control",
+        VersionId=gov["VersionId"],
+        BypassGovernanceRetention=True,
+    )
+    until = until + timedelta(hours=1)
+    client.put_object_retention(
+        Bucket=bucket,
+        Key="segment-0001.jsonl",
+        VersionId=version_id,
+        Retention={"Mode": "COMPLIANCE", "RetainUntilDate": until},
+    )
+
     # Not even the governance bypass removes a COMPLIANCE version...
-    with pytest.raises(ClientError):
-        client.delete_object(
+    refused(
+        lambda: client.delete_object(
             Bucket=bucket,
             Key="segment-0001.jsonl",
             VersionId=version_id,
             BypassGovernanceRetention=True,
         )
+    )
     # ...nor can its retention be shortened, or switched to GOVERNANCE.
-    with pytest.raises(ClientError):
-        client.put_object_retention(
+    refused(
+        lambda: client.put_object_retention(
             Bucket=bucket,
             Key="segment-0001.jsonl",
             VersionId=version_id,
             Retention={"Mode": "COMPLIANCE", "RetainUntilDate": until - timedelta(hours=12)},
         )
-    with pytest.raises(ClientError):
-        client.put_object_retention(
+    )
+    refused(
+        lambda: client.put_object_retention(
             Bucket=bucket,
             Key="segment-0001.jsonl",
             VersionId=version_id,
             Retention={"Mode": "GOVERNANCE", "RetainUntilDate": until},
             BypassGovernanceRetention=True,
         )
+    )
 
     head = client.head_object(Bucket=bucket, Key="segment-0001.jsonl", VersionId=version_id)
     assert head["ObjectLockMode"] == "COMPLIANCE"

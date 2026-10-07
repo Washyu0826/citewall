@@ -6,6 +6,10 @@ the same against a deployed Space:
 
     python scripts/smoke_demo_image.py [BASE_URL]      # default http://127.0.0.1:8080
 
+SMOKE_WAIT_SECONDS (default 180) bounds the wait for the app to come up;
+EXPECT_VERSION makes it also wait until /version.txt shows that commit — a
+Space keeps serving the OLD build while the new one builds (deploy-demo.yml).
+
 Checks what a visitor gets, through nginx, end to end:
   * the SPA and its security headers (the demo may be framed by
     huggingface.co only; everything else keeps the strict CSP);
@@ -20,6 +24,7 @@ Exit status 1 on the first failed check.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -55,19 +60,25 @@ def header(headers, name):
     return next((v for k, v in headers.items() if k.lower() == name.lower()), "")
 
 
-# --- up? ---------------------------------------------------------------------
-deadline = time.monotonic() + 180
+# --- up (and the expected build)? -----------------------------------------------
+WAIT = int(os.getenv("SMOKE_WAIT_SECONDS", "180"))
+EXPECT = os.getenv("EXPECT_VERSION", "").strip()
+deadline = time.monotonic() + WAIT
 while True:
     try:
-        status, _, _ = request("GET", "/api/v1/health", timeout=5)
-        if status == 200:
+        status, _, _ = request("GET", "/api/v1/health", timeout=10)
+        live = ""
+        if status == 200 and EXPECT:
+            vstatus, _, vbody = request("GET", "/version.txt", timeout=10)
+            live = vbody.decode("utf-8", "replace").strip() if vstatus == 200 else ""
+        if status == 200 and (not EXPECT or live == EXPECT):
             break
     except OSError:
         pass
     if time.monotonic() > deadline:
-        check(False, "gateway health through nginx within 180 s")
-    time.sleep(2)
-check(True, "gateway health through nginx")
+        check(False, f"app up{' at ' + EXPECT if EXPECT else ''} within {WAIT} s")
+    time.sleep(5)
+check(True, "gateway health through nginx" + (f" (build {EXPECT})" if EXPECT else ""))
 
 # --- the SPA and its headers ----------------------------------------------------
 status, headers, body = request("GET", "/")
