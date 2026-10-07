@@ -101,9 +101,11 @@ python scripts/smoke_demo_image.py http://localhost:8080   # 選用：從外面�
 - 免費 CPU 閒置 48 小時會休眠，喚醒約 1–2 分鐘。每次啟動都從頭開始：登入、稽核紀錄、案件登錄的修改都會重置；Space 每天台灣時間 03:17 自動重啟一次。
 - 所有訪客經過同一個代理：共用登入頻率限制（每分鐘 30 次；uvicorn 以 `--no-proxy-headers` 執行，訪客自帶的 `X-Forwarded-For` 不算數），也共用示範帳號的每日配額與每分鐘次數。有人故意用完時，要等每日重啟（或手動重啟 Space）。
 - IT 管理員角色的修改（例如停用案件）會影響之後的訪客，直到下次重啟。
-- `/v1/redact` 與 `/v1/audit/append` 在 demo 裡被 nginx 擋掉（SPA 用不到）；全站請求每秒 20 次（可突發 60），超過回 503。
+- `/v1/redact` 與 `/v1/audit/append` 在 demo 裡被 nginx 擋掉（SPA 用不到）；API（`/api/`）請求每秒 20 次（可突發 60），超過回 503，網頁本身的資源不受限制。
 - 有人持續送錯誤登入時，共用的登入頻率桶會讓一鍵登入對所有人回 429，直到停止或重啟（FAILURE_LOG B-53 的已知限制）。
 - 單次分析的大小上限是 8,000 tokens（約 24K 字元；正式部署是 32,000）：遮罩在刁鑽輸入上的最壞成本和上限成正比（FAILURE_LOG B-54）。範例 OA 都在 700 tokens 以內。
+- Hugging Face 不會重啟已結束的容器，所以容器內會自己監督：任一服務結束都會在 2 秒後重啟（`docker/demo/start.sh`）。
+- 每分鐘檢查一次資料大小，超過 512 MB（`DEMO_DATA_MAX_MB`）就自動重置 demo 狀態：遮罩對照表會隨不重複的實體一直長大（FAILURE_LOG B-55）。
 
 ## 3. Demo 流程 / Demo Flow
 

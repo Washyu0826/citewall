@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHAIN_CHIP_TONE, chainChipView } from './chainChip.js';
+import { CHAIN_CHIP_TONE, auditStateFrom, chainChipView } from './chainChip.js';
 
 describe('chainChipView', () => {
   it('never shows a green "verified" to roles that cannot verify', () => {
@@ -38,5 +38,27 @@ describe('chainChipView', () => {
         tone: CHAIN_CHIP_TONE.fail,
       });
     }
+  });
+});
+
+describe('auditStateFrom (AppShell)', () => {
+  const broken = { broken: ['AUD-1'], verified: 10 };
+  const fine = { broken: [], verified: 10 };
+  const err = new Error('429');
+
+  it('a known broken chain stays red when a later poll fails (B-55)', () => {
+    // TanStack keeps the last data on a refetch error.
+    expect(auditStateFrom({ data: broken, error: err }, true)).toMatchObject({ status: 'fail', broken: 1 });
+  });
+
+  it('a failed call without a broken result is "unavailable", not red', () => {
+    expect(auditStateFrom({ error: err }, true).status).toBe('unavailable');
+    expect(auditStateFrom({ data: fine, error: err }, true).status).toBe('unavailable');
+  });
+
+  it('ok only on a clean result; idle before any result or without the role', () => {
+    expect(auditStateFrom({ data: fine }, true)).toMatchObject({ status: 'ok', verified: 10 });
+    expect(auditStateFrom({}, true).status).toBe('idle');
+    expect(auditStateFrom({ data: broken }, false).status).toBe('idle');
   });
 });

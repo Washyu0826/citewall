@@ -202,3 +202,14 @@ def test_analyze_cap_counts_normalised_text_and_masks_nothing(gateway_client, al
     # Normalising all of it took ~2.5 s, on the event loop, before the rate
     # limit; counting stops just past the cap now.
     assert elapsed < 1.5, f"{elapsed:.2f}s"
+
+
+def test_scan_tokens_passes_the_cap_to_detection_length(monkeypatch):
+    # Structural (B-55): the timing assertion above would not notice a lost
+    # limit= on a faster machine.
+    from backend.gateway import main, masking
+
+    seen = {}
+    monkeypatch.setattr(masking, "detection_length", lambda text, limit=None: seen.setdefault("limit", limit) or 3)
+    main._scan_tokens("abc")
+    assert seen["limit"] == (config.settings.REQUEST_HARD_LIMIT_TOKENS + 1) * 3

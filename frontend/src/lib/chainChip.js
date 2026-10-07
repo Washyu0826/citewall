@@ -11,6 +11,31 @@ export const CHAIN_CHIP_TONE = {
 };
 
 /**
+ * The chip's state from the verify query (AppShell).
+ *
+ * Order matters (FAILURE_LOG B-55): a chain known to be BROKEN stays red even
+ * when a later poll fails — TanStack keeps the last data on a refetch error,
+ * and anyone on the demo can exhaust the shared auditor's rate limit. Only
+ * then does a failed call mean "couldn't verify" (neither red nor green).
+ *
+ * @param {{data?: {broken?: unknown[], verified?: number}, error?: Error}} query
+ * @param {boolean} canCallAudit
+ */
+export function auditStateFrom(query, canCallAudit) {
+  if (!canCallAudit) return { status: 'idle', verified: 0, broken: 0, error: null };
+  const data = query?.data;
+  const brokenCount = data && Array.isArray(data.broken) ? data.broken.length : 0;
+  if (brokenCount > 0) {
+    return { status: 'fail', verified: data.verified ?? 0, broken: brokenCount, error: null };
+  }
+  if (query?.error) {
+    return { status: 'unavailable', verified: 0, broken: 0, error: query.error.message || 'verify failed' };
+  }
+  if (!data) return { status: 'idle', verified: 0, broken: 0, error: null };
+  return { status: 'ok', verified: data.verified ?? 0, broken: 0, error: null };
+}
+
+/**
  * @param {{status: 'idle'|'ok'|'fail'|'unavailable'}} state
  * @param {boolean} canCallAudit
  * @returns {{failed: boolean, tone: string, labelKey: string}}

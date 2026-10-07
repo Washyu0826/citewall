@@ -8,9 +8,12 @@ Before the fixes, on this kind of input (wall-clock on the dev laptop):
   * "Passport" / "統編" followed by 16k spaces took ~4.6 s (two ``\\s*`` around
     an optional marker), and "A.A.A.…" took ~24 s at 96k in the English
     organisation pattern (B-54, found by the second review).
-Each case now takes well under a second. The limits leave a wide margin for
-slow CI runners; a regression still fails them by an order of magnitude
-(rather than hang: the slowest old case finishes in about a minute).
+The super-linear cases now take a fraction of a second, and putting any of
+those rules back fails these limits by an order of magnitude (rather than
+hang: the slowest old case finishes in about a minute). The address
+"prefixes + digits" case is different: linear but expensive (~1–1.5 s at
+the cap); its possessive digit runs are a constant-factor improvement
+(~3.5 s before) that these timings do NOT guard (B-55).
 
 ``test_no_masking_rule_grows_superlinearly`` is the systematic guard: every
 masking regex — built-in, NER and tenant dictionaries — against families of
@@ -106,11 +109,16 @@ _LABELS = ["", "Passport No.", "護照號碼", "營利事業統一編號", "Tax 
 _RUNS = [" ", "\t", "\n", "a", "A", "1", ".", "-", "A.", "A-", "1 ", "Ab ", "中", "市", "、", "a.b", "1:"]
 
 
-def _scan_seconds(pattern: re.Pattern, text: str) -> float:
-    started = time.perf_counter()
-    for _ in pattern.finditer(text):
-        pass
-    return time.perf_counter() - started
+def _scan_seconds(pattern: re.Pattern, text: str, repeat: int = 1) -> float:
+    """Fastest of ``repeat`` runs: a one-off preemption on a busy CI runner
+    must not look like super-linear growth (B-55)."""
+    best = float("inf")
+    for _ in range(repeat):
+        started = time.perf_counter()
+        for _ in pattern.finditer(text):
+            pass
+        best = min(best, time.perf_counter() - started)
+    return best
 
 
 @pytest.mark.parametrize("name", sorted(_all_masking_patterns()))
@@ -122,10 +130,13 @@ def test_no_masking_rule_grows_superlinearly(name):
     pattern = _all_masking_patterns()[name]
     for label in _LABELS:
         for run in _RUNS:
-            big = _scan_seconds(pattern, masking.normalize_for_detection(label + _fill(run, 8_000) + "x"))
-            if big < 0.03:
+            big_text = masking.normalize_for_detection(label + _fill(run, 8_000) + "x")
+            if _scan_seconds(pattern, big_text) < 0.03:
                 continue
-            small = _scan_seconds(pattern, masking.normalize_for_detection(label + _fill(run, 2_000) + "x"))
+            big = _scan_seconds(pattern, big_text, repeat=3)
+            small = _scan_seconds(
+                pattern, masking.normalize_for_detection(label + _fill(run, 2_000) + "x"), repeat=3
+            )
             ratio = big / max(small, 1e-6)
             assert ratio < 9, f"{name}: x{ratio:.1f} ({small:.3f}s -> {big:.3f}s) on {label!r} + {run!r}*n"
 
@@ -171,7 +182,23 @@ def test_detection_length_stops_past_the_limit():
     # refuse the request. With a limit it stops just past it.
     text = "\ufdfa" * _CAP_CHARS
     n, elapsed = _timed(masking.detection_length, text, 96_003)
-    # Past the limit, but by at most one chunk's worth (4,096 x 18) \u2014 not the
+    # Past the limit, but by at most one chunk's worth (4,096 x 18) — not the
     # whole 1.7M: the work is bounded by the cap, not by what was sent.
     assert 96_003 < n <= 96_003 + 4_096 * 18
     assert elapsed < 0.5, f"{elapsed:.2f}s"
+
+
+@pytest.mark.parametrize(
+    "lead, length",
+    [("by ", 300), ("x.", 100), ("e-", 200), ("Foo Inc.", 120)],
+    ids=["run-start-300", "inside-run-100", "inside-run-200", "after-previous-match-120"],
+)
+def test_a_long_organisation_word_is_still_masked_whole(lead, length):
+    # B-55: the first fix (64 for every word) left such names unmasked or
+    # half-masked; a word from the start of its run is unbounded, one starting
+    # inside a run is bounded at 256.
+    name = "S" + "upercalifragilistic" * (length // 19 + 1)
+    name = name[:length]
+    redacted, rules = masking.redact(f"{lead}{name} Corp. signed", "tenant_a")
+    assert "upercalifragilistic" not in redacted, redacted[:120]
+    assert "ner_org" in rules

@@ -2260,9 +2260,9 @@ def _do_redact(req: RedactionPreviewRequest, user: User, request: Request, endpo
         policy_decisions["authz_passed"] = True
 
         # The analysis's own gates, in the same order: the preview runs the
-        # same masking over caller-sized text, and masking.redact grows
-        # faster than linearly with input size — unbounded, a few large
-        # requests stalled the whole gateway (review phase 5 / B-52).
+        # same masking over caller-sized text. Unbounded, a few large requests
+        # stalled the whole gateway (B-52); masking is linear now (B-53..B-55)
+        # but its cost still scales with the text, so the cap bounds it.
         rate_limit.gate_rpm(user, policy_decisions)
         rate_limit.check_request_size(_scan_tokens(req.text))
 

@@ -529,6 +529,19 @@ cap one account at 30 requests/min can use about a CPU core). The public demo
 uses a smaller cap (8,000 tokens, ≈ 0.6 s); the structural fix is L-11.
 Details: `docs/reports/CASE_STUDY_masking_ReDoS_2026-10.md`.
 
+**Correction after the third review (B-55):** the second-round bound on
+English organisation words (64 characters each) under-masked: a long word
+left the whole name unmasked or half-masked, and the "no difference"
+differential never generated a word longer than 7 characters. The rule now
+uses the same two branches as the e-mail rule (a word from the start of its
+run is unbounded; one starting inside a run is bounded at 256). A
+differential that reaches the bounds (words 1-300, local parts 1-400)
+finds differences only for inputs containing a run longer than 256
+characters that starts inside a run. Worst linear cases, measured on the
+final code including the mapping-store writes: 32k unique two-character
+names ≈ 2.9 s + 0.28 s egress at the default cap, ≈ 0.7-0.8 s at the demo
+cap. The egress scan now runs off the event loop.
+
 ### M-17. Unbounded endpoints reachable by any signed-in user — ✅ FIXED 2026-10-07
 
 `/v1/redact` and `/v1/debug/redaction_preview` had no rate limit and accepted
@@ -538,8 +551,9 @@ returned every row for `limit=-1`; `/v1/audit/verify` re-hashes the whole chain
 with no rate limit. Fix: per-user RPM and the analysis size cap on redaction;
 bounds on every audit-append field plus RPM; `limit` clamped to 1..1000; RPM on
 verify. The demo nginx also blocks `/api/v1/redact` and `/api/v1/audit/append`
-(the SPA uses neither) and applies a site-wide request limit (20 r/s, burst 60,
-503) so floods stop before the gateway writes audit rows. (FAILURE_LOG B-52)
+(the SPA uses neither) and limits API requests (`/api/` only, 20 r/s, burst
+60, 503 — static assets are not limited) so floods stop before the gateway
+writes audit rows. (FAILURE_LOG B-52, B-54)
 
 ### M-18. uvicorn trusted a client-supplied X-Forwarded-For behind a same-host proxy — ✅ FIXED in the demo image 2026-10-07
 
@@ -557,6 +571,8 @@ compose); the Hugging Face proxy's own behaviour is not verified.
 |---|---|---|---|
 | M-19 | Medium | On the public demo every visitor shares one login bucket and the demo accounts' daily token quota: a deliberate flood keeps one-click login at 429, or exhausts analysis for the day. Mitigated by a daily Space restart (`restart-demo.yml`) | Per-visitor buckets keyed on a verified client address; demo-only quota policy |
 | L-10 | Low | Tenant dictionary rules (`data/tenant_dicts/*.json`) are operator-supplied regular expressions and are not checked for catastrophic backtracking (same class as H-12) | On upload, time each rule against adversarial inputs and reject slow ones; or run masking in a worker with a timeout |
+| M-20 | Medium | Every unique masked entity is stored permanently in the mapping table (one 24k-character request of unique names ≈ 3 MB): an account can grow the disk without bound. The public demo resets its data past `DEMO_DATA_MAX_MB` (docker/demo/start.sh) and restarts daily; a real deployment has neither | Retention / per-tenant quota for the mapping table |
+| L-12 | Low | Placeholders (~18 chars) can make the outbound payload ~6x the capped input; the token cap does not bound what reaches the model | Cap or budget on the redacted payload as well |
 | L-11 | Medium | Masking still runs inside the single gateway process. A known linear-but-expensive address input (96k `市` ≈ 2.4 s) lets one account at the default cap use about a CPU core, and any future slow rule would again stall every request (GIL) | Run redaction in a process pool with a per-call timeout |
 
 ## Low / defer

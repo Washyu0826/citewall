@@ -667,12 +667,16 @@ _TW_ORG_LEAD_WORDS = (
     "該",
     "其",
 )
-# One word is at most 64 characters: unbounded, on "A.A.A.…" every word
-# boundary started a scan to the end of the run — O(n²), ~24 s at 96k
-# (B-54). A "start of run only" guard would miss an organisation that starts
-# right after the previous match ("…Inc.Bar Corp").
+# Linear (B-54, B-55). Unbounded, on "A.A.A.…" every word boundary started a
+# scan to the end of the run — O(n²), ~24 s at 96k. Two branches, as in the
+# e-mail rule: a word from the first character of its run, whole (possessive:
+# space and tab are not in the class, so it ends where the run ends anyway);
+# or, from inside a run, at most 256 characters — for a name that starts after
+# "x.", "e-" or right after the previous match ("…Inc.Bar Corp"). The first
+# fix (64 for every word) left long words unmasked (B-55). Words 2..6 follow
+# whitespace, so they always take the first branch.
 _EN_ORG_RE = re.compile(
-    r"\b(?:[A-Z][A-Za-z0-9&'.\-]{0,63}[ \t]+){1,6}"
+    r"\b(?:(?:(?<![A-Za-z0-9&'.\-])[A-Z][A-Za-z0-9&'.\-]*+|[A-Z][A-Za-z0-9&'.\-]{0,255})[ \t]+){1,6}"
     r"(?:Inc\.|Inc\b|Incorporated\b|Corp\.|Corp\b|Corporation\b|Co\.,?[ \t]*Ltd\.?|"
     r"Ltd\.|Ltd\b|LLC\b|L\.L\.C\.|LLP\b|L\.L\.P\.|PLLC\b|GmbH\b|AG\b|S\.A\.|K\.K\.|"
     r"B\.V\.|PLC\b|Law[ \t]+Firm\b|Law[ \t]+Group\b|Law[ \t]+Offices?\b)"

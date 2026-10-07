@@ -247,7 +247,10 @@ class AIEngineClient:
         # This is the SINGLE egress point to the AI Engine. Before any bytes
         # leave the gateway we scan the whole payload for raw PII that should
         # have been redacted upstream. Fail closed if redaction escaped.
-        _assert_no_raw_pii(path, payload)
+        # In a worker thread: the PII patterns are linear but not free on a
+        # payload near the cap (~0.3 s), and this coroutine would otherwise
+        # hold the event loop for every other request (FAILURE_LOG B-55).
+        await asyncio.to_thread(_assert_no_raw_pii, path, payload)
         stage = _STAGE_FOR_PATH.get(path, path.rsplit("/", 1)[-1])
         started = time.monotonic()
         # ok | error | timeout (incl. "no time left to start", recorded at

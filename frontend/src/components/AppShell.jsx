@@ -18,6 +18,7 @@ import {
   Shield,
   ShieldAlert,
   ShieldCheck,
+  ShieldQuestion,
   Sun,
   UserRound,
 } from 'lucide-react';
@@ -28,7 +29,7 @@ import { useTheme } from '../lib/theme.jsx';
 import { useCurrentCase } from '../lib/currentCase.jsx';
 import { useWorkspaceActions } from '../lib/workspace.jsx';
 import { isConfidentialLevel } from '../lib/cases.js';
-import { chainChipView } from '../lib/chainChip.js';
+import { auditStateFrom, chainChipView } from '../lib/chainChip.js';
 import { cn } from '../lib/utils';
 import {
   DropdownMenu,
@@ -105,23 +106,11 @@ export default function AppShell({ session, onLogout, children, trustContext }) 
   const casesQ = useCases(session?.token, canListCases);
   const cases = casesQ.data?.cases;
 
-  const auditState = useMemo(() => {
-    if (!canCallAudit) return { status: 'idle', verified: 0, broken: 0, error: null };
-    // The verify call itself failed (rate limited, server error, offline):
-    // the chain was not checked, so this is neither "verified" nor "broken"
-    // (review of B-53: a 429 used to show the red tamper alarm).
-    if (verifyQ.error) {
-      return { status: 'unavailable', verified: 0, broken: 0, error: verifyQ.error?.message || 'verify failed' };
-    }
-    if (!verifyQ.data) return { status: 'idle', verified: 0, broken: 0, error: null };
-    const brokenCount = Array.isArray(verifyQ.data.broken) ? verifyQ.data.broken.length : 0;
-    return {
-      status: brokenCount === 0 ? 'ok' : 'fail',
-      verified: verifyQ.data.verified ?? 0,
-      broken: brokenCount,
-      error: null,
-    };
-  }, [canCallAudit, verifyQ.data, verifyQ.error]);
+  // Broken beats "couldn't verify" beats ok — see auditStateFrom (B-55).
+  const auditState = useMemo(
+    () => auditStateFrom({ data: verifyQ.data, error: verifyQ.error }, canCallAudit),
+    [canCallAudit, verifyQ.data, verifyQ.error]
+  );
 
   const navItems = useMemo(
     () => navItemsForRole(role).map((item) => ({ ...item, label: t(item.labelKey) })),
@@ -373,7 +362,8 @@ function ThemeToggle() {
 /** Audit roles only: whether the hash chain verified, linking to the log. */
 function ChainChip({ state, onClick, t }) {
   const { failed, tone, labelKey } = chainChipView(state, true);
-  const Icon = failed ? ShieldAlert : ShieldCheck;
+  // A check that could not run gets its own icon: a check mark would read as "verified".
+  const Icon = failed ? ShieldAlert : state.status === 'unavailable' ? ShieldQuestion : ShieldCheck;
   const label = t(labelKey);
   const rowsText =
     state.verified > 0 ? t('shell.audit_chip.rows', { rows: state.verified.toLocaleString() }) : null;

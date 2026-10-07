@@ -139,3 +139,29 @@ async def test_call_blocks_before_http(monkeypatch):
     client = AIEngineClient()
     with pytest.raises(EgressGuardError):
         await client.call("/v1/parse_oa", {"oa_text": "leak alice@x.com"})
+
+
+# ---------------------------------------------------------------------------
+# B-55: the scan runs off the event loop (it costs ~0.3 s near the size cap).
+# ---------------------------------------------------------------------------
+async def test_the_egress_scan_does_not_run_on_the_event_loop_thread(monkeypatch):
+    import threading
+    import time
+
+    import httpx
+
+    seen = {}
+
+    def spy(path, payload):
+        seen["thread"] = threading.current_thread()
+
+    monkeypatch.setattr(orch, "_assert_no_raw_pii", spy)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        orch.httpx,
+        "AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})), **kw),
+    )
+    client = orch.AIEngineClient("http://engine.test", deadline=time.time() + 60)
+    await client.call("/v1/parse_oa", {"oa_text": "Claims 1-3 are rejected."})
+    assert seen["thread"] is not threading.main_thread()
