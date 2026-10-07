@@ -39,6 +39,7 @@ A real implementation would also:
 from __future__ import annotations
 
 import base64
+import bisect
 import hashlib
 import hmac
 import json
@@ -249,7 +250,14 @@ def normalize_for_detection(text: str) -> str:
 PII_RULES: list[MaskRule] = [
     MaskRule(
         rule_id="email",
-        pattern=re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
+        # Local part capped at 64 (the RFC 5321 limit): unbounded, every start
+        # position inside a long run of local-part characters scanned to the end
+        # of the run looking for "@" — ~10 s for 96k chars (FAILURE_LOG B-53).
+        # A lookbehind "start of run only" would be linear too, but would miss
+        # an address that begins right where the previous match ended
+        # ("a@b.com1x@y.com"). An over-long local part still has its last 64
+        # characters and the domain masked.
+        pattern=re.compile(r"[a-zA-Z0-9._%+-]{1,64}@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
         placeholder_prefix="EMAIL",
         description="email address",
     ),
@@ -672,11 +680,19 @@ _EN_LEAD_WORDS = {
 }
 
 # ---- ADDRESS ----
+# Linear time (FAILURE_LOG B-53). Adjacent `\s*` around optional groups let a
+# run of whitespace be split in every possible way: 3,000 spaces took ~50 s,
+# and a request near the size cap would never finish. `\s*+` is possessive
+# (nothing after any of them can match whitespace, so giving spaces back can
+# never help), and a match may start inside a whitespace run only at the
+# run's first character — the leftmost match the old pattern returned
+# anyway — so positions inside a run are rejected in O(1). Same matches.
 _TW_ADDR_RE = re.compile(
-    rf"(?:[{_CJK}]{{1,4}}[縣市])?\s*(?:[{_CJK}]{{1,4}}[區鄉鎮市])?\s*"
-    rf"[{_CJK}0-9]{{1,8}}?(?<![電迴線通網支旁光管水油氣鐵道])(?:路|街|大道)\s*"
-    r"(?:[一二三四五六七八九十0-9]+\s*段)?\s*(?:[0-9]+\s*巷)?\s*(?:[0-9]+\s*弄)?\s*"
-    r"[0-9]+(?:\s*之\s*[0-9]+)?\s*號(?:\s*[0-9]+\s*樓(?:\s*之\s*[0-9]+)?)?"
+    r"(?:(?<!\s)|(?=\S))"
+    rf"(?:[{_CJK}]{{1,4}}[縣市])?\s*+(?:[{_CJK}]{{1,4}}[區鄉鎮市])?\s*+"
+    rf"[{_CJK}0-9]{{1,8}}?(?<![電迴線通網支旁光管水油氣鐵道])(?:路|街|大道)\s*+"
+    r"(?:[一二三四五六七八九十0-9]+\s*+段)?\s*+(?:[0-9]+\s*+巷)?\s*+(?:[0-9]+\s*+弄)?\s*+"
+    r"[0-9]+(?:\s*+之\s*+[0-9]+)?\s*+號(?:\s*+[0-9]+\s*+樓(?:\s*+之\s*+[0-9]+)?)?"
 )
 _TW_ADDR_MARKERS = re.compile("[縣市區鄉鎮段巷弄]")
 _TW_ADDR_LEAD = re.compile("^(?:設於|位於|座落於|坐落於|在|於|至|往)")
@@ -876,21 +892,33 @@ def ner_spans(text: str, backend: str | None = None) -> list[tuple[int, int, str
     if backend == "ckip":
         candidates += _ckip_ner_spans(text) or []
 
+    # Both interval sets are non-overlapping and kept sorted by start, so an
+    # overlap with (s, e) can only be the last interval starting before e
+    # (bisect): O(log n) per candidate instead of a scan of every chosen span
+    # and placeholder — that scan made long texts quadratic (B-53).
     blocked = [(m.start(), m.end()) for m in _PLACEHOLDER_TOKEN_RE.finditer(text)]
+    blocked_starts = [b[0] for b in blocked]
 
-    def _overlaps(a: tuple[int, int], b: tuple[int, int]) -> bool:
-        return a[0] < b[1] and b[0] < a[1]
+    def _hits(starts: list[int], ends: list[int], s: int, e: int) -> bool:
+        i = bisect.bisect_left(starts, e)
+        return i > 0 and ends[i - 1] > s
 
+    blocked_ends = [b[1] for b in blocked]
     chosen: list[tuple[int, int, str]] = []
+    chosen_starts: list[int] = []
+    chosen_ends: list[int] = []
     for s, e, label in sorted(
         candidates, key=lambda c: (-_NER_PRIORITY[c[2]], -(c[1] - c[0]), c[0])
     ):
         if e - s < 2 or not text[s:e].strip():
             continue
-        if any(_overlaps((s, e), b) for b in blocked):
+        if _hits(blocked_starts, blocked_ends, s, e):
             continue
-        if any(_overlaps((s, e), (c[0], c[1])) for c in chosen):
+        if _hits(chosen_starts, chosen_ends, s, e):
             continue
+        i = bisect.bisect_left(chosen_starts, s)
+        chosen_starts.insert(i, s)
+        chosen_ends.insert(i, e)
         chosen.append((s, e, label))
     return sorted(chosen)
 
@@ -1137,6 +1165,17 @@ def _stable_id(text: str, salt: str) -> str:
     return hmac.new(key, f"{salt}:{text}".encode(), hashlib.sha256).hexdigest()[:8].upper()
 
 
+def detection_length(text: str) -> int:
+    """How much text masking will actually scan, for size caps (B-53).
+
+    ``redact`` works on ``normalize_for_detection(text)``, and NFKC can
+    expand one character up to 18-fold (U+FDFA), so a cap on the raw length
+    alone let 96k characters become 1.7M. The larger of the two, so the
+    estimate never shrinks.
+    """
+    return max(len(text), len(normalize_for_detection(text)))
+
+
 def redact(text: str, tenant_id: str) -> tuple[str, list[str]]:
     """Replace all matches with reversible placeholders.
 
@@ -1225,16 +1264,27 @@ def redact(text: str, tenant_id: str) -> tuple[str, list[str]]:
 
     # Layer 3 (Q25): named entities — person / organisation / address. Runs on
     # the placeholder-bearing text; spans overlapping a placeholder are skipped.
+    # Built as a list and joined once: rebuilding the whole string per span
+    # was quadratic in the number of entities (B-53). `triggered` keeps the
+    # order the old reversed() walk produced.
     spans = ner_spans(redacted)
-    for start, end, label in reversed(spans):
+    for _start, _end, label in reversed(spans):
+        rule_id = _NER_RULE_IDS[label]
+        if rule_id not in triggered:
+            triggered.append(rule_id)
+    pieces: list[str] = []
+    cursor = 0
+    for start, end, label in spans:
         original = redacted[start:end]
         sid = _stable_id(original, salt=tenant_id)
         placeholder = f"[{label}_{sid}]"
-        rule_id = _NER_RULE_IDS[label]
-        pending.setdefault(placeholder, (original, rule_id))
-        if rule_id not in triggered:
-            triggered.append(rule_id)
-        redacted = redacted[:start] + placeholder + redacted[end:]
+        pending.setdefault(placeholder, (original, _NER_RULE_IDS[label]))
+        pieces.append(redacted[cursor:start])
+        pieces.append(placeholder)
+        cursor = end
+    if spans:
+        pieces.append(redacted[cursor:])
+        redacted = "".join(pieces)
 
     _store.remember_many(
         tenant_id, [(placeholder, original, rule_id) for placeholder, (original, rule_id) in pending.items()]

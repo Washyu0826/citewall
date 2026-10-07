@@ -25,7 +25,11 @@ fi
 # (restart: unless-stopped): the audit chain is keyed by the per-start
 # AUDIT_HMAC_KEY above, and one visitor's edits (case registry, audit rows)
 # must not outlive the next restart.
-find /app/data -mindepth 1 -delete
+if python -c "import os, sys; sys.exit(0 if os.path.ismount('/app/data') else 1)"; then
+  echo "start-demo: /app/data is a mounted volume; not wiping it (set a fixed AUDIT_HMAC_KEY to keep its audit chain verifiable)" >&2
+else
+  find /app/data -mindepth 1 -delete
+fi
 seed-data true
 mkdir -p /tmp/nginx
 
@@ -41,7 +45,8 @@ nginx -e /dev/stderr -c /etc/nginx/demo/nginx.conf -g 'daemon off;' &
 
 trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
 # PID 1 gets no default signal handling: stop promptly on `docker stop`.
-trap 'exit 143' TERM INT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 set +e
 wait -n
 status=$?

@@ -1,0 +1,55 @@
+name: Restart demo (Hugging Face Space)
+
+# A daily restart resets what anonymous visitors of the public mock-mode demo
+# share: token quotas, the case registry, audit rows (the demo keeps nothing
+# across a restart — docker/demo/start.sh). Its own workflow and concurrency
+# group: in deploy-demo.yml's group a queued restart could cancel a pending
+# deploy. Scheduled runs only exist on the default branch; GitHub may delay
+# them, and disables schedules after 60 days without repository activity.
+#
+# Off until HF_TOKEN (secret) and HF_SPACE_ID (variable) are set.
+
+on:
+  schedule:
+    - cron: "17 19 * * *" # 03:17 Asia/Taipei
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: restart-demo
+  cancel-in-progress: false
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    env:
+      HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+      HAS_TOKEN: ${{ secrets.HF_TOKEN != '' }}
+    steps:
+      - name: Configured?
+        id: cfg
+        run: |
+          if [ "$HAS_TOKEN" = "true" ] && [ -n "$HF_SPACE_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "HF_TOKEN secret or HF_SPACE_ID variable not set; skipping the restart."
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          python-version: "3.13"
+
+      - name: Install the Hugging Face client (no token yet)
+        if: steps.cfg.outputs.ready == 'true'
+        run: pip install huggingface_hub==2.1.1
+
+      - name: Restart the Space
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python -c "import os; from huggingface_hub import HfApi; HfApi(token=os.environ['HF_TOKEN']).restart_space(os.environ['HF_SPACE_ID'])"
+          echo "restart requested for $HF_SPACE_ID"

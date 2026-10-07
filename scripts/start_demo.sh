@@ -92,8 +92,8 @@ ensure_secret MAPPING_ENCRYPTION_KEY 32
 # Q26: HMAC key for the audit hash chain (required outside mock mode).
 ensure_secret AUDIT_HMAC_KEY 32
 # /metrics is open to loopback callers when no token is set — and the vite
-# dev proxy (and so an ngrok tunnel) reaches the gateway from loopback
-# (FAILURE_LOG B-50).
+# dev proxy reaches the gateway from loopback, so anyone using vite directly
+# does too (FAILURE_LOG B-50).
 ensure_secret METRICS_TOKEN 32
 
 # Load .env if present so the same vars reach backend + scripts.

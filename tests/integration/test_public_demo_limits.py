@@ -129,3 +129,39 @@ def test_audit_recent_clamps_the_limit(gateway_client, alice_token, monkeypatch)
         )
         assert resp.status_code == 200, resp.text
         assert seen["limit"] == expected, (asked, seen)
+
+
+# ---------------------------------------------------------------------------
+# B-53: the cap measures what masking scans, and nothing is masked before the
+# gates have passed.
+# ---------------------------------------------------------------------------
+def test_redaction_cap_counts_normalisation_expansion(gateway_client, alice_token):
+    # 40k raw characters (13k tokens by raw length: under the cap) that NFKC
+    # expands 18-fold (240k tokens): refused before any masking.
+    resp = gateway_client.post(
+        "/v1/redact", headers=_headers(alice_token), json={"text": "\ufdfa" * 40_000}
+    )
+    assert resp.status_code == 413, resp.text
+
+
+@pytest.mark.parametrize("cause", ["too-large", "rate-limited"])
+def test_nothing_is_masked_before_the_gates_pass(gateway_client, alice_token, monkeypatch, cause):
+    from backend.gateway import masking
+
+    calls = []
+    real = masking.redact
+    monkeypatch.setattr(
+        masking, "redact", lambda text, tenant: calls.append(1) or real(text, tenant)
+    )
+    if cause == "too-large":
+        text = "a" * (config.settings.REQUEST_HARD_LIMIT_TOKENS * 3 + 3)
+        expected = 413
+    else:
+        monkeypatch.setattr(config.settings, "DEFAULT_RPM", 1)
+        gateway_client.post("/v1/redact", headers=_headers(alice_token), json={"text": "hi"})
+        calls.clear()
+        text = "hi"
+        expected = 429
+    resp = gateway_client.post("/v1/redact", headers=_headers(alice_token), json={"text": text})
+    assert resp.status_code == expected, resp.text
+    assert calls == []

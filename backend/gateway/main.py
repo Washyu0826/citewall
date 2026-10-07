@@ -1520,7 +1520,7 @@ async def analyze_oa(
         #   - success     -> record_usage(..., reserved_tokens=...) adjusts
         #                    counters by (actual - reserved)
         #   - error       -> release in full (except-block below)
-        estimated_tokens = max(1, len(body.oa_text) // 3)
+        estimated_tokens = _scan_tokens(body.oa_text)
         # Redis round trips — off the event loop (BE-6), cancellation-safe.
         reserved_quota_tokens = await _reserve(user, estimated_tokens, policy_decisions)
         quota_reservation_settled = False
@@ -2035,6 +2035,8 @@ def audit_verify(
     """
     if user.role.value not in ("auditor", "it_admin"):
         raise HTTPException(403, "auditor or it_admin role required")
+    # Walks (and re-hashes) the whole chain on every call (review phase 5).
+    rate_limit.gate_rpm(user)
     if scope == "global":
         # Tighter gate for the cross-tenant view — auditor only.
         if user.role.value != "auditor":
@@ -2195,6 +2197,18 @@ def admin_deactivate_case(
 # ---------- Redaction (first-class for digiRunner pre-LLM transform plugins) ----------
 
 
+def _scan_tokens(text: str) -> int:
+    """Token estimate for the size hard cap, measured on what masking will
+    scan: normalisation can expand text many-fold (FAILURE_LOG B-53). Text
+    already over the cap by its raw length is not normalised at all — no
+    work (and nothing on the event loop) before the 413.
+    """
+    estimate = max(1, len(text) // 3)
+    if estimate > settings.REQUEST_HARD_LIMIT_TOKENS:
+        return estimate
+    return max(1, masking.detection_length(text) // 3)
+
+
 class RedactionPreviewRequest(BaseModel):
     # H-2: same cap as AnalysisRequest.oa_text — redaction preview is what
     # the SPA shows BEFORE submitting the OA for analysis, so the upper
@@ -2243,7 +2257,7 @@ def _do_redact(req: RedactionPreviewRequest, user: User, request: Request, endpo
         # faster than linearly with input size — unbounded, a few large
         # requests stalled the whole gateway (review phase 5 / B-52).
         rate_limit.gate_rpm(user, policy_decisions)
-        rate_limit.check_request_size(max(1, len(req.text) // 3))
+        rate_limit.check_request_size(_scan_tokens(req.text))
 
         redacted, rules = masking.redact(req.text, user.tenant_id)
         result_payload = {"rules_triggered": rules, "redacted_chars": len(redacted)}
