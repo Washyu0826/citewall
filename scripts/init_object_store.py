@@ -1,5 +1,9 @@
 #!/usr/bin/env python
-"""One-shot MinIO bootstrap for the Q13 WORM archive (ARCHIVE_BACKEND=s3).
+"""One-shot bootstrap of the Q13 WORM archive bucket (ARCHIVE_BACKEND=s3).
+
+Works against any S3 store with Object Lock: RustFS in docker-compose.yml
+(MinIO, the original target, left Docker Hub in 2026-09 — FAILURE_LOG E-4),
+or AWS S3 / another provider by pointing ARCHIVE_S3_ENDPOINT at it.
 
 Creates the audit-archive bucket WITH Object Lock enabled (which implies —
 and auto-enables — versioning). Object Lock can ONLY be enabled at bucket
@@ -11,16 +15,16 @@ Idempotent: re-running against an existing bucket verifies its Object Lock
 configuration and exits 0; a pre-existing bucket WITHOUT Object Lock is a
 hard error (delete it and re-run — Object Lock cannot be retrofitted).
 
-Usage (after `docker compose up -d minio`):
+Usage (after `docker compose up -d rustfs`):
 
-    python scripts/init_minio.py
+    python scripts/init_object_store.py
 
 Connection settings come from backend/shared/config.py (env-overridable):
 ARCHIVE_S3_ENDPOINT / ARCHIVE_S3_ACCESS_KEY / ARCHIVE_S3_SECRET_KEY /
-ARCHIVE_S3_BUCKET / ARCHIVE_S3_REGION. Console: http://localhost:19001
-(credentials = MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in .env).
+ARCHIVE_S3_BUCKET / ARCHIVE_S3_REGION. RustFS console: http://localhost:19001
+(credentials = RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY in .env).
 
-No `mc` CLI required — pure boto3, same dependency the archiver itself uses.
+No vendor CLI required — pure boto3, same dependency the archiver itself uses.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Make `import backend...` work when run as `python scripts/init_minio.py`.
+# Make `import backend...` work when run as `python scripts/init_object_store.py`.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -53,7 +57,7 @@ def main() -> int:
         config=Config(connect_timeout=5, read_timeout=30, retries={"max_attempts": 2}),
     )
 
-    print(f">> MinIO endpoint : {endpoint}")
+    print(f">> S3 endpoint    : {endpoint}")
     print(f">> Target bucket  : {bucket}")
 
     # --- reachability ------------------------------------------------------
@@ -61,13 +65,13 @@ def main() -> int:
         client.list_buckets()
     except EndpointConnectionError:
         print(
-            f"ERR MinIO is not reachable at {endpoint}. "
-            "Start it first: docker compose up -d minio",
+            f"ERR the object store is not reachable at {endpoint}. "
+            "Start it first: docker compose up -d rustfs",
             file=sys.stderr,
         )
         return 1
     except ClientError as exc:
-        print(f"ERR MinIO refused the credentials: {exc}", file=sys.stderr)
+        print(f"ERR the object store refused the credentials: {exc}", file=sys.stderr)
         return 1
 
     # --- create-or-verify ---------------------------------------------------

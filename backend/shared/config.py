@@ -299,17 +299,17 @@ class Settings:
     #   "s3"              — real S3-compatible Object Lock bucket (MinIO in the
     #                       delivery compose on :19000; AWS S3 in production).
     #                       Bucket MUST be created with Object Lock enabled:
-    #                       python scripts/init_minio.py
+    #                       python scripts/init_object_store.py
     # ------------------------------------------------------------------
     ARCHIVE_BACKEND: str = os.getenv("ARCHIVE_BACKEND", "local")  # local | s3
     ARCHIVE_S3_ENDPOINT: str = os.getenv("ARCHIVE_S3_ENDPOINT", "http://localhost:19000")
     ARCHIVE_S3_ACCESS_KEY: str = os.getenv("ARCHIVE_S3_ACCESS_KEY", "patentmind")
-    ARCHIVE_S3_SECRET_KEY: str = os.getenv("ARCHIVE_S3_SECRET_KEY", "patentmind-minio")
+    ARCHIVE_S3_SECRET_KEY: str = os.getenv("ARCHIVE_S3_SECRET_KEY", "patentmind-worm")
     ARCHIVE_S3_BUCKET: str = os.getenv("ARCHIVE_S3_BUCKET", "patentmind-audit-worm")
     ARCHIVE_S3_REGION: str = os.getenv("ARCHIVE_S3_REGION", "us-east-1")
     # Object Lock retention applied to every sealed segment/manifest object.
     # GOVERNANCE: a principal with s3:BypassGovernanceRetention can still
-    #             remove (safe default for dev/MinIO — buckets stay cleanable).
+    #             remove (safe default for dev — buckets stay cleanable).
     # COMPLIANCE: NOBODY (not even root) can remove until expiry — the
     #             production posture for the Q13 7-year retention.
     ARCHIVE_S3_RETENTION_MODE: str = os.getenv(

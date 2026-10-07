@@ -1,13 +1,16 @@
 """Q13 — WORM archive on a real S3 Object Lock target (``ARCHIVE_BACKEND=s3``).
 
-Runs against the compose MinIO (S3 API on :19000 — ``docker compose up -d
-minio``). Mirrors the Qdrant/Postgres gating pattern: every test skips cleanly
-when MinIO (or boto3) is absent, so CI without containers stays green.
+Runs against the compose RustFS (S3 API on :19000 — ``docker compose up -d
+rustfs``; MinIO until it left Docker Hub, FAILURE_LOG E-4). Mirrors the
+Qdrant/Postgres gating pattern: every test skips cleanly when the store (or
+boto3) is absent, so CI without containers stays green — EXCEPT when
+``ARCHIVE_S3_REQUIRED=1`` (the CI services job): there a missing store is a
+failure, so a store that never started cannot turn CI green.
 
 Each test creates its OWN bucket with Object Lock enabled (versioning
 implied), uses GOVERNANCE mode with a 1-day retention so teardown can clean up
 via the governance bypass (COMPLIANCE objects would be undeletable until
-expiry — the production posture, but hostile to a dev MinIO).
+expiry — the production posture, but hostile to a dev store).
 
 What must hold:
 
@@ -21,6 +24,7 @@ What must hold:
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
 
@@ -48,12 +52,15 @@ def _client():
     )
 
 
-def _minio_or_skip():
+def _store_or_skip():
     client = _client()
     try:
         client.list_buckets()
     except Exception as exc:  # pragma: no cover - env-dependent
-        pytest.skip(f"MinIO not reachable at {settings.ARCHIVE_S3_ENDPOINT}: {exc}")
+        msg = f"S3 store not reachable at {settings.ARCHIVE_S3_ENDPOINT}: {exc}"
+        if os.getenv("ARCHIVE_S3_REQUIRED") == "1":
+            pytest.fail(msg)
+        pytest.skip(msg)
     return client
 
 
@@ -77,7 +84,7 @@ def _nuke_bucket(client, bucket: str) -> None:
 @pytest.fixture()
 def s3_archive(tmp_path, monkeypatch):
     """Fresh tmp audit DB (sqlite) + fresh Object-Lock bucket, archiver in s3 mode."""
-    client = _minio_or_skip()
+    client = _store_or_skip()
 
     bucket = f"pm-worm-test-{uuid.uuid4().hex[:10]}"
     client.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)

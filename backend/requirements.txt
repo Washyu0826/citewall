@@ -39,7 +39,7 @@ anthropic==1.8.0         # LLM_MODE=anthropic (1.x: httpx2-based, Python>=3.10, 
 qdrant-client==1.19.1    # VECTOR_BACKEND=qdrant (kept un-commented; mock is dep-free anyway)
 redis==5.0.8             # CACHE_BACKEND=redis (Phase 2A — installed unconditionally so CI exercises the wiring)
 psycopg[binary]==3.2.3   # AUDIT_BACKEND=postgres (Q13 — Postgres audit store; tests skip without a server)
-boto3>=1.34              # ARCHIVE_BACKEND=s3 (Q13 — WORM archive to MinIO/S3 Object Lock; tests skip without MinIO)
+boto3>=1.34              # ARCHIVE_BACKEND=s3 (Q13 — WORM archive to an S3 Object Lock store; tests skip without one)
 
 # ---------------------------------------------------------------------------
 # embedding (optional — only when EMBEDDING_BACKEND=bge-m3)

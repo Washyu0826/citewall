@@ -96,8 +96,8 @@ jobs:
   # ---------------------------------------------------------------------------
   # Integration tests + every test that needs a real backing service.
   # Postgres (audit, Q13), Redis (cache/quota, Q9/Q18), Qdrant (vectors, Q7)
-  # run as service containers; MinIO (WORM archive, Q13) is started as a step
-  # because it needs a `server` command that service containers can't pass.
+  # run as service containers; RustFS (WORM archive, Q13) is started as a step
+  # so its readiness and the bucket bootstrap are explicit.
   # Service-dependent unit tests (test_audit_postgres / test_vector_store_* /
   # test_audit_archive_s3) are re-run here, where the services exist.
   # ---------------------------------------------------------------------------
@@ -144,7 +144,10 @@ jobs:
       QDRANT_URL: http://localhost:6333
       ARCHIVE_S3_ENDPOINT: http://localhost:19000
       ARCHIVE_S3_ACCESS_KEY: patentmind
-      ARCHIVE_S3_SECRET_KEY: patentmind-minio
+      ARCHIVE_S3_SECRET_KEY: patentmind-worm
+      # A missing object store FAILS the S3-archive tests here instead of
+      # skipping them (they skipped silently while MinIO was gone, E-4).
+      ARCHIVE_S3_REQUIRED: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -162,22 +165,23 @@ jobs:
           pip install -r backend/requirements.txt
           pip install pillow
 
-      # MinIO removed its images from Docker Hub (2026-09-11..14; it is now a
-      # source-only distribution), so this pull currently fails. Don't let it
-      # take down the Postgres / Redis / Qdrant tests: the S3-archive tests
-      # skip themselves when no endpoint answers. Replacing the Object Lock
-      # target is tracked in docs/FRONTEND_REDESIGN_PLAN.md (phase 5).
-      - name: Start MinIO (Object Lock) + create WORM bucket
-        continue-on-error: true
+      # MinIO left Docker Hub in 2026-09 (FAILURE_LOG E-4). RustFS (Apache-2.0,
+      # S3 Object Lock + versioning) is the WORM target now. Pinned: a re-pull
+      # must not change the Object Lock semantics the archive relies on.
+      # Keep in sync with docker-compose.yml.
+      - name: Start RustFS (Object Lock) + create WORM bucket
         run: |
-          docker run -d --name minio -p 19000:9000 \
-            -e MINIO_ROOT_USER=patentmind -e MINIO_ROOT_PASSWORD=patentmind-minio \
-            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          docker run -d --name rustfs -p 19000:9000 \
+            -e RUSTFS_ACCESS_KEY=patentmind -e RUSTFS_SECRET_KEY=patentmind-worm \
+            -e RUSTFS_VOLUMES=/data -e RUSTFS_CONSOLE_ENABLE=false \
+            rustfs/rustfs:1.0.1
+          ready=
           for i in $(seq 1 30); do
-            curl -fsS http://localhost:19000/minio/health/ready && break
+            if curl -fsS http://localhost:19000/health; then ready=1; break; fi
             sleep 2
           done
-          python scripts/init_minio.py
+          if [ -z "$ready" ]; then docker logs rustfs; exit 1; fi
+          python scripts/init_object_store.py
 
       - name: Pytest (integration)
         run: pytest tests/integration -v

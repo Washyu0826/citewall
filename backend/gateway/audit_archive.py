@@ -20,7 +20,7 @@ Two storage targets are supported (``ARCHIVE_BACKEND``):
     ``ARCHIVE_S3_RETENTION_DAYS``), so the object store itself refuses
     deletion/version-removal until the retain-until date. The bucket MUST be
     created with Object Lock enabled (versioning implied) — one-shot init:
-    ``python scripts/init_minio.py``.
+    ``python scripts/init_object_store.py``.
 
 Both targets capture the same WORM SEMANTICS, so flipping the knob changes
 the storage, never the logic:
@@ -231,7 +231,7 @@ def _s3_put_locked(client, bucket: str, key: str, content: str) -> None:
     bypass with an explicit governance-bypass header; COMPLIANCE cannot be
     bypassed by anyone until expiry, which is the production posture for the
     7-year Q13 retention). Requires the bucket to have Object Lock enabled
-    (scripts/init_minio.py creates it that way).
+    (scripts/init_object_store.py creates it that way).
     """
     from botocore.exceptions import ClientError
 
@@ -253,13 +253,13 @@ def _s3_put_locked(client, bucket: str, key: str, content: str) -> None:
             raise RuntimeError(
                 f"WORM bucket {bucket!r} does not exist at the configured "
                 f"endpoint. Create it (Object Lock enabled) with: "
-                f"python scripts/init_minio.py"
+                f"python scripts/init_object_store.py"
             ) from exc
         if code == "InvalidRequest":
             raise RuntimeError(
                 f"put_object with Object Lock retention was refused for "
                 f"bucket {bucket!r} — the bucket was probably created WITHOUT "
-                f"Object Lock. Recreate it via: python scripts/init_minio.py"
+                f"Object Lock. Recreate it via: python scripts/init_object_store.py"
             ) from exc
         raise
 
