@@ -124,6 +124,15 @@ check(status == 200, f"analyze returns 200 (got {status})")
 result = json.loads(body)
 check(len(result["oa"]["rejections"]) > 0 and len(result["drafts"]) > 0, "analysis has rejections and drafts")
 
+# --- the demo's smaller hard cap (B-54: masking cost scales with it) ---------------
+status, _, _ = request(
+    "POST",
+    "/api/v1/oa/analyze",
+    {"oa_text": "a" * 30_000, "case_id": "CASE-2025-001", "target_patent_no": "US17123456"},
+    headers={"Authorization": f"Bearer {token}"},
+)
+check(status == 413, "a 30k-character OA is over the demo's hard cap (8,000 tokens)")
+
 # --- closed to anonymous visitors (docker/demo/public.conf, B-52) ------------------
 for path in ("/api/v1/redact", "/api/v1/audit/append"):
     status, _, _ = request("POST", path, {}, headers={"Authorization": f"Bearer {token}"})

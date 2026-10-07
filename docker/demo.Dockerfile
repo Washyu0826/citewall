@@ -68,6 +68,7 @@ ENV PATH=/opt/venv/bin:$PATH \
     AI_ENGINE_URL=http://127.0.0.1:8011 \
     TRUSTED_UPSTREAM_IPS="" \
     LOGIN_RPM=30 \
+    REQUEST_HARD_LIMIT_TOKENS=8000 \
     OIDC_ENABLED=false \
     SAML_ENABLED=false
 WORKDIR /app

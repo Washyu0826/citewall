@@ -103,6 +103,7 @@ python scripts/smoke_demo_image.py http://localhost:8080   # 選用：從外面�
 - IT 管理員角色的修改（例如停用案件）會影響之後的訪客，直到下次重啟。
 - `/v1/redact` 與 `/v1/audit/append` 在 demo 裡被 nginx 擋掉（SPA 用不到）；全站請求每秒 20 次（可突發 60），超過回 503。
 - 有人持續送錯誤登入時，共用的登入頻率桶會讓一鍵登入對所有人回 429，直到停止或重啟（FAILURE_LOG B-53 的已知限制）。
+- 單次分析的大小上限是 8,000 tokens（約 24K 字元；正式部署是 32,000）：遮罩在刁鑽輸入上的最壞成本和上限成正比（FAILURE_LOG B-54）。範例 OA 都在 700 tokens 以內。
 
 ## 3. Demo 流程 / Demo Flow
 

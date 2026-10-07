@@ -22,6 +22,14 @@ describe('chainChipView', () => {
     });
   });
 
+  it('a verify call that could not run is neither red nor green (review of B-53)', () => {
+    expect(chainChipView({ status: 'unavailable' }, true)).toMatchObject({
+      failed: false,
+      labelKey: 'shell.audit_chip.unavailable',
+      tone: CHAIN_CHIP_TONE.neutral,
+    });
+  });
+
   it('a failed chain is red for everyone', () => {
     for (const can of [true, false]) {
       expect(chainChipView({ status: 'fail' }, can)).toMatchObject({

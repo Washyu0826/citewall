@@ -1520,7 +1520,10 @@ async def analyze_oa(
         #   - success     -> record_usage(..., reserved_tokens=...) adjusts
         #                    counters by (actual - reserved)
         #   - error       -> release in full (except-block below)
-        estimated_tokens = _scan_tokens(body.oa_text)
+        # The hint is masked and sent as well (B-54): count it.
+        estimated_tokens = _scan_tokens(body.oa_text) + (
+            _scan_tokens(body.user_hint) if body.user_hint else 0
+        )
         # Redis round trips — off the event loop (BE-6), cancellation-safe.
         reserved_quota_tokens = await _reserve(user, estimated_tokens, policy_decisions)
         quota_reservation_settled = False
@@ -2200,13 +2203,17 @@ def admin_deactivate_case(
 def _scan_tokens(text: str) -> int:
     """Token estimate for the size hard cap, measured on what masking will
     scan: normalisation can expand text many-fold (FAILURE_LOG B-53). Text
-    already over the cap by its raw length is not normalised at all — no
-    work (and nothing on the event loop) before the 413.
+    already over the cap by its raw length is not normalised at all, and
+    the normalising count stops just past the cap (B-54) — the work before
+    a 413 is bounded by the cap, not by what the caller sent. It still
+    runs before the rate limit in /v1/oa/analyze (on the event loop), so it
+    must stay this cheap.
     """
     estimate = max(1, len(text) // 3)
     if estimate > settings.REQUEST_HARD_LIMIT_TOKENS:
         return estimate
-    return max(1, masking.detection_length(text) // 3)
+    limit = (settings.REQUEST_HARD_LIMIT_TOKENS + 1) * 3
+    return max(1, masking.detection_length(text, limit=limit) // 3)
 
 
 class RedactionPreviewRequest(BaseModel):

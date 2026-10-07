@@ -250,14 +250,21 @@ def normalize_for_detection(text: str) -> str:
 PII_RULES: list[MaskRule] = [
     MaskRule(
         rule_id="email",
-        # Local part capped at 64 (the RFC 5321 limit): unbounded, every start
-        # position inside a long run of local-part characters scanned to the end
-        # of the run looking for "@" — ~10 s for 96k chars (FAILURE_LOG B-53).
-        # A lookbehind "start of run only" would be linear too, but would miss
-        # an address that begins right where the previous match ended
-        # ("a@b.com1x@y.com"). An over-long local part still has its last 64
-        # characters and the domain masked.
-        pattern=re.compile(r"[a-zA-Z0-9._%+-]{1,64}@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
+        # Linear (FAILURE_LOG B-53, B-54). Unbounded, every start inside a long
+        # run of local-part characters scanned to the end of the run for "@"
+        # (~10 s at 96k). Two alternatives instead:
+        #  1. the whole run, from its first character (possessive: "@" is not in
+        #     the class, so giving characters back can never find another "@");
+        #  2. up to 256 characters from anywhere — for an address glued to the
+        #     end of the previous match ("a@b.com1x@y.com"), which (1) cannot
+        #     see because its first character follows a local-part character.
+        # The one difference from the old rule: in that glued case, a local part
+        # longer than 256 (RFC 5321 allows 64) keeps its leading characters
+        # unmasked. Existence (the egress guard's search) is unchanged.
+        pattern=re.compile(
+            r"(?:(?<![a-zA-Z0-9._%+-])[a-zA-Z0-9._%+-]++|[a-zA-Z0-9._%+-]{1,256})"
+            r"@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+        ),
         placeholder_prefix="EMAIL",
         description="email address",
     ),
@@ -309,8 +316,11 @@ PII_RULES: list[MaskRule] = [
         # ``統一編號：27000001`` is. match.group(0) (incl. the marker) is masked.
         rule_id="tw_company_tax_id",
         pattern=re.compile(
-            r"(?:統一編號|統編|營利事業(?:統一)?編號|公司統編|Tax\s*ID|Uniform\s*(?:Business\s*)?No\.?)"
-            r"\s*[:：#＃]?\s*\d{8}\b",
+            # \s*+ (possessive): two \s* around the optional marker split a run
+            # of whitespace every possible way — O(n²) after a label (B-54).
+            # Nothing that follows any of them can match whitespace.
+            r"(?:統一編號|統編|營利事業(?:統一)?編號|公司統編|Tax\s*+ID|Uniform\s*+(?:Business\s*+)?No\.?)"
+            r"\s*+[:：#＃]?\s*+\d{8}\b",
             re.IGNORECASE,
         ),
         placeholder_prefix="TW_TAX_ID",
@@ -322,8 +332,9 @@ PII_RULES: list[MaskRule] = [
         # publication numbers.
         rule_id="passport",
         pattern=re.compile(
-            r"(?:護照(?:號碼|號)?|Passport(?:\s*(?:No|Number))?\.?)"
-            r"\s*[:：#＃]?\s*[A-Z]{0,2}\d{7,9}\b",
+            # \s*+ (possessive), as in tw_company_tax_id (B-54).
+            r"(?:護照(?:號碼|號)?|Passport(?:\s*+(?:No|Number))?\.?)"
+            r"\s*+[:：#＃]?\s*+[A-Z]{0,2}\d{7,9}\b",
             re.IGNORECASE,
         ),
         placeholder_prefix="PASSPORT",
@@ -656,8 +667,12 @@ _TW_ORG_LEAD_WORDS = (
     "該",
     "其",
 )
+# One word is at most 64 characters: unbounded, on "A.A.A.…" every word
+# boundary started a scan to the end of the run — O(n²), ~24 s at 96k
+# (B-54). A "start of run only" guard would miss an organisation that starts
+# right after the previous match ("…Inc.Bar Corp").
 _EN_ORG_RE = re.compile(
-    r"\b(?:[A-Z][A-Za-z0-9&'.\-]*[ \t]+){1,6}"
+    r"\b(?:[A-Z][A-Za-z0-9&'.\-]{0,63}[ \t]+){1,6}"
     r"(?:Inc\.|Inc\b|Incorporated\b|Corp\.|Corp\b|Corporation\b|Co\.,?[ \t]*Ltd\.?|"
     r"Ltd\.|Ltd\b|LLC\b|L\.L\.C\.|LLP\b|L\.L\.P\.|PLLC\b|GmbH\b|AG\b|S\.A\.|K\.K\.|"
     r"B\.V\.|PLC\b|Law[ \t]+Firm\b|Law[ \t]+Group\b|Law[ \t]+Offices?\b)"
@@ -691,8 +706,8 @@ _TW_ADDR_RE = re.compile(
     r"(?:(?<!\s)|(?=\S))"
     rf"(?:[{_CJK}]{{1,4}}[縣市])?\s*+(?:[{_CJK}]{{1,4}}[區鄉鎮市])?\s*+"
     rf"[{_CJK}0-9]{{1,8}}?(?<![電迴線通網支旁光管水油氣鐵道])(?:路|街|大道)\s*+"
-    r"(?:[一二三四五六七八九十0-9]+\s*+段)?\s*+(?:[0-9]+\s*+巷)?\s*+(?:[0-9]+\s*+弄)?\s*+"
-    r"[0-9]+(?:\s*+之\s*+[0-9]+)?\s*+號(?:\s*+[0-9]+\s*+樓(?:\s*+之\s*+[0-9]+)?)?"
+    r"(?:[一二三四五六七八九十0-9]++\s*+段)?\s*+(?:[0-9]++\s*+巷)?\s*+(?:[0-9]++\s*+弄)?\s*+"
+    r"[0-9]++(?:\s*+之\s*+[0-9]++)?\s*+號(?:\s*+[0-9]++\s*+樓(?:\s*+之\s*+[0-9]++)?)?"
 )
 _TW_ADDR_MARKERS = re.compile("[縣市區鄉鎮段巷弄]")
 _TW_ADDR_LEAD = re.compile("^(?:設於|位於|座落於|坐落於|在|於|至|往)")
@@ -1165,15 +1180,32 @@ def _stable_id(text: str, salt: str) -> str:
     return hmac.new(key, f"{salt}:{text}".encode(), hashlib.sha256).hexdigest()[:8].upper()
 
 
-def detection_length(text: str) -> int:
+_DETECTION_CHUNK = 4096
+
+
+def detection_length(text: str, limit: int | None = None) -> int:
     """How much text masking will actually scan, for size caps (B-53).
 
     ``redact`` works on ``normalize_for_detection(text)``, and NFKC can
     expand one character up to 18-fold (U+FDFA), so a cap on the raw length
-    alone let 96k characters become 1.7M. The larger of the two, so the
-    estimate never shrinks.
+    alone let 96k characters become 1.7M. Never less than the raw length.
+
+    Bounded work (B-54): text already in NFKC form cannot grow (confusable
+    folding is one character to one, zero-width stripping only removes), so
+    it costs one quick check; otherwise the text is normalised in chunks and
+    counting stops as soon as ``limit`` is passed — the caller only needs
+    to know it is over its cap. (Normalising all of it took seconds, before
+    the rate limit could refuse the request.) A combining sequence split at
+    a chunk border may count a character differently: fine for a cap.
     """
-    return max(len(text), len(normalize_for_detection(text)))
+    if unicodedata.is_normalized("NFKC", text):
+        return len(text)
+    total = 0
+    for i in range(0, len(text), _DETECTION_CHUNK):
+        total += len(normalize_for_detection(text[i : i + _DETECTION_CHUNK]))
+        if limit is not None and total > limit:
+            break
+    return max(len(text), total)
 
 
 def redact(text: str, tenant_id: str) -> tuple[str, list[str]]:

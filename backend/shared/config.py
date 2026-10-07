@@ -126,7 +126,10 @@ class Settings:
     LOGIN_RPM: int = int(os.getenv("LOGIN_RPM", "10"))
     DEFAULT_DAILY_TOKENS: int = 100_000  # per-user daily token quota
     TENANT_MONTHLY_TOKENS: int = 50_000_000  # per-tenant monthly cap
-    REQUEST_HARD_LIMIT_TOKENS: int = 32_000  # single prompt hard cap
+    # Single prompt hard cap (tokens ~ characters / 3, measured on what
+    # masking scans). Also bounds the per-request masking cost; the public
+    # demo image sets a smaller one (FAILURE_LOG B-54).
+    REQUEST_HARD_LIMIT_TOKENS: int = int(os.getenv("REQUEST_HARD_LIMIT_TOKENS", "32000"))
     # Cost circuit breaker (Q18 layer 5). Each tenant trips on ITS OWN daily
     # spend, so one tenant's burst no longer degrades every tenant (M-12). The
     # fleet-wide figure is only a backstop — keep it above the sum of normal

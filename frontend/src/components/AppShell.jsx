@@ -107,8 +107,11 @@ export default function AppShell({ session, onLogout, children, trustContext }) 
 
   const auditState = useMemo(() => {
     if (!canCallAudit) return { status: 'idle', verified: 0, broken: 0, error: null };
+    // The verify call itself failed (rate limited, server error, offline):
+    // the chain was not checked, so this is neither "verified" nor "broken"
+    // (review of B-53: a 429 used to show the red tamper alarm).
     if (verifyQ.error) {
-      return { status: 'fail', verified: 0, broken: 0, error: verifyQ.error?.message || 'verify failed' };
+      return { status: 'unavailable', verified: 0, broken: 0, error: verifyQ.error?.message || 'verify failed' };
     }
     if (!verifyQ.data) return { status: 'idle', verified: 0, broken: 0, error: null };
     const brokenCount = Array.isArray(verifyQ.data.broken) ? verifyQ.data.broken.length : 0;

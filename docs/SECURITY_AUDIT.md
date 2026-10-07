@@ -493,7 +493,7 @@ spoofing check. Residual: the gateway still trusts loopback for digiRunner; put
 nothing that forwards browser headers in front of it on the same host without
 stripping them or setting `UPSTREAM_AUTH_SHARED_SECRET`. (FAILURE_LOG B-50)
 
-### H-12. ReDoS and quadratic work in the masking layer — one request stalls the gateway — ✅ FIXED 2026-10-07 (3ebdeb4, under review)
+### H-12. ReDoS and quadratic work in the masking layer — one request stalls the gateway — ✅ FIXED 2026-10-07 in two rounds (B-53, B-54); residual linear worst case open (L-11)
 
 `masking.redact` runs on every analysis and redaction preview (invariant #3).
 Measured: the Taiwan-address rule backtracked catastrophically on whitespace
@@ -509,6 +509,25 @@ fixed module, 30,000 random texts incl. 9,585 with address matches) found no
 difference in redaction output; worst inputs near the cap now take < 0.35 s.
 Pre-existing since at least the first public release (2026-09-26).
 (FAILURE_LOG B-53; OWASP: Regular expression Denial of Service)
+
+**Correction after the second review (B-54):** the claims above — "worst inputs
+near the cap now take < 0.35 s" and "no difference in redaction output" —
+were overstated. Three more rules were quadratic (passport and Taiwan tax-id
+labels followed by long whitespace, ~140 s extrapolated at the cap; English
+organisation names on `A.A.A.…`, ~24 s), and the first-round fix itself added
+problems: the analysis normalised the whole text before the rate limit (on
+the event loop), and the 64-character e-mail bound under-masked a long local
+part glued to a previous address. Second round: possessive quantifiers for the
+label rules, a 64-character word bound for organisation names, a two-branch
+e-mail rule (whole run from its start, or up to 256 anywhere), and a bounded
+`detection_length`. A systematic scan — 27 rules × 2,028 adversarial inputs,
+comparing growth from 2k to 8k characters — went from 208 super-linear
+combinations to 0 and is now a standing test. A differential test (original
+vs fixed module, four families × 10,000 texts) found no difference. **Still
+open:** a linear but expensive address case (96k `市` ≈ 2.4 s; at the default
+cap one account at 30 requests/min can use about a CPU core). The public demo
+uses a smaller cap (8,000 tokens, ≈ 0.6 s); the structural fix is L-11.
+Details: `docs/reports/CASE_STUDY_masking_ReDoS_2026-10.md`.
 
 ### M-17. Unbounded endpoints reachable by any signed-in user — ✅ FIXED 2026-10-07
 
@@ -538,7 +557,7 @@ compose); the Hugging Face proxy's own behaviour is not verified.
 |---|---|---|---|
 | M-19 | Medium | On the public demo every visitor shares one login bucket and the demo accounts' daily token quota: a deliberate flood keeps one-click login at 429, or exhausts analysis for the day. Mitigated by a daily Space restart (`restart-demo.yml`) | Per-visitor buckets keyed on a verified client address; demo-only quota policy |
 | L-10 | Low | Tenant dictionary rules (`data/tenant_dicts/*.json`) are operator-supplied regular expressions and are not checked for catastrophic backtracking (same class as H-12) | On upload, time each rule against adversarial inputs and reject slow ones; or run masking in a worker with a timeout |
-| L-11 | Low | Masking still runs inside the single gateway process; a future super-linear rule would again stall every request | Run redaction in a process pool with a per-call timeout |
+| L-11 | Medium | Masking still runs inside the single gateway process. A known linear-but-expensive address input (96k `市` ≈ 2.4 s) lets one account at the default cap use about a CPU core, and any future slow rule would again stall every request (GIL) | Run redaction in a process pool with a per-call timeout |
 
 ## Low / defer
 

@@ -165,3 +165,40 @@ def test_nothing_is_masked_before_the_gates_pass(gateway_client, alice_token, mo
     resp = gateway_client.post("/v1/redact", headers=_headers(alice_token), json={"text": text})
     assert resp.status_code == expected, resp.text
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# B-54: analyze counts what masking will scan (user_hint included), the count
+# stops just past the cap, and nothing is masked before the 413.
+# ---------------------------------------------------------------------------
+def _analyze(client, token, **body):
+    payload = {"case_id": _ALICE_CASE, "target_patent_no": "US17123456", **body}
+    return client.post("/v1/oa/analyze", headers=_headers(token), json=payload)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # 95,999 raw characters (under the cap by raw length) -> 1.7M after NFKC.
+        {"oa_text": "\ufdfa" * 95_999},
+        # A short OA, but a hint that NFKC expands past the cap (8,000 x 18).
+        {"oa_text": "Claims 1-3 are rejected.", "user_hint": "\ufdfa" * 8_000},
+    ],
+    ids=["oa-text", "user-hint"],
+)
+def test_analyze_cap_counts_normalised_text_and_masks_nothing(gateway_client, alice_token, monkeypatch, body):
+    import time
+
+    from backend.gateway import masking
+
+    calls = []
+    real = masking.redact
+    monkeypatch.setattr(masking, "redact", lambda text, tenant: calls.append(1) or real(text, tenant))
+    started = time.perf_counter()
+    resp = _analyze(gateway_client, alice_token, **body)
+    elapsed = time.perf_counter() - started
+    assert resp.status_code == 413, resp.text
+    assert calls == []
+    # Normalising all of it took ~2.5 s, on the event loop, before the rate
+    # limit; counting stops just past the cap now.
+    assert elapsed < 1.5, f"{elapsed:.2f}s"
