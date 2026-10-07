@@ -13,7 +13,7 @@ Two storage targets are supported (``ARCHIVE_BACKEND``):
 
   * ``local`` (default) — a local directory whose sealed files are flipped
     read-only (the original POC of Object Lock semantics; zero infra).
-  * ``s3``    — a real S3-compatible Object Lock bucket (MinIO in the
+  * ``s3``    — a real S3-compatible Object Lock bucket (RustFS in the
     delivery stack — compose service on :19000; AWS S3 in production).
     Segments + manifests are uploaded with a per-object retention
     (``ARCHIVE_S3_RETENTION_MODE`` GOVERNANCE|COMPLIANCE +
@@ -167,10 +167,10 @@ def _merkle_root(rows: list[dict[str, Any]], prev_root: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# S3 / MinIO target (ARCHIVE_BACKEND=s3).
+# S3 Object Lock target (ARCHIVE_BACKEND=s3).
 # ---------------------------------------------------------------------------
 def _s3_client():
-    """Build a boto3 S3 client against the configured endpoint (MinIO/AWS).
+    """Build a boto3 S3 client against the configured endpoint (RustFS/AWS).
 
     Lazy import: boto3 is only required when ARCHIVE_BACKEND=s3. Settings are
     read per call so tests can monkeypatch bucket/endpoint per-test.

@@ -296,7 +296,7 @@ class Settings:
     # Q13 WORM archive target (audit_archive.py).
     #   "local" (default) — sealed segments in AUDIT_ARCHIVE_DIR, files
     #                       flipped read-only (Object Lock simulation; zero infra).
-    #   "s3"              — real S3-compatible Object Lock bucket (MinIO in the
+    #   "s3"              — real S3-compatible Object Lock bucket (RustFS in the
     #                       delivery compose on :19000; AWS S3 in production).
     #                       Bucket MUST be created with Object Lock enabled:
     #                       python scripts/init_object_store.py

@@ -1,0 +1,36 @@
+# Ignore list for docker/demo.Dockerfile only (BuildKit picks up
+# <Dockerfile>.dockerignore next to the Dockerfile instead of the root one).
+# The demo image needs frontend/, which the root .dockerignore keeps out of
+# the backend images; everything else mirrors the root list, plus the
+# frontend's own ignores (frontend/.dockerignore).
+.git
+.env
+.env.*
+!.env.example
+**/__pycache__
+**/*.pyc
+.pytest_cache*
+.ruff_cache
+.venv
+presentation
+docs
+tests
+data/*.db
+data/backups
+data/audit_archive
+data/audit_outbox.jsonl
+data/rag_context_cache
+data/eval
+data/oa_samples
+data/cases
+data/processed
+data/raw
+# frontend: vite reads .env files at build time — a local .env.local (dev
+# secrets) must never reach the image.
+frontend/.env*
+frontend/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+frontend/demo_video_out
+frontend/tests
