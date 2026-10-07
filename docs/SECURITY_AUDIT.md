@@ -467,6 +467,79 @@ no docker, no torch):** `tests/unit` 1414 passed / 23 skipped;
 
 ---
 
+## Addendum 2026-10-07 — public demo review (phase 5)
+
+Three independent reviews of branch `feat/phase5-deploy` before the mock-mode
+demo goes fully public on a Hugging Face Space. Details, measurements and
+verification: `docs/reports/FAILURE_LOG_2026-09.md` (B-50, B-52, B-53) and
+`docs/reports/CASE_STUDY_masking_ReDoS_2026-10.md`.
+
+### H-11. A same-host proxy turned browser headers into an authenticated identity — ✅ FIXED 2026-10-07
+
+The gateway honours `x-user-id` / `x-tenant-id` / `x-user-role` from
+`TRUSTED_UPSTREAM_IPS` (loopback by default, no shared secret) — the
+digiRunner path. Any proxy on the gateway's own host forwards the browser's
+headers **from loopback**: the vite dev proxy (`scripts/start_demo.sh`), and the
+new one-container demo image (nginx → gateway on 127.0.0.1). Anyone reaching
+them could act as any user, including `carol` (it_admin), by adding headers.
+`/metrics` (tenant ids, dollar figures) trusts loopback the same way when
+`METRICS_TOKEN` is unset. Not affected: the multi-container `--profile app`
+(nginx is another container). Fix: the nginx template and the vite proxy strip
+the four identity headers; the demo image sets `TRUSTED_UPSTREAM_IPS=""` and a
+random `METRICS_TOKEN`; `start_demo.sh` generates `METRICS_TOKEN`. CI runs the
+demo image twice — once as shipped, once with loopback trust ON so the nginx
+strip alone must hold — and a mutation run (strip removed) fails exactly the
+spoofing check. Residual: the gateway still trusts loopback for digiRunner; put
+nothing that forwards browser headers in front of it on the same host without
+stripping them or setting `UPSTREAM_AUTH_SHARED_SECRET`. (FAILURE_LOG B-50)
+
+### H-12. ReDoS and quadratic work in the masking layer — one request stalls the gateway — ✅ FIXED 2026-10-07 (3ebdeb4, under review)
+
+`masking.redact` runs on every analysis and redaction preview (invariant #3).
+Measured: the Taiwan-address rule backtracked catastrophically on whitespace
+runs (3,000 spaces ≈ 50 s; near the input cap it never finishes); the e-mail
+rule, the NER overlap check and the per-entity string rebuild were O(n²) (~10 s
+and ~33 s at 96k chars); the size cap counted raw length although NFKC can
+expand a character 18-fold. Any signed-in user — any visitor of a public demo —
+could hold the single gateway process. Fix: possessive `\s*+` plus a
+run-start guard in the address rule, a 64-char cap on the e-mail local part
+(RFC 5321), bisect-based overlap checks, a single join, and caps measured on the
+normalised length (`masking.detection_length`). A differential test (pre-fix vs
+fixed module, 30,000 random texts incl. 9,585 with address matches) found no
+difference in redaction output; worst inputs near the cap now take < 0.35 s.
+Pre-existing since at least the first public release (2026-09-26).
+(FAILURE_LOG B-53; OWASP: Regular expression Denial of Service)
+
+### M-17. Unbounded endpoints reachable by any signed-in user — ✅ FIXED 2026-10-07
+
+`/v1/redact` and `/v1/debug/redaction_preview` had no rate limit and accepted
+5 MB; `/v1/audit/append` accepted unbounded lists, dicts and integers (a token
+count beyond SQLite's range left a row stuck in the outbox); `/v1/audit/recent`
+returned every row for `limit=-1`; `/v1/audit/verify` re-hashes the whole chain
+with no rate limit. Fix: per-user RPM and the analysis size cap on redaction;
+bounds on every audit-append field plus RPM; `limit` clamped to 1..1000; RPM on
+verify. The demo nginx also blocks `/api/v1/redact` and `/api/v1/audit/append`
+(the SPA uses neither) and applies a site-wide request limit (20 r/s, burst 60,
+503) so floods stop before the gateway writes audit rows. (FAILURE_LOG B-52)
+
+### M-18. uvicorn trusted a client-supplied X-Forwarded-For behind a same-host proxy — ✅ FIXED in the demo image 2026-10-07
+
+uvicorn trusts `X-Forwarded-For` from 127.0.0.1 by default; with nginx on the
+same host, a visitor's own header became `request.client.host`, so rotating it
+reset the per-IP login limit (each attempt runs a 64 MiB argon2 check). The
+demo image runs uvicorn with `--no-proxy-headers`; CI floods logins with a
+rotating header and expects 429. Verified for direct-to-nginx setups (CI,
+compose); the Hugging Face proxy's own behaviour is not verified.
+(FAILURE_LOG B-52 P5-M5)
+
+### Open findings from the same review (not fixed)
+
+| ID | Severity | Finding | Suggested fix |
+|---|---|---|---|
+| M-19 | Medium | On the public demo every visitor shares one login bucket and the demo accounts' daily token quota: a deliberate flood keeps one-click login at 429, or exhausts analysis for the day. Mitigated by a daily Space restart (`restart-demo.yml`) | Per-visitor buckets keyed on a verified client address; demo-only quota policy |
+| L-10 | Low | Tenant dictionary rules (`data/tenant_dicts/*.json`) are operator-supplied regular expressions and are not checked for catastrophic backtracking (same class as H-12) | On upload, time each rule against adversarial inputs and reject slow ones; or run masking in a worker with a timeout |
+| L-11 | Low | Masking still runs inside the single gateway process; a future super-linear rule would again stall every request | Run redaction in a process pool with a per-call timeout |
+
 ## Low / defer
 
 - **L-1.** No CSRF protection — correctly N/A because all endpoints use `Authorization: Bearer` (header is not cross-site auto-sent). If a future switch to cookie auth happens, revisit.
