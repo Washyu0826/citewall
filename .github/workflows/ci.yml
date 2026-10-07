@@ -148,6 +148,9 @@ jobs:
       # A missing object store FAILS the S3-archive tests here instead of
       # skipping them (they skipped silently while MinIO was gone, E-4).
       ARCHIVE_S3_REQUIRED: "1"
+      # The store is thrown away after the job: the test that writes
+      # undeletable COMPLIANCE objects may run here (and only here).
+      ARCHIVE_S3_COMPLIANCE_TEST: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -337,3 +340,28 @@ jobs:
               issue_number: context.issue.number,
               body,
             });
+
+  # ---------------------------------------------------------------------------
+  # Public demo image (docker/demo.Dockerfile — the Hugging Face Space and the
+  # one-command `docker compose -f docker-compose.demo.yml up`): build it the
+  # way that command does, run it, and smoke-test it from outside through
+  # nginx — login, a full analysis, security headers, a spoofed identity
+  # header (FAILURE_LOG B-50) and /metrics.
+  # ---------------------------------------------------------------------------
+  demo-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start the demo (one command)
+        run: docker compose -f docker-compose.demo.yml up -d --build
+
+      - name: Image size
+        run: docker image ls patentmind/demo:local
+
+      - name: Smoke test through nginx
+        run: python3 scripts/smoke_demo_image.py http://127.0.0.1:8080
+
+      - name: Container logs
+        if: always()
+        run: docker compose -f docker-compose.demo.yml logs --no-color | tail -n 200

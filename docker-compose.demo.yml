@@ -1,0 +1,19 @@
+# One-command public demo on a laptop — the same image as the Hugging Face
+# Space (docker/demo.Dockerfile): SPA + gateway + ai_engine in one container,
+# LLM_MODE=mock, synthetic data, nothing kept across restarts.
+#
+#   docker compose -f docker-compose.demo.yml up --build
+#   open http://localhost:8080 and click a demo user
+#
+# Not the production shape: see docker-compose.yml (`--profile app`) and
+# docs/DELIVERY_RUNBOOK.md for the real deployment.
+services:
+  demo:
+    build:
+      context: .
+      dockerfile: docker/demo.Dockerfile
+    image: patentmind/demo:local
+    container_name: patentmind-demo
+    ports:
+      - "${DEMO_PORT:-8080}:7860"
+    restart: unless-stopped

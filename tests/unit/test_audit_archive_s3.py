@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -272,3 +272,59 @@ def test_live_tamper_detected_in_s3_mode(s3_archive):
     assert rep["ok"] is False
     tampered = [a for a in rep["anomalies"] if a["type"] == "live_row_tampered"]
     assert any(a["audit_id"] == ids[1] for a in tampered)
+
+
+# ---------------------------------------------------------------------------
+# 7. COMPLIANCE mode — the production posture for the Q13 retention. Objects
+#    written here can NEVER be removed before expiry, so this only runs where
+#    the store is thrown away afterwards: the CI services job sets
+#    ARCHIVE_S3_COMPLIANCE_TEST=1. The tests above use GOVERNANCE so a dev
+#    store stays cleanable; RustFS has had COMPLIANCE-only bugs (phase 5).
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(
+    os.getenv("ARCHIVE_S3_COMPLIANCE_TEST") != "1",
+    reason="writes undeletable objects; CI's throwaway store only",
+)
+def test_compliance_retention_cannot_be_bypassed_or_shortened():
+    client = _store_or_skip()
+    bucket = f"pm-compliance-{uuid.uuid4().hex[:12]}"
+    client.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
+    until = datetime.now(UTC) + timedelta(days=1)
+    put = client.put_object(
+        Bucket=bucket,
+        Key="segment-0001.jsonl",
+        Body=b'{"row_hash": "x"}',
+        ObjectLockMode="COMPLIANCE",
+        ObjectLockRetainUntilDate=until,
+    )
+    version_id = put["VersionId"]
+
+    # Not even the governance bypass removes a COMPLIANCE version...
+    with pytest.raises(ClientError):
+        client.delete_object(
+            Bucket=bucket,
+            Key="segment-0001.jsonl",
+            VersionId=version_id,
+            BypassGovernanceRetention=True,
+        )
+    # ...nor can its retention be shortened, or switched to GOVERNANCE.
+    with pytest.raises(ClientError):
+        client.put_object_retention(
+            Bucket=bucket,
+            Key="segment-0001.jsonl",
+            VersionId=version_id,
+            Retention={"Mode": "COMPLIANCE", "RetainUntilDate": until - timedelta(hours=12)},
+        )
+    with pytest.raises(ClientError):
+        client.put_object_retention(
+            Bucket=bucket,
+            Key="segment-0001.jsonl",
+            VersionId=version_id,
+            Retention={"Mode": "GOVERNANCE", "RetainUntilDate": until},
+            BypassGovernanceRetention=True,
+        )
+
+    head = client.head_object(Bucket=bucket, Key="segment-0001.jsonl", VersionId=version_id)
+    assert head["ObjectLockMode"] == "COMPLIANCE"
+    obj = client.get_object(Bucket=bucket, Key="segment-0001.jsonl", VersionId=version_id)
+    assert obj["Body"].read() == b'{"row_hash": "x"}'

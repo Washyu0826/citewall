@@ -23,6 +23,15 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Request-Id $request_id;
+        # Browsers never assert an identity. The gateway honours these from
+        # its trusted upstream (digiRunner, TRUSTED_UPSTREAM_IPS — loopback by
+        # default), and a proxy on the gateway's own host IS loopback (the
+        # one-container demo image): an empty value stops nginx forwarding
+        # them (FAILURE_LOG B-50).
+        proxy_set_header X-User-Id "";
+        proxy_set_header X-Tenant-Id "";
+        proxy_set_header X-User-Role "";
+        proxy_set_header X-Upstream-Auth-Token "";
         # Analyze rides the whole local-LLM chain (minutes on a 3060).
         proxy_read_timeout 450s;
         proxy_send_timeout 120s;

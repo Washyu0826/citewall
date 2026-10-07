@@ -21,6 +21,16 @@ import tailwindcss from '@tailwindcss/vite';
 // adds the slash back either way. Do NOT change the default :8010
 // (ai_engine is :8011) per scripts/start_backend.sh — do NOT change to :8000.
 const API_TARGET = process.env.VITE_API_TARGET || 'http://localhost:8010';
+
+// Browsers never assert an identity. The gateway honours these headers from
+// its trusted upstream (digiRunner; TRUSTED_UPSTREAM_IPS is loopback by
+// default) — and this dev proxy forwards from loopback, so without this any
+// visitor (e.g. through scripts/start_ngrok.sh) could log in as anyone by
+// adding a header (FAILURE_LOG B-50). Same list as the nginx template.
+export const IDENTITY_HEADERS = ['x-user-id', 'x-tenant-id', 'x-user-role', 'x-upstream-auth-token'];
+export function stripIdentityHeaders(proxyReq) {
+  for (const h of IDENTITY_HEADERS) proxyReq.removeHeader(h);
+}
 const API_PATH_PREFIX = (() => {
   let p = process.env.VITE_API_PATH_PREFIX || '';
   p = p.replace(/\/+$/, '');                 // no trailing slash
@@ -39,7 +49,8 @@ export default defineConfig({
       '/api': {
         target: API_TARGET,
         changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/api/, API_PATH_PREFIX)
+        rewrite: (p) => p.replace(/^\/api/, API_PATH_PREFIX),
+        configure: (proxy) => proxy.on('proxyReq', stripIdentityHeaders)
       }
     }
   },
