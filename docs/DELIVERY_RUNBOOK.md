@@ -80,7 +80,7 @@ bash scripts/smoke_demo.sh   # 應印出 ALL GREEN — demo ready
 在同一個容器，`LLM_MODE=mock`、合成資料、重啟後不保留任何東西。
 
 ```bash
-docker compose -f docker-compose.demo.yml up --build    # 開 http://localhost:8080，點示範帳號
+docker compose -f docker-compose.demo.yml up --build    # 開 http://localhost:8080，點示範帳號（預設只綁本機；DEMO_BIND=0.0.0.0 才對區網開放）
 python scripts/smoke_demo_image.py http://localhost:8080   # 選用：從外面驗一次（CI 每次都會跑）
 ```
 
@@ -98,8 +98,10 @@ python scripts/smoke_demo_image.py http://localhost:8080   # 選用：從外面�
 4. 網址：`https://<HF 帳號>-patent-oa-assistant.hf.space`（Space 頁面也會嵌入顯示）。
 
 已知限制：
-- 免費 CPU 閒置 48 小時會休眠，喚醒約 1–2 分鐘；重啟後所有登入與資料都會重置。
-- 所有訪客經過同一個代理，共用登入頻率限制（每分鐘 30 次）；也共用同一個示範帳號的每日配額。
+- 免費 CPU 閒置 48 小時會休眠，喚醒約 1–2 分鐘。每次啟動都從頭開始：登入、稽核紀錄、案件登錄的修改都會重置；Space 每天台灣時間 03:17 自動重啟一次。
+- 所有訪客經過同一個代理：共用登入頻率限制（每分鐘 30 次；uvicorn 以 `--no-proxy-headers` 執行，訪客自帶的 `X-Forwarded-For` 不算數），也共用示範帳號的每日配額與每分鐘次數。有人故意用完時，要等每日重啟（或手動重啟 Space）。
+- IT 管理員角色的修改（例如停用案件）會影響之後的訪客，直到下次重啟。
+- `/v1/redact` 與 `/v1/audit/append` 在 demo 裡被 nginx 擋掉（SPA 用不到）。
 
 ## 3. Demo 流程 / Demo Flow
 
@@ -166,6 +168,11 @@ docker compose up -d postgres          # host :15432（5432 被佔，勿改回�
   運行中寫入失敗則照舊落入 write-ahead outbox（`audit_outbox.py`）等待 replay。
 
 **WORM 封存 → S3 Object Lock（compose 用 RustFS）**（`ARCHIVE_BACKEND=s3`）
+
+從 MinIO 升級（2026-10 以前的部署）：舊 `.env` 的 `ARCHIVE_S3_SECRET_KEY=patentmind-minio` 與
+`MINIO_ROOT_*` 要改成 `patentmind-worm` 與 `RUSTFS_ACCESS_KEY`／`RUSTFS_SECRET_KEY`；舊的
+`minio_data` volume 不會被 RustFS 讀取（封存要重新建立 bucket 與封存，或先用 S3 工具搬移）。
+RustFS 主控台預設關閉，需要時在 `.env` 設 `RUSTFS_CONSOLE_ENABLE=true`。
 
 ```bash
 docker compose up -d rustfs                # S3 API :19000，console :19001

@@ -135,11 +135,19 @@ def space_url(space_id: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--out", type=Path)
     ap.add_argument("--ref", default="HEAD")
     ap.add_argument("--upload", metavar="OWNER/SPACE")
+    # For the deploy workflow: the app URL, without pasting the Space id into
+    # Python source on a command line.
+    ap.add_argument("--print-url", metavar="OWNER/SPACE")
     args = ap.parse_args()
 
+    if args.print_url:
+        print(space_url(args.print_url))
+        return 0
+    if args.out is None:
+        ap.error("--out is required")
     version = assemble(args.out, args.ref)
     files = sum(1 for p in args.out.rglob("*") if p.is_file())
     print(f"assembled {files} files for {version} in {args.out}")

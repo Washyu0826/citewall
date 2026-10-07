@@ -88,7 +88,7 @@ ok "All services are up. Connection URLs:"
 echo "  Postgres : postgresql://${POSTGRES_USER_VAL}:<password>@localhost:${POSTGRES_HOST_PORT:-15432}/${POSTGRES_DB_VAL}"
 echo "  Redis    : redis://localhost:6379/0"
 echo "  Qdrant   : http://localhost:6333 (REST), grpc://localhost:6334"
-echo "  RustFS   : http://localhost:19000 (S3 API), http://localhost:19001 (console)"
+echo "  RustFS   : http://localhost:19000 (S3 API); console :19001 only with RUSTFS_CONSOLE_ENABLE=true"
 echo "             WORM bucket init (once): python scripts/init_object_store.py"
 echo
 echo "Next: bash scripts/check_docker.sh"

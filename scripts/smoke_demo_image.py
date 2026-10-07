@@ -123,4 +123,24 @@ status, _, body = request(
 check(status == 200, f"analyze returns 200 (got {status})")
 result = json.loads(body)
 check(len(result["oa"]["rejections"]) > 0 and len(result["drafts"]) > 0, "analysis has rejections and drafts")
+
+# --- closed to anonymous visitors (docker/demo/public.conf, B-52) ------------------
+for path in ("/api/v1/redact", "/api/v1/audit/append"):
+    status, _, _ = request("POST", path, {}, headers={"Authorization": f"Bearer {token}"})
+    check(status == 403, f"{path} is closed in the public demo")
+
+# --- a rotating X-Forwarded-For does not get around the login limit ----------------
+# Spends the shared login bucket for a minute, so CI only (SMOKE_LOGIN_FLOOD=1),
+# never against the live Space. Last, because later logins would fail.
+if os.getenv("SMOKE_LOGIN_FLOOD") == "1":
+    codes = [
+        request(
+            "POST",
+            "/api/v1/auth/login",
+            {"user_id": "alice", "password": "wrong"},
+            headers={"X-Forwarded-For": f"203.0.113.{i % 250 + 1}"},
+        )[0]
+        for i in range(int(os.getenv("LOGIN_RPM", "30")) + 5)
+    ]
+    check(429 in codes, "a rotating X-Forwarded-For does not reset the login limit (uvicorn --no-proxy-headers)")
 print("demo image smoke test passed")

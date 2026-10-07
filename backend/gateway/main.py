@@ -21,7 +21,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from fastapi import (
@@ -2000,10 +2000,16 @@ async def upload_oa(
 # ---------- Audit query endpoints (for the Auditor role) ----------
 
 
+# The audit view asks for 50; anything outside 1..1000 is clamped (a
+# negative limit used to mean "every row" — review phase 5 / B-52).
+_AUDIT_RECENT_MAX = 1000
+
+
 @app.get("/v1/audit/recent")
 def audit_recent(limit: int = 50, user: User = Depends(auth_dependency)):
     if user.role.value not in ("auditor", "it_admin"):
         raise HTTPException(403, "auditor or it_admin role required")
+    limit = max(1, min(limit, _AUDIT_RECENT_MAX))
     return audit.writer.list_for_tenant(user.tenant_id, limit=limit)
 
 
@@ -2232,6 +2238,13 @@ def _do_redact(req: RedactionPreviewRequest, user: User, request: Request, endpo
         authorize_case_access(user, case_id)
         policy_decisions["authz_passed"] = True
 
+        # The analysis's own gates, in the same order: the preview runs the
+        # same masking over caller-sized text, and masking.redact grows
+        # faster than linearly with input size — unbounded, a few large
+        # requests stalled the whole gateway (review phase 5 / B-52).
+        rate_limit.gate_rpm(user, policy_decisions)
+        rate_limit.check_request_size(max(1, len(req.text) // 3))
+
         redacted, rules = masking.redact(req.text, user.tenant_id)
         result_payload = {"rules_triggered": rules, "redacted_chars": len(redacted)}
         return {"redacted": redacted, "rules_triggered": rules}
@@ -2331,15 +2344,22 @@ class AuditAppendRequest(BaseModel):
     # security invariant — see class docstring.
     model_config = {"protected_namespaces": (), "extra": "forbid"}
 
-    # Caps prevent unbounded strings from ballooning the hash-chained log.
+    # Caps prevent unbounded values from ballooning the hash-chained log —
+    # every field, not only the strings: a 200k-item list was accepted, and
+    # a token count past SQLite's integer range sent the row to the
+    # outbox for good (review phase 5 / B-52).
     case_id: str = Field(..., max_length=256)
     endpoint: str = Field(..., max_length=256)
     model_used: str | None = Field(default=None, max_length=128)
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    latency_ms: int = 0
-    masked_field_rules: list[str] = Field(default_factory=list)
-    policy_decisions: dict[str, bool] = Field(default_factory=dict)
+    prompt_tokens: int = Field(default=0, ge=0, le=10_000_000)
+    completion_tokens: int = Field(default=0, ge=0, le=10_000_000)
+    latency_ms: int = Field(default=0, ge=0, le=86_400_000)
+    masked_field_rules: list[Annotated[str, Field(max_length=128)]] = Field(
+        default_factory=list, max_length=64
+    )
+    policy_decisions: dict[Annotated[str, Field(max_length=64)], bool] = Field(
+        default_factory=dict, max_length=64
+    )
     error: str | None = Field(default=None, max_length=2048)
 
 
@@ -2396,6 +2416,8 @@ def audit_append(
         # C-3: Re-check ACL on the body-supplied case_id. auth_dependency
         # only inspected X-Case-Id (the body was opaque to it).
         authorize_case_access(user, req.case_id)
+        # Every row lands in the shared hash chain (review phase 5 / B-52).
+        rate_limit.gate_rpm(user)
 
         # `policy_decisions` is typed `dict[str, bool]` on the writer, so we
         # keep a boolean flag for "did an error happen" and preserve the raw

@@ -35,7 +35,11 @@ from backend.shared import config
 from backend.shared.config import settings
 from backend.shared.models import User, UserRole
 
-boto3 = pytest.importorskip("boto3")
+# Where the store is required (CI), a missing client must fail, not skip.
+if os.getenv("ARCHIVE_S3_REQUIRED") == "1":
+    import boto3
+else:
+    boto3 = pytest.importorskip("boto3")
 
 from botocore.config import Config  # noqa: E402
 from botocore.exceptions import ClientError  # noqa: E402
@@ -279,7 +283,10 @@ def test_live_tamper_detected_in_s3_mode(s3_archive):
 #    written here can NEVER be removed before expiry, so this only runs where
 #    the store is thrown away afterwards: the CI services job sets
 #    ARCHIVE_S3_COMPLIANCE_TEST=1. The tests above use GOVERNANCE so a dev
-#    store stays cleanable; RustFS has had COMPLIANCE-only bugs (phase 5).
+#    store stays cleanable; RustFS has had COMPLIANCE-specific bugs, e.g.
+#    https://github.com/rustfs/rustfs/issues/3174 and discussion #1459.
+#    This exercises the STORE's COMPLIANCE semantics with raw S3 calls, not
+#    the archiver's own ARCHIVE_S3_RETENTION_MODE=COMPLIANCE path.
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(
     os.getenv("ARCHIVE_S3_COMPLIANCE_TEST") != "1",
@@ -300,11 +307,18 @@ def test_compliance_retention_cannot_be_bypassed_or_shortened():
     version_id = put["VersionId"]
 
     def refused(call):
-        # A refusal, not a missing feature: NotImplemented would pass a bare
-        # pytest.raises(ClientError) without proving anything.
+        # A refusal, not a missing feature or a server fault: those would
+        # pass a bare pytest.raises(ClientError) without proving anything.
         with pytest.raises(ClientError) as exc:
             call()
-        assert exc.value.response["Error"]["Code"] not in ("NotImplemented", "MethodNotAllowed")
+        code = exc.value.response["Error"]["Code"]
+        assert code not in ("NotImplemented", "MethodNotAllowed", "ServiceUnavailable"), code
+        assert not code.startswith("Internal"), code
+
+    def retained_until():
+        return client.get_object_retention(
+            Bucket=bucket, Key="segment-0001.jsonl", VersionId=version_id
+        )["Retention"]["RetainUntilDate"]
 
     # Controls — so the refusals below cannot be vacuous: a GOVERNANCE
     # version IS removable with the bypass, and a COMPLIANCE retention CAN be
@@ -329,6 +343,7 @@ def test_compliance_retention_cannot_be_bypassed_or_shortened():
         VersionId=version_id,
         Retention={"Mode": "COMPLIANCE", "RetainUntilDate": until},
     )
+    assert abs((retained_until() - until).total_seconds()) < 2  # really extended
 
     # Not even the governance bypass removes a COMPLIANCE version...
     refused(
@@ -358,6 +373,8 @@ def test_compliance_retention_cannot_be_bypassed_or_shortened():
         )
     )
 
+    # The refused changes left the retention exactly as extended.
+    assert abs((retained_until() - until).total_seconds()) < 2
     head = client.head_object(Bucket=bucket, Key="segment-0001.jsonl", VersionId=version_id)
     assert head["ObjectLockMode"] == "COMPLIANCE"
     obj = client.get_object(Bucket=bucket, Key="segment-0001.jsonl", VersionId=version_id)

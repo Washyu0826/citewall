@@ -2,12 +2,14 @@ name: Deploy demo (Hugging Face Space)
 
 # The public mock-mode demo (docker/demo.Dockerfile) on a Hugging Face Docker
 # Space. Runs after CI succeeds on main — the CI `demo-image` job has already
-# built and smoke-tested the same Dockerfile — or by hand.
+# built and smoke-tested the same Dockerfile — or by hand from main. A daily
+# restart resets what anonymous visitors share: quotas, the case registry,
+# audit rows (the demo keeps nothing across a restart).
 #
 # Off until the repository is configured (nothing here runs otherwise):
 #   secret   HF_TOKEN     a Hugging Face token with write access
 #   variable HF_SPACE_ID  OWNER/SPACE, e.g. alice/patent-oa-assistant
-# The token stays in GitHub; the workflow never prints it.
+# The token is given only to the steps that call Hugging Face; nothing prints it.
 
 on:
   workflow_run:
@@ -15,6 +17,8 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "17 19 * * *" # 03:17 Asia/Taipei
 
 permissions:
   contents: read
@@ -28,21 +32,22 @@ jobs:
     # `branches: [main]` above matches the head branch NAME, which a fork's
     # pull request can also be called — and this job checks out that commit
     # with the HF token in reach. Only a successful CI run for a PUSH to this
-    # repository deploys.
+    # repository deploys; by hand, only from main.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+      HAS_TOKEN: ${{ secrets.HF_TOKEN != '' }}
     steps:
       - name: Configured?
         id: cfg
         run: |
-          if [ -n "$HF_TOKEN" ] && [ -n "$HF_SPACE_ID" ]; then
+          if [ "$HAS_TOKEN" = "true" ] && [ -n "$HF_SPACE_ID" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "HF_TOKEN secret or HF_SPACE_ID variable not set; skipping the deploy."
@@ -59,10 +64,15 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Install the Hugging Face client (no token yet)
+        if: steps.cfg.outputs.ready == 'true'
+        run: pip install huggingface_hub==2.1.1
+
       - name: Assemble and upload the Space
         if: steps.cfg.outputs.ready == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          pip install huggingface_hub==2.1.1
           python scripts/build_hf_space.py --out build/hf-space --upload "$HF_SPACE_ID"
           echo "EXPECT_VERSION=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
 
@@ -72,6 +82,36 @@ jobs:
           # A Space build (npm ci + pip install) takes several minutes.
           SMOKE_WAIT_SECONDS: "1500"
         run: |
-          url=$(python -c "import sys; sys.path.insert(0, 'scripts'); from build_hf_space import space_url; print(space_url('$HF_SPACE_ID'))")
+          url=$(python scripts/build_hf_space.py --print-url "$HF_SPACE_ID")
           echo "Space app: $url"
           python scripts/smoke_demo_image.py "$url"
+
+  restart:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+      HAS_TOKEN: ${{ secrets.HF_TOKEN != '' }}
+    steps:
+      - name: Configured?
+        id: cfg
+        run: |
+          if [ "$HAS_TOKEN" = "true" ] && [ -n "$HF_SPACE_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "HF_TOKEN secret or HF_SPACE_ID variable not set; skipping the restart."
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          python-version: "3.13"
+
+      - name: Restart the Space (resets shared demo state)
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install huggingface_hub==2.1.1
+          python -c "import os; from huggingface_hub import HfApi; HfApi(token=os.environ['HF_TOKEN']).restart_space(os.environ['HF_SPACE_ID'])"
+          echo "restart requested for $HF_SPACE_ID"

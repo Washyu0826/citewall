@@ -21,16 +21,27 @@ if [ "${LLM_MODE:-}" != "mock" ]; then
   exit 1
 fi
 
+# A fresh start every time — also when compose restarts the SAME container
+# (restart: unless-stopped): the audit chain is keyed by the per-start
+# AUDIT_HMAC_KEY above, and one visitor's edits (case registry, audit rows)
+# must not outlive the next restart.
+find /app/data -mindepth 1 -delete
 seed-data true
 mkdir -p /tmp/nginx
 
-uvicorn backend.ai_engine.main:app --host 127.0.0.1 --port 8011 &
-uvicorn backend.gateway.main:app --host 127.0.0.1 --port 8010 &
+# --no-proxy-headers: uvicorn trusts X-Forwarded-For from 127.0.0.1 by
+# default, and here nginx IS 127.0.0.1 — a visitor's own header would
+# become request.client.host, defeating the per-IP login limit. The
+# services see nginx; every visitor shares the login bucket.
+uvicorn backend.ai_engine.main:app --host 127.0.0.1 --port 8011 --no-proxy-headers &
+uvicorn backend.gateway.main:app --host 127.0.0.1 --port 8010 --no-proxy-headers &
 # -e: before reading the config nginx opens its compiled-in error log under
 # /var/log/nginx, which this unprivileged user cannot write.
 nginx -e /dev/stderr -c /etc/nginx/demo/nginx.conf -g 'daemon off;' &
 
 trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+# PID 1 gets no default signal handling: stop promptly on `docker stop`.
+trap 'exit 143' TERM INT
 set +e
 wait -n
 status=$?

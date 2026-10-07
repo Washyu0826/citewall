@@ -610,6 +610,10 @@
   - 多容器的 `--profile app` 不受影響：nginx 在另一個容器，gateway 看到的不是本機位址。
 - **修正**：
   - nginx 範本與 vite 代理一律清掉這四個標頭（瀏覽器永遠不該自稱身分），各有測試。
+- **更正（第五階段審查後）**：
+  - 下面「CI 會帶偽造的 x-user-id 確認回 401」在 e0ab5b5 不成立：只靠 nginx 清除的那一步沒有真的執行（P-19 第 7 點），**從 ffc6235 起**才成立，並已用突變確認。
+  - 「用 ngrok 分享時，拿到 Basic Auth 密碼的人都做得到」很可能不實（推論，未測）：ngrok 會加上 `X-Forwarded-For`，uvicorn 預設信任本機送來的這個標頭，gateway 看到的就是訪客的位址而不是本機。本機直接連 vite 的人仍然做得到。
+  - `/metrics` 經由 vite 代理對外開放這一點，當時沒有修；現在由 `start_demo.sh` 產生 `METRICS_TOKEN`（B-52 的 P5-L8）。
   - demo 映像檔另外設 `TRUSTED_UPSTREAM_IPS=""`，並在每次啟動時產生隨機的 `METRICS_TOKEN`。
   - CI 的 demo 映像檔測試會帶偽造的 `x-user-id` 去打 API，確認回 401；`/metrics` 也確認回 401。
 - **沒有修改**：gateway 本身仍信任本機的 digiRunner（交付環境需要）。在同一台主機上把任何會轉送瀏覽器標頭的服務放到 gateway 前面之前，都要先清掉這些標頭，或設 `UPSTREAM_AUTH_SHARED_SECRET`。
@@ -618,6 +622,7 @@
 
 - **原因**：SPA 的「點 Alice 登入」只送使用者名稱，靠 `VITE_DEMO_LOGIN_SECRET` 標頭驗證。前端的 Dockerfile 刻意把它清空（正確：不能把密鑰編進公開的 JS），結果容器版只剩「輸入帳號、要求登入連結、再點連結」這條路。
 - **影響**：`docker compose --profile app` 起來的畫面，按示範帳號會出現「Invalid credentials」；公開 demo 根本無法一鍵試用。
+- **更正（第五階段審查後）**：只修了 demo 映像檔。`--profile app` 仍然不能一鍵登入，這是刻意的：正式部署要用登入連結或真的 IdP。另外，`DEMO_PASSWORDS_ENABLED` 可以覆蓋「只在 mock 模式」的預設，下面那句說得太絕對。
 - **修正**：新的建置旗標 `VITE_DEMO_PUBLIC_PASSWORDS`（預設關閉）讓一鍵登入送出**本來就公開**的 `demo-{user}` 密碼。gateway 只在 `LLM_MODE=mock` 接受這組密碼，所以在正式部署打開這個旗標也沒有作用，JS 裡也沒有任何密鑰。只有 demo 映像檔打開。
 
 ## P-19　Claude 在第 5 階段的失誤（2026-10-07，都在送出前或 CI 發現）
@@ -629,9 +634,46 @@
 5. 第一版的 Space 組裝腳本從工作目錄讀 Dockerfile，其他檔案卻從 git 取，兩者可能不一致；送出前發現，改成全部從 git 取。
 6. 第一版的部署 workflow 只用 `branches: [main]` 過濾 `workflow_run`。這個條件比對的是分支**名稱**，fork 的 PR 分支也可以叫 main，而這個工作會在拿得到 HF 權杖的情況下 checkout 那個 commit。送出前發現，改成只接受本 repo 的 push。
 7. **第五次 shell 引號事故，而且差點造成錯誤的突變結論。** 用 heredoc 內嵌的 Python 寫 CI 步驟時，行尾的 `\` 加換行被弄成字面上的 `\n`，新步驟的 `docker run` 變成去拉一個叫 `n` 的映像檔。結果功能分支和突變分支**都**在那一步失敗；如果只看「突變分支失敗了」，就會誤報「突變被抓到」。是看了失敗原因才發現兩邊原因相同、與要測的東西無關。已改用編輯工具修正，並重做突變檢查。更新記憶時，另一段內嵌程式也因為 `\U` 跳脫失敗（寫入前就停了，沒改到檔案）。
+8. **重做突變檢查時，推上去的分支沒有突變。** 用 cherry-pick 把突變搬到修正後的分支沒有成功，我沒檢查就 force-push，推上去的其實是沒有突變的版本；它的 CI 若是綠的，會被誤讀成「突變沒被抓到」。推送後查 `git diff` 才發現，取消那次 CI，改成直接修改檔案，並確認差異只有那 4 行。有效的結果：只拿掉 nginx 的清除、同時打開本機信任時，正好在「瀏覽器送的 x-user-id 不能當身分」這一項失敗；功能分支全綠。
 - **教訓**：
   - 含跳脫字元的內容一律用寫檔工具（P-12、P-13 已寫過，這次又犯）。
   - 突變檢查要看**失敗的原因**是不是要測的那一項，不能只看紅燈。
+  - 推突變分支前，先確認它和原分支的差異就是那個突變。
+
+## 第 5 階段的獨立審查（2026-10-07）
+
+對 `feat/phase5-deploy`（e0ab5b5，之後 ffc6235）做獨立審查。結論：**從 ffc6235 起**，完全公開的 demo 在保密與主機安全上沒有問題：沒有密鑰、資料都是合成的、ai_engine 不對外、偽造身分已擋住。但在**可用性**上不行：一個匿名訪客就能低成本讓整個 demo 對所有人停擺，或改壞共用的狀態。以下 B-52 都已處理，上線前完成。
+
+## B-52　公開 demo 的可用性：單一訪客就能拖垮或弄亂共用的 demo（2026-10-07 發現並修正）
+
+| 編號 | 嚴重度 | 問題 | 處理 |
+|---|---|---|---|
+| P5-M2 | 中（審查實測） | 遮罩預覽（`/v1/redact` 與 SPA 用的預覽端點）沒有頻率限制，接受 5 MB 文字；`masking.redact` 的時間隨長度超線性成長（實測輸入加倍、時間約 ×4.2），幾個大請求就能佔滿執行緒，健康檢查、登入都卡住 | 套用和分析相同的閘門：每人每分鐘次數，再加上和分析一樣的大小上限（32,000 tokens ≈ 96K 字元，超過回 413） |
+| P5-M3 | 中（審查實測） | `/v1/audit/append` 沒有頻率限制，清單、字典、整數都沒有上限：20 萬項的清單照收；超過 SQLite 整數範圍的 token 數讓那一列永遠卡在 outbox。`/v1/audit/recent?limit=-1` 會回傳全部 | 所有欄位都有上限（清單 64 項、每項 128 字元；字典 64 個鍵；token 0～1,000 萬；延遲 ≤ 1 天），加上每人每分鐘次數；`limit` 限制在 1～1000。demo 的 nginx 另外直接擋掉 `/v1/redact` 和 `/v1/audit/append`（SPA 不用） |
+| P5-M4 | 中（推論） | 所有訪客共用示範帳號的每日 token 配額與每分鐘次數，故意用完就讓其他人一整天不能分析 | **部分處理**：每天自動重啟 Space（`deploy-demo.yml` 排程，台灣時間 03:17），重啟會清空配額與所有共用狀態。一天之內被用完仍然可能，記為已知限制 |
+| P5-M5 | 中（審查以 uvicorn 0.30.6 驗證機制） | uvicorn 預設信任來自 127.0.0.1 的 `X-Forwarded-For`。單一容器裡 nginx 就是 127.0.0.1，訪客自帶的標頭會變成 gateway 看到的來源 IP：每次換一個值，就能繞過每分鐘 30 次的登入限制（每次驗證密碼要 64 MiB 記憶體） | demo 的兩個 uvicorn 加上 `--no-proxy-headers`；CI 用輪換 `X-Forwarded-For` 的大量錯誤登入確認會被限流 |
+| P5-L1 | 低 | compose 的 `restart: unless-stopped` 重啟的是同一個容器，`/app/data` 會留下來，但每次啟動都換一把稽核金鑰，舊的稽核列全部驗不過；「重啟後不保留任何東西」不實 | 啟動時清空 `/app/data` 再放入種子資料 |
+| P5-L2 | 低 | IT 管理員（carol）可以停用 CASE-2025-001，之後所有訪客上傳都被拒，直到重啟 | 每日重啟會還原；記為已知限制 |
+| P5-L3 | 低 | demo 開著 stub OIDC／SAML 登入（用公開的簽章密鑰），能無限建立聯合登入使用者 | demo 映像檔設 `OIDC_ENABLED=false`、`SAML_ENABLED=false` |
+| P5-L4 | 低 | nginx `worker_connections 256`，搭配 450 秒讀取逾時，幾個慢速連線就能耗盡 | 改為 1024 |
+| P5-L9 | 低 | `docker-compose.demo.yml` 預設綁在所有網路介面 | 預設改為 127.0.0.1（`DEMO_BIND` 可改） |
+| P5-L5 | 低 | 部署 workflow 讓整個 job 都拿得到 HF_TOKEN（包括不需要它的 smoke 測試）；手動觸發可以部署任何分支；Space ID 被直接串進 `python -c` 的程式碼字串 | 權杖只給呼叫 Hugging Face 的步驟；手動觸發只接受 main；網址改由 `build_hf_space.py --print-url` 產生 |
+| P5-L6 | 低 | COMPLIANCE 測試沒有檢查延長後的保留期限；`InternalError` 也會被當成「拒絕」；CI 要求存儲時，缺 boto3 仍會略過 | 檢查延長前後與被拒後的保留期限；排除伺服器錯誤；CI 下缺 boto3 直接失敗 |
+| P5-L7 | 低 | compose 的 RustFS 主控台預設開啟（公開的開發帳密、CORS 為 `*`）；從 MinIO 升級的人，舊 `.env` 的密碼與 `minio_data` volume 不會自動處理 | 主控台預設關閉（`RUSTFS_CONSOLE_ENABLE`）；升級說明寫進 DELIVERY_RUNBOOK |
+| P5-L8 | 低 | vite 開發代理（和 ngrok）的 `/metrics` 仍對外開放：B-50 列了這個影響，卻沒有修 | `start_demo.sh` 自動產生 `METRICS_TOKEN` |
+
+- **突變檢查**（gateway 的 7 項，都會讓新測試失敗）：預覽不限流、預覽不限大小、append 不限流、token 數不設上限、清單不設上限、字典不設上限、`limit` 不限制。
+- **沒有改的**：`/api/docs` 仍公開（repo 本來就公開）；基底映像檔沒有固定 digest；nginx 沒有加 `limit_req`（在 Hugging Face 上所有訪客來自同一個代理，等於全站共用一個限制，交給 gateway 的每人限制）。
+
+## P-19 補充：第 5 階段的說法過頭（第五階段審查發現）
+
+- e0ab5b5 的 commit 寫「第二個容器打開本機信任，證明只靠 nginx 清除也擋得住」：那個容器根本沒啟動成功（`\n` 事故），從 ffc6235 起才成立。
+- 計畫表寫「程式與 CI 完成」時，CI 是紅的。
+- 「重啟後不保留任何東西」對 compose 不成立（P5-L1，已修）。
+- 執行手冊寫「所有訪客共用登入頻率限制」，當時並未驗證，而且因為 P5-M5 其實不成立（現已成立）。
+- CLAUDE.md 寫「COMPLIANCE 模式由 CI 驗證」：CI 驗的是存儲本身的 COMPLIANCE 語意，不是封存程式的 COMPLIANCE 路徑（已改寫）。
+- 「不可能空泛地通過」說得太滿（P5-L6，已補強）；「RustFS 有過 COMPLIANCE 的 bug」沒有附來源（已補 issue 連結）。
+- 這是第九次宣稱過頭。
 
 ## D-1　稽核金鑰輪替已實作，文件仍寫「不支援」（2026-09-28 發現，2026-09-29 已修正）
 
@@ -751,7 +793,7 @@
 - **影響**：CI 無法驗證 Postgres 路徑，包括 H-10 稽核鏈的 advisory lock；`docker-compose.yml` 的 MinIO 服務也拉不到，稽核 WORM 封存（`ARCHIVE_BACKEND=s3`）在部署時沒有現成的映像檔可用。
 - **暫時處理**：CI 的 MinIO 步驟改為 `continue-on-error`，S3 相關測試會自動略過，其他服務的測試照常執行。
 - **待決定**：替換成支援 **S3 Object Lock** 的方案（需先查證各替代品是否真的支援 WORM），列入部署階段。
-- **已解決（2026-10-07，第 5 階段）**：改用 RustFS `1.0.1`（Apache-2.0，支援 Object Lock 與版本控制，固定版本）。Garage 不支援 Object Lock，排除；SeaweedFS 留作備案。CI 的 S3 封存測試從 09-30 起一直被**默默略過**，現在改為必須執行（`ARCHIVE_S3_REQUIRED=1`，連不上就失敗）：6 個 WORM 測試全部通過，並新增一個只在 CI 執行的 COMPLIANCE 模式測試（見 B-49 之後的紀錄）。
+- **已解決（2026-10-07，第 5 階段）**：改用 RustFS `1.0.1`（Apache-2.0，支援 Object Lock 與版本控制，固定版本）。Garage 不支援 Object Lock，排除；SeaweedFS 留作備案。CI 的 S3 封存測試從 09-30 起一直被**默默略過**，現在改為必須執行（`ARCHIVE_S3_REQUIRED=1`，連不上就失敗）：6 個 WORM 測試全部通過，並新增一個只在 CI 執行的 COMPLIANCE 模式測試（見「第 5 階段」的紀錄，B-49～B-52）。
 
 ## 待確認的資料不一致
 

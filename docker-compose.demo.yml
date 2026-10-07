@@ -15,5 +15,7 @@ services:
     image: patentmind/demo:local
     container_name: patentmind-demo
     ports:
-      - "${DEMO_PORT:-8080}:7860"
+      # Loopback by default, like every other service; DEMO_BIND=0.0.0.0 to
+      # show it on the LAN.
+      - "${DEMO_BIND:-127.0.0.1}:${DEMO_PORT:-8080}:7860"
     restart: unless-stopped

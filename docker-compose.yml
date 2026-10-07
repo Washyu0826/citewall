@@ -112,7 +112,10 @@ services:
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-patentmind-worm}
       RUSTFS_VOLUMES: /data
       RUSTFS_ADDRESS: 0.0.0.0:9000
-      RUSTFS_CONSOLE_ENABLE: "true"
+      # Web console off by default: with the published dev credentials and
+      # the image's CORS default (*), it is one more door. Opt in with
+      # RUSTFS_CONSOLE_ENABLE=true in .env when you need it (:19001).
+      RUSTFS_CONSOLE_ENABLE: "${RUSTFS_CONSOLE_ENABLE:-false}"
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
     ports:
       # Loopback only — dev credentials. Host ports 19000/19001 chosen to

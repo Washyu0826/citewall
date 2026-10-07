@@ -29,8 +29,11 @@ RUN npm run build \
 # the template changes shape and the substitution silently misses.
 RUN GATEWAY_UPSTREAM=http://127.0.0.1:8010 envsubst '${GATEWAY_UPSTREAM}' \
       < docker/default.conf.template \
-      | sed 's/listen 8080;/listen 7860;/' > /tmp/server.conf \
+      | sed 's/listen 8080;/listen 7860;/' \
+      | sed 's#server_tokens off;#server_tokens off; include /etc/nginx/demo/public.conf;#' \
+      > /tmp/server.conf \
  && grep -q 'listen 7860;' /tmp/server.conf \
+ && grep -q 'include /etc/nginx/demo/public.conf;' /tmp/server.conf \
  && grep -q 'proxy_pass http://127.0.0.1:8010/;' /tmp/server.conf
 
 # ---- Python runtime deps (no ML: mock mode) -----------------------------------
@@ -64,7 +67,9 @@ ENV PATH=/opt/venv/bin:$PATH \
     OCR_BACKEND=mock \
     AI_ENGINE_URL=http://127.0.0.1:8011 \
     TRUSTED_UPSTREAM_IPS="" \
-    LOGIN_RPM=30
+    LOGIN_RPM=30 \
+    OIDC_ENABLED=false \
+    SAML_ENABLED=false
 WORKDIR /app
 COPY --from=py /opt/venv /opt/venv
 COPY backend/ backend/
@@ -73,6 +78,7 @@ COPY data/tenant_dicts/ /app/data-seed/tenant_dicts/
 COPY data/calendars/ /app/data-seed/calendars/
 COPY docker/seed-data.sh /usr/local/bin/seed-data
 COPY docker/demo/nginx.conf /etc/nginx/demo/nginx.conf
+COPY docker/demo/public.conf /etc/nginx/demo/public.conf
 COPY docker/demo/start.sh /usr/local/bin/start-demo
 COPY --from=spa /src/dist /usr/share/nginx/html
 COPY --from=spa /tmp/security-headers.conf /etc/nginx/snippets/security-headers.conf

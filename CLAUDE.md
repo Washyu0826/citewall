@@ -158,7 +158,7 @@ invariant has broken.
 | Q4 — No SSR landing page | Build separate Next.js app (out of POC repo) |
 | Q8 — figure 區域偵測已實作（PyMuPDF layout：影像/向量聚類 + FIG. N／第 N 圖 caption 對應）| 後續：把每個 bbox crop 丟 Vision 模型做「描述圖 2」問答（機密案僅限地端 vision）|
 | Q12 — SAML IdP 是 stub（OIDC 已接真 Keycloak ✅，`OIDC_MODE=keycloak`） | SAML 換 python3-saml + 真 ADFS/Azure AD；OIDC 換企業級 IdP 只需改 issuer/client（`digirunner/oidc.yaml` 模板已對齊 realm `patentmind`） |
-| Q13 — WORM s3 模式目前對 RustFS 1.0.1（`ARCHIVE_BACKEND=s3` ✅，Object Lock + versioning + retention 與 COMPLIANCE 模式皆由 CI 驗證） | 換 AWS S3 / Azure 只是 endpoint+credentials 設定；COMPLIANCE mode 上線前確認法遵期間 |
+| Q13 — WORM s3 模式目前對 RustFS 1.0.1（`ARCHIVE_BACKEND=s3` ✅，封存程式的 Object Lock + versioning + retention 由 CI 驗證（GOVERNANCE）；存儲本身的 COMPLIANCE 語意另有 CI 測試，封存程式的 COMPLIANCE 路徑未測） | 換 AWS S3 / Azure 只是 endpoint+credentials 設定；COMPLIANCE mode 上線前確認法遵期間 |
 | Q13 — audit Postgres backend 已實作（`AUDIT_BACKEND=postgres` ✅） | backup.py / quality_eval.py 的離線讀取仍走 SQLite 檔案快照 — postgres 模式的備份要改走 pg_dump / streaming replication |
 | Q20 — 排程 wrapper 已出（`scripts/run_backup.py` + `backup_cron.sh` + schtasks，見 DELIVERY_RUNBOOK §7）| **must upgrade to streaming replication before prod**（snapshot cron 達不到 RPO<5min）|
 | 2026-09-25 branch — 未實機驗證 | 真 API key 跑 `scripts/anthropic_smoke.py`（Sonnet 5 schema + effort、citations 切塊）；GPU 上跑 PaddleOCR-VL / Qwen3 embedding + reranker；docker 實跑 Dify 1.17.1、digiRunner release-v4.7.3、Qdrant 1.19、audit Postgres `hash_version` 遷移 |
