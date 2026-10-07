@@ -247,10 +247,10 @@ class AIEngineClient:
         # This is the SINGLE egress point to the AI Engine. Before any bytes
         # leave the gateway we scan the whole payload for raw PII that should
         # have been redacted upstream. Fail closed if redaction escaped.
-        # Inline, on purpose: a worker thread does not free the event loop here
-        # (re holds the GIL for each search) and it changed cancellation and
-        # deadline behaviour (B-56). Kept cheap instead: e-mail existence uses
-        # its linear search pattern.
+        # Inline, on purpose, and kept cheap instead (~0.1 s at most; e-mail
+        # existence uses its linear search pattern). A worker thread would only
+        # let the event loop in between two searches (re holds the GIL for
+        # each) and changed cancellation and deadline behaviour (B-56, B-57).
         _assert_no_raw_pii(path, payload)
         stage = _STAGE_FOR_PATH.get(path, path.rsplit("/", 1)[-1])
         started = time.monotonic()

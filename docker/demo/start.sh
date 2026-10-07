@@ -32,40 +32,53 @@ if [ "${LLM_MODE:-}" != "mock" ]; then
   exit 1
 fi
 
-# positive_int NAME VALUE DEFAULT: VALUE if it is a positive integer, else
-# DEFAULT with a warning — a typo must not silently disable the watchdog or
-# turn its sleep into a busy loop.
+# positive_int NAME VALUE DEFAULT MAX: VALUE if it is an integer in 1..MAX,
+# else DEFAULT with a warning — a typo must not silently disable the watchdog
+# (too large) or turn its sleep into a busy loop (not a number).
 positive_int() {
   case $2 in
     '' | *[!0-9]*) ;;
-    *) if [ "$2" -gt 0 ] 2>/dev/null; then echo "$2"; return; fi ;;
+    *) if [ "$2" -gt 0 ] 2>/dev/null && [ "$2" -le "$4" ] 2>/dev/null; then echo "$2"; return; fi ;;
   esac
-  echo "start-demo: $1=$2 is not a positive integer; using $3" >&2
+  echo "start-demo: $1=$2 is not an integer in 1..$4; using $3" >&2
   echo "$3"
 }
 
 DATA=/app/data
 PAUSE=/tmp/start-demo.pause
-MAX_MB=$(positive_int DEMO_DATA_MAX_MB "${DEMO_DATA_MAX_MB:-2048}" 2048)
-WATCH_S=$(positive_int DEMO_WATCHDOG_SECONDS "${DEMO_WATCHDOG_SECONDS:-60}" 60)
+MAX_MB=$(positive_int DEMO_DATA_MAX_MB "${DEMO_DATA_MAX_MB:-2048}" 2048 1048576)
+WATCH_S=$(positive_int DEMO_WATCHDOG_SECONDS "${DEMO_WATCHDOG_SECONDS:-60}" 60 86400)
+MOUNTED=0
+if python -c "import os, sys; sys.exit(0 if os.path.ismount('$DATA') else 1)"; then
+  MOUNTED=1
+fi
 
 # A fresh start every time — also when compose restarts the SAME container
 # (restart: unless-stopped): the audit chain is keyed by the per-start
 # AUDIT_HMAC_KEY above, and one visitor's edits (case registry, audit rows)
-# must not outlive the next restart.
+# must not outlive the next restart. Non-zero when the data could not be
+# emptied or seeded. find's own status is not the test: it reports an
+# unreadable directory it then deletes anyway; what matters is what is left.
 reset_data() {
-  if python -c "import os, sys; sys.exit(0 if os.path.ismount('$DATA') else 1)"; then
+  local rc=0
+  if [ "$MOUNTED" = 1 ]; then
     echo "start-demo: $DATA is a mounted volume; not wiping it (set a fixed AUDIT_HMAC_KEY to keep its audit chain verifiable)" >&2
   else
-    find "$DATA" -mindepth 1 -delete
+    find "$DATA" -mindepth 1 -delete || true
+    if [ -n "$(find "$DATA" -mindepth 1 -print -quit 2>/dev/null || true)" ]; then
+      echo "start-demo: could not empty $DATA" >&2
+      rc=1
+    fi
   fi
-  seed-data true
+  seed-data true || rc=1
+  return "$rc"
 }
 
 # supervise NAME COMMAND...: run it, restart it when it exits; wait while the
 # watchdog holds the pause file. The service's pid goes to /tmp/start-demo.NAME.pid.
-# A service that dies within 10 s of starting (a configuration error, say) is
-# retried with a doubling delay, up to a minute, instead of every 2 s.
+# A service that dies by itself within 10 s of starting (a configuration
+# error, say) is retried with a doubling delay, up to a minute, instead of
+# every 2 s. A stop during a pause (reset, shutdown) is not a crash.
 supervise() {
   local name=$1 delay=2 started pid status
   shift
@@ -77,6 +90,11 @@ supervise() {
     echo "$pid" > "/tmp/start-demo.$name.pid"
     status=0
     wait "$pid" || status=$?
+    if [ -e "$PAUSE" ]; then
+      echo "start-demo: $name stopped (status $status)" >&2
+      delay=2
+      continue
+    fi
     if [ $((SECONDS - started)) -lt 10 ]; then
       delay=$((delay * 2 > 60 ? 60 : delay * 2))
     else
@@ -118,10 +136,13 @@ stop_service() {
 
 # A pause file left by a container that was killed mid-reset (and is now
 # started again — compose reuses the container, /tmp included) would hold
-# every supervisor forever.
-rm -f "$PAUSE"
+# every supervisor forever; old pid files would name unrelated processes.
+rm -f "$PAUSE" /tmp/start-demo.*.pid
 reset_data
 mkdir -p /tmp/nginx
+if [ "$MOUNTED" = 1 ]; then
+  echo "start-demo: $DATA is a mounted volume; the data-size watchdog is off" >&2
+fi
 
 # --no-proxy-headers: uvicorn trusts X-Forwarded-For from 127.0.0.1 by
 # default, and here nginx IS 127.0.0.1 — a visitor's own header would
@@ -136,7 +157,8 @@ supervise nginx nginx -e /dev/stderr -c /etc/nginx/demo/nginx.conf -g 'daemon of
 # Pause the supervisors first, so the services are stopped by us (and reaped
 # by their supervisors) rather than restarted or orphaned.
 cleanup() {
-  touch "$PAUSE"
+  touch "$PAUSE" || true
+  sleep 1 # a supervisor past its pause check records its new pid by now
   for name in gateway ai_engine nginx; do stop_service "$name" || true; done
   kill $(jobs -p) 2>/dev/null || true
   rm -f "$PAUSE"
@@ -146,12 +168,14 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-# Nothing in this loop may fail the script (see the top): a failed or partial
-# measurement counts as 0 MB, and a failed reset is logged and the services
-# start again.
+# Nothing in this loop may fail the script (see the top). du prints the total
+# of what it could read even when it fails (an unreadable or vanishing file):
+# that partial total counts; output that is not a number counts as 0 MB. A
+# failed reset is logged and the services start again.
 while true; do
   sleep "$WATCH_S" &
   wait $! || true
+  [ "$MOUNTED" = 0 ] || continue
   used=$(du -sm "$DATA" 2>/dev/null | cut -f1 || true)
   case $used in '' | *[!0-9]*) used=0 ;; esac
   if [ "$used" -gt "$MAX_MB" ]; then

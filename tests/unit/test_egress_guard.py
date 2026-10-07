@@ -142,9 +142,10 @@ async def test_call_blocks_before_http(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# B-56: the scan stays inline (a worker thread does not free the event loop —
-# re holds the GIL) and is kept cheap instead: a rule may carry a search
-# pattern with the same answer to "is there any match?".
+# B-56/B-57: the scan stays inline and is kept cheap instead (a worker thread
+# would only let the event loop in between two searches — re holds the GIL
+# for each — and changed cancellation): a rule may carry a search pattern
+# with the same answer to "is there any match?".
 # ---------------------------------------------------------------------------
 def test_the_scanner_uses_a_rules_search_pattern(monkeypatch):
     import re

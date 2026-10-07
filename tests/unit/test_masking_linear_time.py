@@ -98,6 +98,10 @@ def test_redact_is_fast_on_adversarial_input(text, limit_s):
 
 def _all_masking_patterns() -> dict[str, re.Pattern]:
     patterns = {f"pii:{r.rule_id}": r.pattern for r in masking.PII_RULES}
+    # The egress guard's cheaper existence patterns run on every payload too.
+    for r in masking.PII_RULES:
+        if r.search_pattern is not None:
+            patterns[f"pii-search:{r.rule_id}"] = r.search_pattern
     for name in os.listdir(TENANT_DICTS_DIR):
         if name.endswith(".json"):
             for r in masking.get_tenant_rules(name[:-5]):
@@ -201,9 +205,23 @@ def test_detection_length_stops_past_the_limit():
 def test_a_long_organisation_word_is_still_masked_whole(lead, length):
     # B-55: the first fix (64 for every word) left such names unmasked or
     # half-masked; a word from the start of its run is unbounded, one starting
-    # inside a run is bounded at 256 (inside-run-256 pins that bound).
+    # inside a run is bounded at 256 (the test below pins both sides).
     name = "S" + "upercalifragilistic" * (length // 19 + 1)
     name = name[:length]
     redacted, rules = masking.redact(f"{lead}{name} Corp. signed", "tenant_a")
     assert "upercalifragilistic" not in redacted, redacted[:120]
     assert "ner_org" in rules
+
+
+def test_the_inside_run_bound_is_256_exactly():
+    # B-57: a word that starts inside a run (here after "x.") is matched up
+    # to 256 characters and no further — the bound that keeps the work per
+    # start constant. A larger bound would pass the masking tests above and
+    # only cost time; a smaller one would under-mask (B-55).
+    def word(n):
+        return "S" + "u" * (n - 1)  # one capital: no other start inside the word
+
+    assert masking._EN_ORG_RE.search(f"x.{word(256)} Corp.") is not None
+    assert masking._EN_ORG_RE.search(f"x.{word(257)} Corp.") is None
+    # From the start of a run the word is unbounded.
+    assert masking._EN_ORG_RE.search(f"by {word(1000)} Corp.") is not None
