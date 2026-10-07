@@ -38,21 +38,22 @@ export function auditStateFrom(query, canCallAudit) {
 /**
  * @param {{status: 'idle'|'ok'|'fail'|'unavailable'}} state
  * @param {boolean} canCallAudit
- * @returns {{failed: boolean, tone: string, labelKey: string}}
+ * @returns {{failed: boolean, tone: string, labelKey: string, icon: 'alert'|'question'|'check'|'plain'}}
+ *   icon: a check mark only for a chain that verified — not while checking.
  */
 export function chainChipView(state, canCallAudit) {
   const failed = state?.status === 'fail';
-  if (failed) return { failed, tone: CHAIN_CHIP_TONE.fail, labelKey: 'shell.audit_chip.fail' };
+  if (failed) return { failed, tone: CHAIN_CHIP_TONE.fail, labelKey: 'shell.audit_chip.fail', icon: 'alert' };
   // The verify call could not run: say so — red would claim tampering that
   // nobody checked, green would claim a check that did not happen.
   if (state?.status === 'unavailable') {
-    return { failed, tone: CHAIN_CHIP_TONE.neutral, labelKey: 'shell.audit_chip.unavailable' };
+    return { failed, tone: CHAIN_CHIP_TONE.neutral, labelKey: 'shell.audit_chip.unavailable', icon: 'question' };
   }
   if (!canCallAudit) {
-    return { failed, tone: CHAIN_CHIP_TONE.neutral, labelKey: 'shell.audit_chip.neutral' };
+    return { failed, tone: CHAIN_CHIP_TONE.neutral, labelKey: 'shell.audit_chip.neutral', icon: 'plain' };
   }
   if (state?.status === 'ok') {
-    return { failed, tone: CHAIN_CHIP_TONE.ok, labelKey: 'shell.audit_chip.ok' };
+    return { failed, tone: CHAIN_CHIP_TONE.ok, labelKey: 'shell.audit_chip.ok', icon: 'check' };
   }
-  return { failed, tone: CHAIN_CHIP_TONE.neutral, labelKey: 'shell.audit_chip.checking' };
+  return { failed, tone: CHAIN_CHIP_TONE.neutral, labelKey: 'shell.audit_chip.checking', icon: 'plain' };
 }

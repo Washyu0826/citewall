@@ -142,26 +142,64 @@ async def test_call_blocks_before_http(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# B-55: the scan runs off the event loop (it costs ~0.3 s near the size cap).
+# B-56: the scan stays inline (a worker thread does not free the event loop —
+# re holds the GIL) and is kept cheap instead: a rule may carry a search
+# pattern with the same answer to "is there any match?".
 # ---------------------------------------------------------------------------
-async def test_the_egress_scan_does_not_run_on_the_event_loop_thread(monkeypatch):
-    import threading
-    import time
+def test_the_scanner_uses_a_rules_search_pattern(monkeypatch):
+    import re
 
-    import httpx
+    from backend.gateway import masking
 
-    seen = {}
-
-    def spy(path, payload):
-        seen["thread"] = threading.current_thread()
-
-    monkeypatch.setattr(orch, "_assert_no_raw_pii", spy)
-    real_client = httpx.AsyncClient
-    monkeypatch.setattr(
-        orch.httpx,
-        "AsyncClient",
-        lambda **kw: real_client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})), **kw),
+    probe = masking.MaskRule(
+        rule_id="probe",
+        pattern=re.compile(r"(?!)"),  # never matches
+        placeholder_prefix="PROBE",
+        description="test",
+        search_pattern=re.compile(r"zzz"),
     )
-    client = orch.AIEngineClient("http://engine.test", deadline=time.time() + 60)
-    await client.call("/v1/parse_oa", {"oa_text": "Claims 1-3 are rejected."})
-    assert seen["thread"] is not threading.main_thread()
+    monkeypatch.setattr(masking, "PII_RULES", [probe])
+    assert _scan_value_for_pii("a zzz b") == "probe"
+    assert _scan_value_for_pii({"zzz": 1}) == "probe"
+
+
+_L = "abcXYZ019._%+-"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "alice@x.com",
+        "<alice@x.com>",
+        "a" * 300 + "@x.com",  # longer than branch 2's 256
+        "x." * 150 + "a@b.co",
+        "a@b.coa@b.com",  # glued: the second address starts inside a run
+        "a@b.com1" * 40,
+        "a" * 5000,  # no "@"
+        "a" * 400 + "@" + "b" * 10,  # no domain dot
+        "a@b.c",  # one-letter TLD
+        "@x.com",
+        "é" + _L * 30 + "@d-e.org",
+        "中" + "a" * 257 + "@x.io",
+    ],
+    ids=[
+        "plain",
+        "bracketed",
+        "local-300",
+        "after-dotted-run",
+        "glued",
+        "glued-chain",
+        "no-at",
+        "no-domain-dot",
+        "one-letter-tld",
+        "empty-local",
+        "after-non-ascii",
+        "after-cjk-257",
+    ],
+)
+def test_the_email_search_pattern_agrees_with_the_rule(text):
+    from backend.gateway import masking
+
+    rule = next(r for r in masking.PII_RULES if r.rule_id == "email")
+    assert rule.search_pattern is not None
+    assert (rule.search_pattern.search(text) is None) == (rule.pattern.search(text) is None)

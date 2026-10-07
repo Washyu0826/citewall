@@ -388,6 +388,9 @@ jobs:
           [ -n "$ok" ] || { docker logs patentmind-demo 2>&1 | tail -n 40; exit 1; }
           docker logs patentmind-demo 2>&1 | grep -q "start-demo: gateway exited"
 
+      # B-56: the watchdog must survive a failing `du` (set -e once ended the
+      # whole script, i.e. the container) — an unreadable directory makes du
+      # fail on every pass, before and after the reset.
       - name: The data watchdog resets the demo past its size limit
         run: |
           docker run -d --name demo-watchdog -p 8082:7860 \
@@ -398,20 +401,37 @@ jobs:
             sleep 1
           done
           [ -n "$up" ] || { docker logs demo-watchdog 2>&1 | tail -n 40; exit 1; }
+          docker exec -u root demo-watchdog sh -c 'mkdir /app/data/locked && chmod 000 /app/data/locked'
+          sleep 7
+          docker exec demo-watchdog sh -c 'du -sm /app/data' && { echo "du did not fail; the test proves nothing"; exit 1; }
+          [ "$(docker inspect -f '{{.State.Running}}' demo-watchdog)" = true ] || { docker logs demo-watchdog 2>&1 | tail -n 40; exit 1; }
+          if docker logs demo-watchdog 2>&1 | grep -q "resetting the demo state"; then echo "reset before the limit"; exit 1; fi
           docker exec demo-watchdog sh -c 'head -c 10000000 /dev/zero > /app/data/filler.bin'
           reset=
           for i in $(seq 1 60); do
-            if docker logs demo-watchdog 2>&1 | grep -q "resetting the demo state"; then reset=1; break; fi
+            if docker logs demo-watchdog 2>&1 | grep -q "start-demo: demo state reset"; then reset=1; break; fi
             sleep 1
           done
           [ -n "$reset" ] || { docker logs demo-watchdog 2>&1 | tail -n 40; exit 1; }
+          if docker exec demo-watchdog test -e /app/data/filler.bin; then echo "data was not reset"; exit 1; fi
+          sleep 7
+          [ "$(docker inspect -f '{{.State.Running}}' demo-watchdog)" = true ] || { docker logs demo-watchdog 2>&1 | tail -n 40; exit 1; }
+          docker exec -u root demo-watchdog rm -rf /app/data/locked
+          SMOKE_WAIT_SECONDS=60 python3 scripts/smoke_demo_image.py http://127.0.0.1:8082
+
+      # A container killed mid-reset leaves the pause file in /tmp; compose
+      # starts the SAME container again, and the supervisors must not wait on it.
+      - name: A stale pause file does not block the next start
+        run: |
+          docker exec demo-watchdog touch /tmp/start-demo.pause
+          docker kill demo-watchdog
+          docker start demo-watchdog
           up=
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:8082/api/v1/health > /dev/null; then up=1; break; fi
             sleep 1
           done
           [ -n "$up" ] || { docker logs demo-watchdog 2>&1 | tail -n 40; exit 1; }
-          if docker exec demo-watchdog test -e /app/data/filler.bin; then echo "data was not reset"; exit 1; fi
 
       - name: Container logs
         if: always()

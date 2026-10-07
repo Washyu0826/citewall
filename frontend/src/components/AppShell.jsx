@@ -359,11 +359,13 @@ function ThemeToggle() {
   );
 }
 
+const CHIP_ICONS = { alert: ShieldAlert, question: ShieldQuestion, check: ShieldCheck, plain: Shield };
+
 /** Audit roles only: whether the hash chain verified, linking to the log. */
 function ChainChip({ state, onClick, t }) {
-  const { failed, tone, labelKey } = chainChipView(state, true);
-  // A check that could not run gets its own icon: a check mark would read as "verified".
-  const Icon = failed ? ShieldAlert : state.status === 'unavailable' ? ShieldQuestion : ShieldCheck;
+  const { failed, tone, labelKey, icon } = chainChipView(state, true);
+  // A check mark reads as "verified": only for a chain that verified.
+  const Icon = CHIP_ICONS[icon];
   const label = t(labelKey);
   const rowsText =
     state.verified > 0 ? t('shell.audit_chip.rows', { rows: state.verified.toLocaleString() }) : null;

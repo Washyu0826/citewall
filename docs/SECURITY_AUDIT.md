@@ -469,9 +469,9 @@ no docker, no torch):** `tests/unit` 1414 passed / 23 skipped;
 
 ## Addendum 2026-10-07 — public demo review (phase 5)
 
-Three independent reviews of branch `feat/phase5-deploy` before the mock-mode
+Independent reviews of branch `feat/phase5-deploy` before the mock-mode
 demo goes fully public on a Hugging Face Space. Details, measurements and
-verification: `docs/reports/FAILURE_LOG_2026-09.md` (B-50, B-52, B-53) and
+verification: `docs/reports/FAILURE_LOG_2026-09.md` (B-50, B-52..B-56) and
 `docs/reports/CASE_STUDY_masking_ReDoS_2026-10.md`.
 
 ### H-11. A same-host proxy turned browser headers into an authenticated identity — ✅ FIXED 2026-10-07
@@ -493,7 +493,7 @@ spoofing check. Residual: the gateway still trusts loopback for digiRunner; put
 nothing that forwards browser headers in front of it on the same host without
 stripping them or setting `UPSTREAM_AUTH_SHARED_SECRET`. (FAILURE_LOG B-50)
 
-### H-12. ReDoS and quadratic work in the masking layer — one request stalls the gateway — ✅ FIXED 2026-10-07 in two rounds (B-53, B-54); residual linear worst case open (L-11)
+### H-12. ReDoS and quadratic work in the masking layer — one request stalls the gateway — ✅ FIXED 2026-10-07 in four rounds (B-53..B-56); residual linear worst case open (L-11)
 
 `masking.redact` runs on every analysis and redaction preview (invariant #3).
 Measured: the Taiwan-address rule backtracked catastrophically on whitespace
@@ -542,6 +542,24 @@ final code including the mapping-store writes: 32k unique two-character
 names ≈ 2.9 s + 0.28 s egress at the default cap, ≈ 0.7-0.8 s at the demo
 cap. The egress scan now runs off the event loop.
 
+**Correction after the fourth review (B-56):** the third-round organisation
+rule's two branches were not mutually exclusive: when no suffix followed,
+each of up to six words was retried with the second branch — 2^6 paths per
+start, ≈ 5 s at the default cap (≈ 1.4 s at the demo cap) on repeated
+255-character words separated by spaces. The worst-case numbers above were
+therefore understated, and two of them were the reviewer's measurements, not
+re-measured on the final code as claimed. The branches are now mutually
+exclusive and possessive (identical matches on 20,000 texts, 9,587 with a
+match; 0.22 s). "The egress scan now runs off the event loop" was not true:
+`re` holds the GIL for each search, so a worker thread does not free the
+loop. The scan runs inline again and is cheaper instead: a rule may carry a
+`search_pattern` with the same answer to "any match?"; the e-mail rule's is
+its first branch alone (argument in the case study \5.8; 20,000 texts, 0
+differences). Worst whole requests on the final code (Python 3.13, real
+mapping store): ≈ 0.6 s at the demo cap; ≈ 2 s at the default cap (32k
+unique names, redaction preview or analysis). Earlier, higher measurements on
+the same laptop (up to 2.9 s) are unexplained; plan with 2x.
+
 ### M-17. Unbounded endpoints reachable by any signed-in user — ✅ FIXED 2026-10-07
 
 `/v1/redact` and `/v1/debug/redaction_preview` had no rate limit and accepted
@@ -565,15 +583,29 @@ rotating header and expects 429. Verified for direct-to-nginx setups (CI,
 compose); the Hugging Face proxy's own behaviour is not verified.
 (FAILURE_LOG B-52 P5-M5)
 
+### M-21. The demo's supervisor could stop the container on one failed disk measurement — ✅ FIXED 2026-10-07
+
+`docker/demo/start.sh` (PID 1 of the public demo) ran its data watchdog
+under `set -euo pipefail`: a failing `du` (a SQLite temp file vanishing
+mid-scan, a permission error) or a failed reset ended the script, i.e. the
+container, and Hugging Face does not restart a stopped container — the demo
+stayed down until the daily restart. Introduced with the supervisor itself
+(B-55). Fix: nothing in the watchdog can end the script (a failed measurement
+counts as 0 MB, a failed reset is logged and the services start again);
+invalid knob values fall back to defaults; a stale pause file is removed at
+start; crash-looping services back off. CI makes `du` fail on every pass and
+expects the container to keep running, reset, and pass the full smoke test,
+and restarts a killed container with a stale pause file. (FAILURE_LOG B-56)
+
 ### Open findings from the same review (not fixed)
 
 | ID | Severity | Finding | Suggested fix |
 |---|---|---|---|
 | M-19 | Medium | On the public demo every visitor shares one login bucket and the demo accounts' daily token quota: a deliberate flood keeps one-click login at 429, or exhausts analysis for the day. Mitigated by a daily Space restart (`restart-demo.yml`) | Per-visitor buckets keyed on a verified client address; demo-only quota policy |
 | L-10 | Low | Tenant dictionary rules (`data/tenant_dicts/*.json`) are operator-supplied regular expressions and are not checked for catastrophic backtracking (same class as H-12) | On upload, time each rule against adversarial inputs and reject slow ones; or run masking in a worker with a timeout |
-| M-20 | Medium | Every unique masked entity is stored permanently in the mapping table (one 24k-character request of unique names ≈ 3 MB): an account can grow the disk without bound. The public demo resets its data past `DEMO_DATA_MAX_MB` (docker/demo/start.sh) and restarts daily; a real deployment has neither | Retention / per-tenant quota for the mapping table |
+| M-20 | Medium | Every unique masked entity is stored permanently in the mapping table (one 24k-character request of unique names ≈ 3 MB): an account can grow the disk without bound. The public demo resets its data past `DEMO_DATA_MAX_MB` (default 2,048 MB, ≈ 680 demo-cap requests; docker/demo/start.sh) and restarts daily; a reset restarts the gateway, which also clears the in-memory revocation list (moot in the demo: its passwords are public). A real deployment has neither | Retention / per-tenant quota for the mapping table |
 | L-12 | Low | Placeholders (~18 chars) can make the outbound payload ~6x the capped input; the token cap does not bound what reaches the model | Cap or budget on the redacted payload as well |
-| L-11 | Medium | Masking still runs inside the single gateway process. A known linear-but-expensive address input (96k `市` ≈ 2.4 s) lets one account at the default cap use about a CPU core, and any future slow rule would again stall every request (GIL) | Run redaction in a process pool with a per-call timeout |
+| L-11 | Medium | Masking still runs inside the single gateway process. Linear-but-expensive inputs (32k unique names ≈ 2 s per redaction preview, 96k `市` ≈ 1.3 s, on the final code; earlier runs measured up to 2.9 s) let one account at the default cap use about a CPU core, and any future slow rule would again stall every request (GIL; a worker thread does not help — B-56) | Run redaction in a process pool with a per-call timeout |
 
 ## Low / defer
 

@@ -67,6 +67,9 @@ class MaskRule:
     pattern: Pattern[str]
     placeholder_prefix: str
     description: str
+    # Optional cheaper pattern with the SAME answer to "is there any match?"
+    # — for the egress guard, which only searches (FAILURE_LOG B-56).
+    search_pattern: Pattern[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +267,13 @@ PII_RULES: list[MaskRule] = [
         pattern=re.compile(
             r"(?:(?<![a-zA-Z0-9._%+-])[a-zA-Z0-9._%+-]++|[a-zA-Z0-9._%+-]{1,256})"
             r"@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+        ),
+        # Existence only (egress guard): branch 1 alone. Any match of the full
+        # rule lies in a run whose first character branch 1 starts from and
+        # takes whole, up to the same "@" and domain — so the answer is the
+        # same, at a fraction of the cost of branch 2 on long runs (B-56).
+        search_pattern=re.compile(
+            r"(?<![a-zA-Z0-9._%+-])[a-zA-Z0-9._%+-]++@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
         ),
         placeholder_prefix="EMAIL",
         description="email address",
@@ -667,16 +677,19 @@ _TW_ORG_LEAD_WORDS = (
     "該",
     "其",
 )
-# Linear (B-54, B-55). Unbounded, on "A.A.A.…" every word boundary started a
+# Linear (B-54..B-56). Unbounded, on "A.A.A.…" every word boundary started a
 # scan to the end of the run — O(n²), ~24 s at 96k. Two branches, as in the
-# e-mail rule: a word from the first character of its run, whole (possessive:
-# space and tab are not in the class, so it ends where the run ends anyway);
-# or, from inside a run, at most 256 characters — for a name that starts after
-# "x.", "e-" or right after the previous match ("…Inc.Bar Corp"). The first
-# fix (64 for every word) left long words unmasked (B-55). Words 2..6 follow
-# whitespace, so they always take the first branch.
+# e-mail rule: a word from the first character of its run, whole; or, from
+# inside a run, at most 256 characters — for a name that starts after "x.",
+# "e-" or right after the previous match ("…Inc.Bar Corp"). The first fix
+# (64 for every word) left long words unmasked (B-55). The branches are
+# mutually exclusive (one lookbehind each) and everything is possessive: when
+# the suffix is missing, a non-exclusive second branch was retried for every
+# word — 2^6 paths per start, ~5 s at 96k (B-56). Possessive is safe: space
+# and tab are not in the word class, and no suffix starts with whitespace.
 _EN_ORG_RE = re.compile(
-    r"\b(?:(?:(?<![A-Za-z0-9&'.\-])[A-Z][A-Za-z0-9&'.\-]*+|[A-Z][A-Za-z0-9&'.\-]{0,255})[ \t]+){1,6}"
+    r"\b(?:(?:(?<![A-Za-z0-9&'.\-])[A-Z][A-Za-z0-9&'.\-]*+|(?<=[A-Za-z0-9&'.\-])[A-Z][A-Za-z0-9&'.\-]{0,255}+)"
+    r"[ \t]++){1,6}"
     r"(?:Inc\.|Inc\b|Incorporated\b|Corp\.|Corp\b|Corporation\b|Co\.,?[ \t]*Ltd\.?|"
     r"Ltd\.|Ltd\b|LLC\b|L\.L\.C\.|LLP\b|L\.L\.P\.|PLLC\b|GmbH\b|AG\b|S\.A\.|K\.K\.|"
     r"B\.V\.|PLC\b|Law[ \t]+Firm\b|Law[ \t]+Group\b|Law[ \t]+Offices?\b)"

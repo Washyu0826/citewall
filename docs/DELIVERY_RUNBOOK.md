@@ -104,8 +104,8 @@ python scripts/smoke_demo_image.py http://localhost:8080   # 選用：從外面�
 - `/v1/redact` 與 `/v1/audit/append` 在 demo 裡被 nginx 擋掉（SPA 用不到）；API（`/api/`）請求每秒 20 次（可突發 60），超過回 503，網頁本身的資源不受限制。
 - 有人持續送錯誤登入時，共用的登入頻率桶會讓一鍵登入對所有人回 429，直到停止或重啟（FAILURE_LOG B-53 的已知限制）。
 - 單次分析的大小上限是 8,000 tokens（約 24K 字元；正式部署是 32,000）：遮罩在刁鑽輸入上的最壞成本和上限成正比（FAILURE_LOG B-54）。範例 OA 都在 700 tokens 以內。
-- Hugging Face 不會重啟已結束的容器，所以容器內會自己監督：任一服務結束都會在 2 秒後重啟（`docker/demo/start.sh`）。
-- 每分鐘檢查一次資料大小，超過 512 MB（`DEMO_DATA_MAX_MB`）就自動重置 demo 狀態：遮罩對照表會隨不重複的實體一直長大（FAILURE_LOG B-55）。
+- Hugging Face 不會重啟已結束的容器，所以容器內會自己監督：任一服務結束都會在 2 秒後重啟；一啟動就失敗的服務，間隔加倍到最多 60 秒（`docker/demo/start.sh`）。日誌裡的 `start-demo: <服務> exited` 就是重啟紀錄。
+- 每分鐘（`DEMO_WATCHDOG_SECONDS`）檢查一次資料大小，超過 2,048 MB（`DEMO_DATA_MAX_MB`）就自動重置 demo 狀態：遮罩對照表會隨不重複的實體一直長大（FAILURE_LOG B-55、B-56）。日誌依序出現 `resetting the demo state` 與 `demo state reset`；期間約幾秒 502，登入狀態保留。兩個值不是正整數時會記警告並用預設值。
 
 ## 3. Demo 流程 / Demo Flow
 

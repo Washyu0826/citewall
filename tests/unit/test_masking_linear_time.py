@@ -1,4 +1,4 @@
-"""Masking stays (close to) linear on adversarial input (FAILURE_LOG B-53, B-54).
+"""Masking stays (close to) linear on adversarial input (FAILURE_LOG B-53..B-56).
 
 Before the fixes, on this kind of input (wall-clock on the dev laptop):
   * 3,000 spaces took ~50 s in the Taiwan-address pattern (nested ``\\s*``);
@@ -13,7 +13,10 @@ those rules back fails these limits by an order of magnitude (rather than
 hang: the slowest old case finishes in about a minute). The address
 "prefixes + digits" case is different: linear but expensive (~1–1.5 s at
 the cap); its possessive digit runs are a constant-factor improvement
-(~3.5 s before) that these timings do NOT guard (B-55).
+(~3.5 s before) that these timings do NOT guard (B-55). "en-org-long-words"
+guards a linear blow-up the ratio scan below cannot see: the B-55 English
+organisation pattern retried a second branch for each of six words — 2^6
+paths per start, ~5 s at the cap; ~0.2 s since B-56.
 
 ``test_no_masking_rule_grows_superlinearly`` is the systematic guard: every
 masking regex — built-in, NER and tenant dictionaries — against families of
@@ -67,8 +70,9 @@ def _timed(fn, *args):
         ("統編" + _fill("\n", _CAP_CHARS) + "x", 2.0),
         ("Tax ID" + _fill("\t", _CAP_CHARS) + "x", 2.0),
         (_fill("A.", _CAP_CHARS), 3.0),  # was ~24 s (English organisation, B-54)
-        ("市" * 18 + "路" + _fill("1", _CAP_CHARS), 6.0),  # linear but the slowest left (~0.9 s)
+        ("市" * 18 + "路" + _fill("1", _CAP_CHARS), 6.0),  # linear but expensive (~0.8-1 s)
         (_fill("a@b.com1", _CAP_CHARS), 3.0),
+        (_fill(("A." * 128)[:255] + "A ", _CAP_CHARS), 1.5),  # was ~5 s (B-56)
     ],
     ids=[
         "spaces-3k",
@@ -84,6 +88,7 @@ def _timed(fn, *args):
         "en-org-dots",
         "addr-prefixes-digits",
         "glued-emails",
+        "en-org-long-words",
     ],
 )
 def test_redact_is_fast_on_adversarial_input(text, limit_s):
@@ -190,13 +195,13 @@ def test_detection_length_stops_past_the_limit():
 
 @pytest.mark.parametrize(
     "lead, length",
-    [("by ", 300), ("x.", 100), ("e-", 200), ("Foo Inc.", 120)],
-    ids=["run-start-300", "inside-run-100", "inside-run-200", "after-previous-match-120"],
+    [("by ", 300), ("x.", 100), ("e-", 200), ("x.", 256), ("Foo Inc.", 120)],
+    ids=["run-start-300", "inside-run-100", "inside-run-200", "inside-run-256", "after-previous-match-120"],
 )
 def test_a_long_organisation_word_is_still_masked_whole(lead, length):
     # B-55: the first fix (64 for every word) left such names unmasked or
     # half-masked; a word from the start of its run is unbounded, one starting
-    # inside a run is bounded at 256.
+    # inside a run is bounded at 256 (inside-run-256 pins that bound).
     name = "S" + "upercalifragilistic" * (length // 19 + 1)
     name = name[:length]
     redacted, rules = masking.redact(f"{lead}{name} Corp. signed", "tenant_a")

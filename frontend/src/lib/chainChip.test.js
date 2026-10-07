@@ -14,6 +14,15 @@ describe('chainChipView', () => {
     expect(v.tone).toBe(CHAIN_CHIP_TONE.neutral);
   });
 
+  it('shows a check mark only for a verified chain', () => {
+    expect(chainChipView({ status: 'ok' }, true).icon).toBe('check');
+    expect(chainChipView({ status: 'idle' }, true).icon).toBe('plain');
+    expect(chainChipView({ status: 'idle' }, false).icon).toBe('plain');
+    expect(chainChipView({ status: 'ok' }, false).icon).toBe('plain');
+    expect(chainChipView({ status: 'unavailable' }, true).icon).toBe('question');
+    expect(chainChipView({ status: 'fail' }, true).icon).toBe('alert');
+  });
+
   it('is green only after a successful verify', () => {
     expect(chainChipView({ status: 'ok' }, true)).toMatchObject({
       failed: false,

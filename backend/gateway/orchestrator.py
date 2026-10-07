@@ -84,7 +84,7 @@ def _scan_value_for_pii(value: Any) -> str | None:
     """
     if isinstance(value, str):
         for rule in masking.PII_RULES:
-            if rule.pattern.search(value):
+            if (rule.search_pattern or rule.pattern).search(value):
                 return rule.rule_id
         return None
     if isinstance(value, dict):
@@ -93,7 +93,7 @@ def _scan_value_for_pii(value: Any) -> str | None:
             # cheap and closes the "PII smuggled as a dict key" hole.
             if isinstance(k, str):
                 for rule in masking.PII_RULES:
-                    if rule.pattern.search(k):
+                    if (rule.search_pattern or rule.pattern).search(k):
                         return rule.rule_id
             hit = _scan_value_for_pii(v)
             if hit is not None:
@@ -247,10 +247,11 @@ class AIEngineClient:
         # This is the SINGLE egress point to the AI Engine. Before any bytes
         # leave the gateway we scan the whole payload for raw PII that should
         # have been redacted upstream. Fail closed if redaction escaped.
-        # In a worker thread: the PII patterns are linear but not free on a
-        # payload near the cap (~0.3 s), and this coroutine would otherwise
-        # hold the event loop for every other request (FAILURE_LOG B-55).
-        await asyncio.to_thread(_assert_no_raw_pii, path, payload)
+        # Inline, on purpose: a worker thread does not free the event loop here
+        # (re holds the GIL for each search) and it changed cancellation and
+        # deadline behaviour (B-56). Kept cheap instead: e-mail existence uses
+        # its linear search pattern.
+        _assert_no_raw_pii(path, payload)
         stage = _STAGE_FOR_PATH.get(path, path.rsplit("/", 1)[-1])
         started = time.monotonic()
         # ok | error | timeout (incl. "no time left to start", recorded at
