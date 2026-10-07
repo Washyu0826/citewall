@@ -29,6 +29,8 @@ No vendor CLI required — pure boto3, same dependency the archiver itself uses.
 
 from __future__ import annotations
 
+import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -43,6 +45,13 @@ def main() -> int:
     from botocore.config import Config
     from botocore.exceptions import ClientError, EndpointConnectionError
 
+    # Importing the backend config runs the SERVICES' boot guards, one of
+    # which refuses the published placeholder JWT_SECRET. This one-shot tool
+    # only reads ARCHIVE_S3_* and never issues or checks a token, so it must
+    # not need the service secrets: without this it crashed for anyone who
+    # had not exported .env (and in CI, FAILURE_LOG B-49). A throwaway value,
+    # for this process only; an exported JWT_SECRET is left untouched.
+    os.environ.setdefault("JWT_SECRET", secrets.token_hex(32))
     from backend.shared.config import settings
 
     endpoint = settings.ARCHIVE_S3_ENDPOINT

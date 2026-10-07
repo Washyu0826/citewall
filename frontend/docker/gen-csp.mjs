@@ -20,6 +20,16 @@ const hashes = inline.map(
   (body) => `'sha256-${createHash('sha256').update(body, 'utf8').digest('base64')}'`
 );
 
+// frame-ancestors: 'none' (plus X-Frame-Options DENY) everywhere, except the
+// public demo image (docker/demo.Dockerfile): Hugging Face Spaces shows the
+// app inside an iframe on huggingface.co, so that build passes
+// CSP_FRAME_ANCESTORS="https://huggingface.co". X-Frame-Options cannot list
+// an origin, so it is left out then; current browsers honour frame-ancestors.
+const frameAncestors = process.env.CSP_FRAME_ANCESTORS || "'none'";
+if (!/^('none'|https:\/\/[a-z0-9.-]+(?: https:\/\/[a-z0-9.-]+)*)$/.test(frameAncestors)) {
+  throw new Error(`CSP_FRAME_ANCESTORS must be 'none' or https origins: ${frameAncestors}`);
+}
+
 const csp = [
   "default-src 'self'",
   `script-src 'self' ${hashes.join(' ')}`.trim(),
@@ -33,14 +43,14 @@ const csp = [
   "worker-src 'self' blob:",
   "base-uri 'none'",
   "form-action 'self'",
-  "frame-ancestors 'none'",
+  `frame-ancestors ${frameAncestors}`,
 ].join('; ');
 
 const lines = [
   `add_header Content-Security-Policy "${csp}" always;`,
   'add_header X-Content-Type-Options "nosniff" always;',
   'add_header Referrer-Policy "no-referrer" always;',
-  'add_header X-Frame-Options "DENY" always;',
+  ...(frameAncestors === "'none'" ? ['add_header X-Frame-Options "DENY" always;'] : []),
   'add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;',
   'add_header Cross-Origin-Opener-Policy "same-origin" always;',
 ];

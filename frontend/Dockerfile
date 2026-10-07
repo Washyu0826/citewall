@@ -10,6 +10,11 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 # Never bake the demo-login bypass secret into a served bundle (client.js).
 ENV VITE_DEMO_LOGIN_SECRET=""
+# Public mock-mode demo only (docker/demo.Dockerfile): the one-click logins
+# send the published demo-{user} passwords, which the gateway accepts only in
+# LLM_MODE=mock. Off by default; it inlines no secret either way.
+ARG VITE_DEMO_PUBLIC_PASSWORDS=false
+ENV VITE_DEMO_PUBLIC_PASSWORDS=$VITE_DEMO_PUBLIC_PASSWORDS
 RUN npm run build \
  && node docker/gen-csp.mjs dist/index.html > /tmp/security-headers.conf
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ApiError, SESSION_EXPIRED_EVENT, call } from './client.js';
+import { ApiError, SESSION_EXPIRED_EVENT, api, call } from './client.js';
 
 function mockFetch(status, body, headers = {}) {
   const res = {
@@ -15,6 +15,7 @@ function mockFetch(status, body, headers = {}) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   delete globalThis.fetch;
 });
 
@@ -93,5 +94,22 @@ describe('call() cancellation (research 09 FE-L1)', () => {
     controller.abort();
     const err = await call('/v1/oa/analyze', { signal: controller.signal }).catch((e) => e);
     expect(err.cancelled).toBe(true);
+  });
+});
+
+describe('api.login — the public mock-mode demo (phase 5)', () => {
+  const sentBody = () => JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+
+  it('sends only the user id by default', async () => {
+    mockFetch(200, { token: 't' });
+    await api.login('alice');
+    expect(sentBody()).toEqual({ user_id: 'alice' });
+  });
+
+  it('sends the published demo password when the demo build flag is on', async () => {
+    vi.stubEnv('VITE_DEMO_PUBLIC_PASSWORDS', 'true');
+    mockFetch(200, { token: 't' });
+    await api.login('alice');
+    expect(sentBody()).toEqual({ user_id: 'alice', password: 'demo-alice' });
   });
 });

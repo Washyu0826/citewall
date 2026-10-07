@@ -146,12 +146,19 @@ export async function call(
 // (Day 8 post-review Important #2.)
 const DEMO_LOGIN_SECRET = import.meta.env?.VITE_DEMO_LOGIN_SECRET || '';
 
+// Public mock-mode demo (docker/demo.Dockerfile, research phase 5): the
+// "click Alice" buttons send the PUBLISHED `demo-{user_id}` password, which
+// the gateway honours only in LLM_MODE=mock (Q24, `demo_passwords_enabled`).
+// Nothing secret is inlined: on any real deployment the flag does nothing.
+// Read per call (not at import) so tests can flip it.
+const demoPasswords = () => import.meta.env?.VITE_DEMO_PUBLIC_PASSWORDS === 'true';
+
 export const api = {
   health: () => call('/v1/health'),
   login: (user_id) =>
     call('/v1/auth/login', {
       method: 'POST',
-      body: { user_id },
+      body: demoPasswords() ? { user_id, password: `demo-${user_id}` } : { user_id },
       headers: DEMO_LOGIN_SECRET ? { 'X-Demo-Secret': DEMO_LOGIN_SECRET } : {},
     }),
   // Q12 magic-link login. `magicRequest` returns { message, magic_token? }
